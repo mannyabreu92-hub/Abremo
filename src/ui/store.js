@@ -9,6 +9,7 @@ export function defaultState() {
   return {
     user: { name: 'You', role: 'fan', country: 'US', plan: 'free' },
     interactions: {}, // artworkId → 'like' | 'pass' | 'super'
+    interactionRoles: {}, // artworkId → role that reacted (so a reaction can be undone exactly)
     deltas: {}, // artworkId → { likes: {role:n}, saves: {role:n}, reviews: {count, ratingSum} }
     follows: {}, // artistId → role at time of follow
     reviews: [], // { artworkId, rating, text, at }
@@ -19,6 +20,7 @@ export function defaultState() {
     taste: emptyTaste(),
     uploads: [],
     snapshot: null,
+    notifSeenAt: 0,
   };
 }
 

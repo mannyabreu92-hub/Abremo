@@ -1,13 +1,16 @@
 {
   "name": "gabangi",
   "version": "0.1.0",
-  "description": "Gabangi — swipe, discover and rank art. The Tinder and TikTok of art.",
+  "description": "Gabangi \u2014 swipe, discover and rank art. The Tinder and TikTok of art.",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node scripts/serve.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "check": "node --check src/ui/app.js && node --check src/ui/components.js && node --check src/ui/art.js && node --check src/ui/store.js && npm test --silent"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "UNLICENSED"
 }

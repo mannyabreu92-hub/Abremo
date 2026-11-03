@@ -12,6 +12,7 @@ moves the global and country charts. A like counts for more when it comes from a
 
 ```bash
 npm start      # http://localhost:5173  (zero dependencies, Node 18+)
+npm run check  # syntax check of the UI modules + unit tests
 npm test       # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition
 ```
 
@@ -19,9 +20,13 @@ Any static file server also works. Open it on a phone, or use the browser's mobi
 
 ## What's in the prototype
 
-| Tab | Feature |
+| Route | Feature |
 | --- | --- |
+| **Home** (`#home`) | Editorial landing page: hero, artwork of the hour, trending and new works, featured artists, a live Art Battle and the top-5 rankings. |
 | **Discover** | Swipe deck. → / ♥ = Like, ← / ✕ = Pass, ↑ / ★ = Super Like (Collect), **+ Follow** = subscribe to the artist's journey, **$** = buy or contact the artist. Critics also get ✍︎ Review. |
+| **Explore** (`#explore`) | The whole catalog as a grid, filtered by medium, movement and country, with five sort orders. |
+| **Artists** (`#artists`) | Artist cards filtered by country and discipline, with a follow button on each. |
+| **Collections** (`#collections`) | Your saved, liked and purchased works, plus curated sets by movement and by country. |
 | **Battle** | Art Battles: two random artworks by different artists. You vote, and Elo ratings update. Winners gain points; losers lose only 75% as much. |
 | **Charts** | Top Artworks (the default: artwork first), Top Artists and Battle Champions. Filter by 🌎 Global or any of 12 countries, and by category. Rank movement ▲▼ is measured against the chart from the previous hour. |
 | **Scan** | Artwork recognition: take a photo, and Gabangi guesses the style and medium, then suggests similar artists and works. |
@@ -70,10 +75,13 @@ src/core/             pure, tested logic (no DOM)
   seed.js             deterministic demo world (240 artists, 12 countries, ~600 works)
   world.js            merges seed + user actions into a queryable model
 src/ui/               browser layer
-  app.js              views, swipe gestures, sheets
+  app.js              views, routing, swipe gestures, modals, search, notifications
+  components.js       reusable components: ArtworkCard, ArtworkGrid, FeaturedArtwork, ArtistCard,
+                      CategoryFilter, ArtBattleCard, CollectionCard, PremiumButton, SearchBar,
+                      EmptyState, LoadingSkeleton, Icons
   art.js              procedural SVG artwork generator (original, per style/medium)
   store.js            localStorage persistence (user actions stored as deltas)
-  styles.css
+  styles.css          design system: tokens, type scale, components, responsive rules
 tests/                node:test suites
 ```
 
@@ -84,3 +92,11 @@ tests/                node:test suites
 - **Catalog art** is generated procedurally, so the demo ships no copyrighted images. Uploaded images are stored in localStorage (about 5 MB limit).
 
 See [`docs/PITCH.md`](docs/PITCH.md) for the investor pitch.
+
+## Design system
+The design system lives in `src/ui/styles.css`:
+- **Colours:** dark surfaces (`#08090B` to `#1B1D22`), hairline borders at `rgba(255,255,255,.09)`, warm off-white text, and champagne gold `#C8A96B` used sparingly as the accent.
+- **Typography:** Inter for the interface and Playfair Display for headlines (both from Google Fonts, with system fallbacks).
+- **Atmosphere:** very soft radial light behind the page.
+- **Motion:** 200–300 ms transitions, View Transitions between pages where the browser supports them, and full support for `prefers-reduced-motion`.
+- **Keyboard:** `/` or ⌘K opens search, Esc closes overlays, ← → ↑ swipe in Discover, and ← → vote in Art Battles.
