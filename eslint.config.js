@@ -14,7 +14,7 @@ export default [
     languageOptions: { ecmaVersion: 2023, sourceType: 'script', globals: { ...globals.serviceworker } },
   },
   {
-    files: ['scripts/**/*.js', 'tests/**/*.js', 'eslint.config.js'],
+    files: ['scripts/**/*.js', 'tests/**/*.js', 'api/**/*.js', 'eslint.config.js'],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: { ...globals.node } },
   },
   {

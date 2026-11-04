@@ -21,6 +21,7 @@ import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, s
 import { artistProfileForm, validateArtistProfile, artworkEditForm, collectionEditForm } from './views/forms.js';
 import { howRankedSheet } from './views/explainers.js';
 import { studioPage } from './views/studio.js';
+import { coachPage, passportHTML, exhibitionsSheet, opportunitiesPage, opportunityForm, reviewQueuesHTML, COACH_TOOLS } from './views/careers.js';
 import { inquirySheet, inboxPage, threadPage, dropsSection, dropPage, createDropForm, reportsHTML } from './views/radar.js';
 import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, createCompetitionForm, competitionCard } from './views/arena.js';
 import {
@@ -163,7 +164,7 @@ const VIEWS = {
   home: renderHome, discover: renderDiscover, explore: renderExplore, battle: renderBattle, artists: renderArtists,
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
   art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition, studio: renderStudio,
-  inbox: renderInbox, inquiry: renderInquiry, drop: renderDrop,
+  inbox: renderInbox, inquiry: renderInquiry, drop: renderDrop, coach: renderCoach, opportunities: renderOpportunities,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -171,7 +172,7 @@ function route() {
   return VIEWS[name] ? { name, param: decodeURIComponent(rest.join('/')) } : { name: 'home', param: '' };
 }
 const currentView = () => route().name;
-const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections', competition: 'battle', studio: 'profile', inbox: 'profile', inquiry: 'profile', drop: 'home' };
+const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections', competition: 'battle', studio: 'profile', inbox: 'profile', inquiry: 'profile', drop: 'home', coach: 'profile', opportunities: 'artists' };
 
 function renderView() {
   const name = currentView();
@@ -1135,6 +1136,48 @@ function renderDrop(root) {
   root.innerHTML = dropPage(d, { image: storageImage, card: dropWorkCard, signedIn: Boolean(me) });
 }
 
+// ——— Career Coach, Artist Passport and Opportunities (community mode) ———
+const careers = { coach: { tool: 'bio', artworkId: null, opportunityId: null, busy: false, result: null, error: '' }, usage: null,
+  opps: null, oppsAt: 0, oppKind: '', passports: new Map(), exhibitions: null };
+async function loadOpportunities(force = false) {
+  if (!cloud?.opportunities || (!force && careers.opps && Date.now() - careers.oppsAt < 60_000)) return;
+  careers.oppsAt = Date.now();
+  try { careers.opps = await cloud.opportunities(); } catch { careers.opps ||= []; }
+  if (['opportunities', 'coach'].includes(currentView()) && !sheetRenderer) renderView();
+}
+const myMemberWorks = () => (world.worksByArtist[myArtistId()] || []).filter((w) => w.member);
+
+function renderCoach(root) {
+  if (!COMMUNITY || !me) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'pen', title: COMMUNITY ? 'Sign in to use the Coach' : 'The Coach runs with accounts', action: COMMUNITY ? PremiumButton('Sign in', { act: 'sign-in' }) : '' })}</div>`; return; }
+  if (!world.artistById[myArtistId()]) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'pen', title: 'The Coach is for artists', body: 'Publish a work from Profile → Studio first.', action: '<a class="btn btn-secondary" href="#profile"><span>Studio</span></a>' })}</div>`; return; }
+  if (!careers.usage && cloud?.coachUsage) cloud.coachUsage().then((u) => { careers.usage = u; if (currentView() === 'coach') renderView(); }).catch(() => {});
+  if (!careers.opps) loadOpportunities();
+  const works = myMemberWorks().map((w) => ({ id: w.id, title: w.title }));
+  const c = careers.coach;
+  c.artworkId ||= works[0]?.id || null;
+  c.opportunityId ||= careers.opps?.[0]?.id || null;
+  root.innerHTML = coachPage({ state: c, usage: careers.usage, works, opportunities: (careers.opps || []).map((o) => ({ id: o.id, title: o.title })) });
+}
+
+function renderOpportunities(root) {
+  if (!COMMUNITY) { root.innerHTML = `<div class="shell">${EmptyState({ title: 'Opportunities run with accounts' })}</div>`; return; }
+  loadOpportunities();
+  root.innerHTML = opportunitiesPage(careers.opps, { kind: careers.oppKind, signedIn: Boolean(me), artist: Boolean(me && world.artistById[myArtistId()]) });
+}
+
+/** The Passport tab on a member artist's page (fetched when opened). */
+function passportTabHTML(id) {
+  const entry = careers.passports.get(id);
+  if (cloud?.passport && (!entry || (!entry.loading && Date.now() - entry.at > 60_000))) {
+    careers.passports.set(id, { loading: true, data: entry?.data });
+    cloud.passport(id).then((data) => careers.passports.set(id, { data, at: Date.now() }))
+      .catch(() => careers.passports.set(id, { data: entry?.data ?? null, at: Date.now() }))
+      .finally(() => { if (route().name === 'artist' && route().param === id && artistTab === 'passport' && !sheetRenderer) renderView(); });
+  }
+  const data = careers.passports.get(id)?.data;
+  return data === undefined ? LoadingSkeleton({ cards: 3, variant: 'list' }) : passportHTML(data, { artworkTitle: (aid) => world.artworkById[aid]?.title || 'A work' });
+}
+
 // ——— Artist Studio analytics (#studio) ———
 const studio = { days: 30, data: undefined, reports: null, at: 0, loading: false };
 function renderStudio(root) {
@@ -1537,9 +1580,9 @@ function renderArtistPage(root) {
         </dl>
       </header>
       <div class="tabs" role="tablist">
-        ${[['artwork', 'Artwork'], ['about', 'About']].map(([k, v]) => `<button role="tab" class="${artistTab === k ? 'is-on' : ''}" aria-selected="${artistTab === k}" data-act="artist-tab" data-v="${k}">${v}</button>`).join('')}
+        ${[['artwork', 'Artwork'], ['about', 'About'], ...(COMMUNITY && a.member ? [['passport', 'Passport']] : [])].map(([k, v]) => `<button role="tab" class="${artistTab === k ? 'is-on' : ''}" aria-selected="${artistTab === k}" data-act="artist-tab" data-v="${k}">${v}</button>`).join('')}
       </div>
-      ${artistTab === 'artwork'
+      ${artistTab === 'passport' && COMMUNITY && a.member ? passportTabHTML(id) : artistTab === 'artwork'
         ? (works.length ? ArtworkGrid(works.map((r) => card(r.item, { rank: r.rank, details: true }))) : EmptyState({ title: 'No works yet' }))
         : `${a.statement ? `<section class="artist-statement"><h2 class="eyebrow">Artist statement</h2><p>${esc(a.statement)}</p></section>` : ''}
           ${a.website || a.instagram ? `<p class="artist-links">${a.website ? `<a href="${esc(a.website)}" target="_blank" rel="noopener noreferrer nofollow">${Icon('globe', { size: 14 })} ${esc(a.website.replace(/^https:\/\//, '').replace(/\/$/, ''))}</a>` : ''}
@@ -1905,7 +1948,7 @@ let uploading = false;
 function studioHTML(myWorks, canAnalyze) {
   const where = COMMUNITY ? 'Published works are visible to everyone and enter the rankings and Art Battles straight away.' : 'Demo mode: your works are saved on this device only.';
   return `<section class="section section-tight" id="studio">
-    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work', action: COMMUNITY && me ? `<div class="studio-links"><a class="link-arrow" href="#studio">${Icon('chart', { size: 14 })} Analytics</a><a class="link-arrow" href="#inbox">${Icon('mail', { size: 14 })} Inbox</a><button class="link-arrow" data-act="open-drop-form">${Icon('clock', { size: 14 })} Schedule a drop</button><button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Artist profile</button>${world.artistById[myArtistId()] ? `<a class="link-arrow" href="#artist/${encodeURIComponent(myArtistId())}">Your page ${Icon('arrow', { size: 14 })}</a>` : ''}</div>` : '' })}
+    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work', action: COMMUNITY && me ? `<div class="studio-links"><a class="link-arrow" href="#studio">${Icon('chart', { size: 14 })} Analytics</a><a class="link-arrow" href="#inbox">${Icon('mail', { size: 14 })} Inbox</a><a class="link-arrow" href="#coach">${Icon('pen', { size: 14 })} Coach</a><button class="link-arrow" data-act="exhibitions-open">${Icon('check', { size: 14 })} Passport</button><button class="link-arrow" data-act="open-drop-form">${Icon('clock', { size: 14 })} Schedule a drop</button><button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Artist profile</button>${world.artistById[myArtistId()] ? `<a class="link-arrow" href="#artist/${encodeURIComponent(myArtistId())}">Your page ${Icon('arrow', { size: 14 })}</a>` : ''}</div>` : '' })}
     <div class="profile-grid">
       <form id="upload" class="panel upload" novalidate>
         <label class="dropzone dropzone-sm">
@@ -2244,14 +2287,16 @@ async function sendApplication(role) {
 let adminData = null;
 async function loadAdmin() {
   try {
-    const [queue, verified, flags, audit, , reports] = await Promise.all([
+    const [queue, verified, flags, audit, , reports, exQueue, oppQueue] = await Promise.all([
       cloud.adminQueue(), cloud.verifiedMembers(),
       cloud.integrityQueue ? cloud.integrityQueue().catch(() => []) : [],
       cloud.auditLog ? cloud.auditLog().catch(() => []) : [],
       loadArena(true),
       cloud.inquiryReports ? cloud.inquiryReports().catch(() => []) : [],
+      cloud.exhibitionQueue ? cloud.exhibitionQueue().catch(() => []) : [],
+      cloud.opportunityQueue ? cloud.opportunityQueue().catch(() => []) : [],
     ]);
-    adminData = { queue, verified, flags, audit, reports, at: Date.now() };
+    adminData = { queue, verified, flags, audit, reports, exQueue, oppQueue, at: Date.now() };
   } catch (e) {
     adminData = { error: e?.message || 'Could not load applications.' };
   }
@@ -2263,6 +2308,7 @@ function renderAdmin(root) {
     root.innerHTML = `<div class="shell">${EmptyState({ icon: 'lock', title: 'Moderators only', body: 'This page is for Abremi moderators.', action: '<a class="btn btn-secondary" href="#home"><span>Back home</span></a>' })}</div>`;
     return;
   }
+  if (adminData?.at && Date.now() - adminData.at > 15_000 && !adminData.refreshing) { adminData.refreshing = true; setTimeout(loadAdmin, 0); } // coming back: refresh in place
   if (!adminData) { setTimeout(loadAdmin, 0); root.innerHTML = `<div class="shell"><header class="page-head"><h1 class="display-lg">Applications</h1></header>${LoadingSkeleton({ cards: 3, variant: 'list' })}</div>`; return; }
   if (adminData.error) { root.innerHTML = `<div class="shell">${EmptyState({ title: 'Could not load applications', body: adminData.error, action: PremiumButton('Try again', { act: 'admin-reload', variant: 'secondary' }) })}</div>`; return; }
   const { queue, verified } = adminData;
@@ -2292,6 +2338,7 @@ function renderAdmin(root) {
       ${createCompetitionForm(arena.adminKind)}
       ${(arena.list || []).filter((c) => ['upcoming', 'entries', 'voting'].includes(c.phase)).length ? `<h3 class="sub-head">Running now</h3><div class="competition-list">${(arena.list || []).filter((c) => ['upcoming', 'entries', 'voting'].includes(c.phase)).map((c) => `<div class="admin-competition">${competitionCard(c, { cover: coverThumb })}${PremiumButton('Cancel', { act: 'cancel-competition', variant: 'ghost', attrs: `data-v="${c.id}" data-danger` })}</div>`).join('')}</div>` : ''}
     </section>
+    ${reviewQueuesHTML({ exhibitions: adminData.exQueue || [], opportunities: adminData.oppQueue || [] })}
     ${reportsHTML(adminData.reports || [])}
     ${integrityHTML(adminData.flags || [])}
     ${auditHTML(adminData.audit || [])}
@@ -2466,6 +2513,8 @@ function signedOut() {
   serverAchievements.earned = [];
   serverNotifications = [];
   Object.assign(radar, { list: null, scheduled: [] });
+  Object.assign(careers, { usage: null, exhibitions: null });
+  careers.coach.result = null;
   threads.clear();
   Object.assign(studio, { data: undefined, reports: null, at: 0 });
   Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
@@ -2691,6 +2740,81 @@ const ACTIONS = {
   back: () => (history.length > 1 ? history.back() : (location.hash = 'artists')),
   'artist-tab': (el) => { artistTab = el.dataset.v; renderView(); },
   'how-ranked': () => openSheet(howRankedSheet),
+  'coach-tool': (el) => { Object.assign(careers.coach, { tool: el.dataset.v, error: '' }); renderView(); },
+  'coach-run': async () => {
+    const c = careers.coach;
+    c.artworkId = $('#coach-artwork')?.value || c.artworkId;
+    c.opportunityId = $('#coach-opportunity')?.value || c.opportunityId;
+    Object.assign(c, { busy: true, error: '' });
+    renderView();
+    try {
+      c.result = await cloud.coach(c.tool, { artworkId: COACH_TOOLS[c.tool].needs === 'artwork' ? c.artworkId : null, opportunityId: c.tool === 'application' ? c.opportunityId : null });
+    } catch (e) { c.error = e?.message || 'The Coach is unavailable right now.'; }
+    c.busy = false;
+    careers.usage = await cloud.coachUsage().catch(() => careers.usage);
+    if (currentView() === 'coach') renderView();
+  },
+  'coach-copy': async () => {
+    try { await navigator.clipboard.writeText(careers.coach.result?.text || ''); toast('Copied. Edit it before you use it.', { force: true }); }
+    catch { toast('Select the text to copy it.', { force: true }); }
+  },
+  'coach-for-opportunity': (el) => { Object.assign(careers.coach, { tool: 'application', opportunityId: el.dataset.id, result: null, error: '' }); location.hash = 'coach'; },
+  'exhibitions-open': async () => {
+    if (!me) return openSignIn();
+    careers.exhibitions = await cloud.myExhibitions().catch(() => []);
+    openSheet(() => exhibitionsSheet(careers.exhibitions));
+  },
+  'exhibition-submit': async (el) => {
+    const v = (k) => ($(`#ex-${k}`)?.value || '').trim();
+    const fail = (msg) => { const e = $('#ex-error'); e.textContent = msg; e.hidden = false; };
+    if (v('title').length < 3 || v('venue').length < 2) return fail('Add the exhibition’s title and venue.');
+    if (!v('start')) return fail('Add the opening date.');
+    if (!/^https:\/\//.test(v('link'))) return fail('Add a link that starts with https:// so a moderator can check it.');
+    el.disabled = true;
+    try {
+      await cloud.submitExhibition({ kind: v('kind'), title: v('title'), venue: v('venue'), city: v('city'), country: state.user.country, start: v('start'), end: v('end'), link: v('link') });
+      careers.exhibitions = await cloud.myExhibitions();
+      toast('Sent for verification.', { force: true });
+      openSheet(() => exhibitionsSheet(careers.exhibitions));
+    } catch (e) { el.disabled = false; fail(e?.message || 'Could not send it.'); }
+  },
+  'exhibition-delete': async (el) => {
+    if (!confirm('Remove this exhibition from your Passport?')) return;
+    try { await cloud.deleteExhibition(el.dataset.id); careers.exhibitions = await cloud.myExhibitions(); careers.passports.clear(); openSheet(() => exhibitionsSheet(careers.exhibitions)); }
+    catch (e) { toast(e?.message || 'Could not remove it.', { force: true }); }
+  },
+  'exhibition-review': async (el) => {
+    const verify = el.dataset.v === 'verify';
+    const note = verify ? null : prompt('Why couldn’t it be verified? The artist will see this.') || null;
+    try { await cloud.reviewExhibition(el.dataset.id, verify, note); toast(verify ? 'Verified.' : 'Marked as not verified.', { force: true }); careers.passports.clear(); await loadAdmin(); }
+    catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
+  },
+  'opportunity-kind': (el) => { careers.oppKind = el.dataset.v; renderView(); },
+  'opportunity-save': async (el) => {
+    if (!me) return openSignIn();
+    try { await cloud.saveOpportunity(el.dataset.id, el.dataset.v === 'on'); toast(el.dataset.v === 'on' ? 'Saved. We’ll remind you 3 days before the deadline.' : 'Removed.', { force: true }); await loadOpportunities(true); }
+    catch (e) { toast(e?.message || 'Could not save.', { force: true }); }
+  },
+  'opportunity-suggest': () => (me ? openSheet(() => opportunityForm({ admin: isAdmin })) : openSignIn()),
+  'opportunity-submit': async (el) => {
+    const v = (k) => ($(`#op-${k}`)?.value || '').trim();
+    const fail = (msg) => { const e = $('#op-error'); e.textContent = msg; e.hidden = false; };
+    if (v('title').length < 3 || v('organizer').length < 2 || v('location').length < 2) return fail('Add the title, organizer and location.');
+    if (!/^https:\/\//.test(v('link'))) return fail('Add the official link (https://).');
+    el.disabled = true;
+    try {
+      await cloud.suggestOpportunity({ kind: v('kind'), title: v('title'), organizer: v('organizer'), location: v('location'), deadline: v('deadline'),
+        eligibility: v('eligibility'), description: v('description'), fee: Number(v('fee')) || 0, currency: (v('currency') || 'USD').toUpperCase(), link: v('link') });
+      closeSheet();
+      toast(isAdmin ? 'Published.' : 'Thanks. A moderator will check it.', { force: true });
+      await loadOpportunities(true);
+      if (currentView() === 'admin') await loadAdmin();
+    } catch (e) { el.disabled = false; fail(e?.message || 'Could not send it.'); }
+  },
+  'opportunity-review': async (el) => {
+    try { await cloud.reviewOpportunity(el.dataset.id, el.dataset.v === 'approve', null); toast('Done.', { force: true }); await loadAdmin(); loadOpportunities(true); }
+    catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
+  },
   'inquiry-kind': (el) => {
     $$('#inquiry-form [data-act=inquiry-kind]').forEach((b) => { const on = b === el; b.classList.toggle('is-on', on); b.setAttribute('aria-checked', String(on)); });
     $('#inquiry-kind').value = el.dataset.v;
