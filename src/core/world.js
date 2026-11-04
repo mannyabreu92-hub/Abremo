@@ -17,10 +17,15 @@ export function mergeCounts(base, delta) {
   };
 }
 
+/**
+ * state.memberArtists / state.memberArtworks: community members and their uploads (community mode).
+ * state.myArtistId: which artist is the viewer (marked isMe). Demo mode uses a local 'me' artist instead.
+ */
 export function createWorld(seed, state) {
-  const artists = seed.artists.slice();
+  const members = (state.memberArtists || []).map((a) => (a.id === state.myArtistId ? { ...a, isMe: true } : a));
+  const artists = seed.artists.concat(members);
   const hasUploads = state.uploads.length > 0;
-  if (hasUploads || state.user.role === 'artist') {
+  if (!state.memberArtists && (hasUploads || state.user.role === 'artist')) {
     const cats = state.uploads.map((u) => u.category);
     artists.push({
       id: 'me',
@@ -35,7 +40,7 @@ export function createWorld(seed, state) {
       isMe: true,
     });
   }
-  const artworks = seed.artworks.concat(state.uploads);
+  const artworks = seed.artworks.concat(state.memberArtworks || [], state.uploads);
 
   const artistById = Object.fromEntries(artists.map((a) => [a.id, a]));
   const artworkById = Object.fromEntries(artworks.map((a) => [a.id, a]));

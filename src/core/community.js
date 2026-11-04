@@ -2,15 +2,75 @@
 // care whether totals come from this device (demo mode) or from everyone (community mode).
 
 import { emptyRoleCounts, ROLE_IDS } from './scoring.js';
+import { CATEGORIES, STYLES, PALETTES, CURRENT_YEAR } from './seed.js';
+import { hashString } from './random.js';
 
 export function emptyCommunity() {
-  return { deltas: {}, followerDeltas: {}, elo: {}, members: 0, fetchedAt: 0 };
+  return { deltas: {}, followerDeltas: {}, elo: {}, members: 0, fetchedAt: 0, artists: [], artworks: [] };
 }
 
 const emptyDelta = () => ({ likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } });
+const CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
 
-/** community_snapshot() → { deltas, followerDeltas, elo, members } */
-export function snapshotToCommunity(snap, now = Date.now()) {
+/** Storage paths become public URLs; data: and http(s) URLs (the test backend) pass through. */
+export function imageURL(path, storageBase = '') {
+  if (!path) return '';
+  if (/^(data:|https?:)/.test(path)) return path;
+  return `${storageBase}${path.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/** Member uploads → artworks in the same shape as the catalog. Unknown categories/styles are skipped. */
+export function uploadsToArtworks(uploads = [], storageBase = '') {
+  return (uploads || [])
+    .filter((u) => CATEGORY_IDS.has(u.category) && STYLES.includes(u.style) && u.image_path)
+    .map((u) => ({
+      id: u.id,
+      title: u.title,
+      artistId: u.artist_id,
+      category: u.category,
+      style: u.style,
+      medium: u.medium || CATEGORIES.find((c) => c.id === u.category).medium,
+      year: u.year || CURRENT_YEAR,
+      price: u.price,
+      image: imageURL(u.image_path, storageBase),
+      thumb: imageURL(u.thumb_path || u.image_path, storageBase),
+      width: u.width,
+      height: u.height,
+      quality: 0.5,
+      palette: PALETTES[hashString(u.id) % PALETTES.length],
+      counts: emptyDelta(),
+      elo: 1200,
+      createdAt: Date.parse(u.created_at) || 0,
+      member: true,
+    }));
+}
+
+/** Member artists, with medium and movements taken from their own uploads. */
+export function membersToArtists(members = [], artworks = []) {
+  return (members || []).map((m) => {
+    const works = artworks.filter((w) => w.artistId === m.id);
+    const ranked = (key) => {
+      const tally = {};
+      for (const w of works) tally[w[key]] = (tally[w[key]] || 0) + 1;
+      return Object.entries(tally).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+    };
+    return {
+      id: m.id,
+      name: m.name,
+      country: m.country,
+      category: ranked('category')[0] || 'mixed',
+      styles: ranked('style').slice(0, 2),
+      talent: 0.5,
+      debutYear: new Date(Date.parse(m.created_at) || Date.now()).getFullYear(),
+      followers: emptyRoleCounts(),
+      palette: hashString(m.id) % PALETTES.length,
+      member: true,
+    };
+  });
+}
+
+/** community_snapshot() → { deltas, followerDeltas, elo, members, artists, artworks } */
+export function snapshotToCommunity(snap, now = Date.now(), { storageBase = '' } = {}) {
   const out = emptyCommunity();
   const delta = (id) => (out.deltas[id] ||= emptyDelta());
   for (const r of snap?.reactions || []) {
@@ -30,6 +90,8 @@ export function snapshotToCommunity(snap, now = Date.now()) {
   }
   for (const r of snap?.ratings || []) if (Number.isFinite(r.v)) out.elo[r.a] = r.v;
   out.members = snap?.members || 0;
+  out.artworks = uploadsToArtworks(snap?.uploads, storageBase);
+  out.artists = membersToArtists(snap?.artists, out.artworks);
   out.fetchedAt = now;
   return out;
 }

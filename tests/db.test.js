@@ -39,6 +39,7 @@ function fails(who, sql, pattern) {
 const A = '00000000-0000-0000-0000-00000000000a';
 const B = '00000000-0000-0000-0000-00000000000b';
 const C = '00000000-0000-0000-0000-00000000000c';
+const E = '00000000-0000-0000-0000-00000000000e';
 const seed = buildSeedWorld();
 const [w1, w2] = (() => {
   const a = seed.artworks[0];
@@ -69,7 +70,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
   psql(stub);
   psql(file('supabase/setup.sql')); // the exact file people paste into Supabase
   psql(file('supabase/setup.sql')); // and running it twice is safe
-  psql(`insert into auth.users (id, email) values ('${A}', 'ana@example.com'), ('${B}', 'ben@example.com'), ('${C}', 'cy@example.com')`);
+  psql(`insert into auth.users (id, email) values ('${A}', 'ana@example.com'), ('${B}', 'ben@example.com'), ('${C}', 'cy@example.com'), ('${E}', 'eve@example.com')`);
 
   await t.test('seed.sql and setup.sql are in sync with the app catalog and migration', () => {
     assert.equal(file('supabase/seed.sql'), seedSQL());
@@ -168,8 +169,91 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.deepEqual(snap.reviews, [{ a: w1.id, n: 1, s: 4 }]);
     assert.deepEqual(snap.follows, [{ a: w1.artistId, r: 'fan', n: 1 }]);
     assert.equal(snap.ratings.length, 4);
-    assert.equal(snap.members, 3);
+    assert.equal(snap.members, 4);
     assert.ok(!JSON.stringify(snap).includes(A));
+  });
+
+  // ——— Artist uploads ———
+  const put = (who, name) => as(who, `insert into storage.objects (bucket_id, name) values ('artworks', '${name}')`);
+  const publish = (who, { image = `${E}/a.webp`, thumb = `${E}/a-thumb.webp`, category = 'oil', title = 'First Light' } = {}) =>
+    as(who, `select id || '|' || artist_id from publish_artwork('${title}', '${category}', 'Abstract', 'Oil on canvas', 2026, 450, '${image}', '${thumb}', 1200, 1600)`);
+  let uploadId;
+
+  await t.test('fans cannot upload images or publish', () => {
+    fails(E, `insert into storage.objects (bucket_id, name) values ('artworks', '${E}/x.webp')`, /row-level security/);
+    fails(E, `select * from publish_artwork('X', 'oil', 'Abstract', '', 2026, 100, '${E}/x.webp', '${E}/y.webp', 10, 10)`, /Switch to the Artist role/);
+    fails('anon', `select * from publish_artwork('X', 'oil', 'Abstract', '', 2026, 100, 'a', 'b', 10, 10)`, /permission denied|Sign in/);
+  });
+
+  await t.test('artists upload only into their own folder', () => {
+    as(E, `update profiles set role = 'artist' where id = '${E}'`);
+    put(E, `${E}/a.webp`);
+    put(E, `${E}/a-thumb.webp`);
+    fails(E, `insert into storage.objects (bucket_id, name) values ('artworks', '${A}/sneaky.webp')`, /row-level security/);
+    fails(E, `insert into storage.objects (bucket_id, name) values ('other', '${E}/x.webp')`, /row-level security|foreign key/);
+  });
+
+  await t.test('publishing needs the uploaded files and valid details', () => {
+    fails(E, `select * from publish_artwork('X', 'oil', 'Abstract', '', 2026, 100, '${E}/a.webp', '${E}/missing.webp', 10, 10)`, /Upload the image before publishing/);
+    fails(E, `select * from publish_artwork('X', 'oil', 'Abstract', '', 2026, 100, '${A}/a.webp', '${A}/b.webp', 10, 10)`, /Upload the image before publishing/);
+    assert.throws(() => publish(E, { category: 'crayons' }), (e) => /check constraint/.test(String(e.stderr)));
+    const [id, artist] = publish(E).split('|');
+    assert.match(id, /^u_[0-9a-f]{32}$/);
+    assert.equal(artist, `m_${E}`);
+    uploadId = id;
+    assert.equal(psql(`select name || '|' || country || '|' || owner_id from artists where id = 'm_${E}'`), `eve|US|${E}`);
+    fails(E, `insert into artworks (id, artist_id, title, base_elo) values ('u_fake', 'm_${E}', 'Fake', 3000)`, /row-level security|permission denied/);
+  });
+
+  await t.test('published works are public and take part in likes, snapshot and battles', () => {
+    assert.equal(as('anon', `select title from artworks where id = '${uploadId}'`), 'First Light');
+    as(B, `insert into reactions (artwork_id, kind) values ('${uploadId}', 'like')`);
+    const snap = JSON.parse(as('anon', 'select community_snapshot()::text'));
+    const up = snap.uploads.find((u) => u.id === uploadId);
+    assert.deepEqual([up.artist_id, up.category, up.style, up.price, up.width, up.height, up.image_path], [`m_${E}`, 'oil', 'Abstract', 450, 1200, 1600, `${E}/a.webp`]);
+    assert.ok(snap.artists.some((a) => a.id === `m_${E}` && a.name === 'eve'));
+    assert.ok(snap.reactions.some((r) => r.a === uploadId && r.k === 'like' && r.n === 1));
+    psql(`update battle_votes set created_at = now() - interval '1 hour'`);
+    const loserBefore = Number(psql(`select coalesce((select rating from artwork_ratings where artwork_id = '${w2.id}'), ${w2.elo})`));
+    const expected = battleResult(1200, loserBefore, 'fan');
+    assert.equal(as(B, `select winner_rating || '|' || loser_rating from cast_battle_vote('${uploadId}', '${w2.id}')`), `${expected.winner}|${expected.loser}`);
+  });
+
+  await t.test('a member’s artist name follows their profile', () => {
+    as(E, `update profiles set name = 'Eve Studio', country = 'FR' where id = '${E}'`);
+    assert.equal(psql(`select name || '|' || country from artists where id = 'm_${E}'`), 'Eve Studio|FR');
+  });
+
+  await t.test('only the owner can delete a work; its likes go with it', () => {
+    fails(B, `select * from delete_artwork('${uploadId}')`, /Not your artwork/);
+    as(B, `delete from storage.objects where name like '${E}/%'`); // silently matches nothing: not B's files
+    assert.equal(psql(`select count(*) from storage.objects where name like '${E}/a%'`), '2');
+    assert.equal(as(E, `select image_path || '|' || thumb_path from delete_artwork('${uploadId}')`), `${E}/a.webp|${E}/a-thumb.webp`);
+    assert.equal(psql(`select count(*) from reactions where artwork_id = '${uploadId}'`), '0');
+    assert.equal(psql(`select count(*) from artwork_ratings where artwork_id = '${uploadId}'`), '0');
+    as(E, `delete from storage.objects where name in ('${E}/a.webp', '${E}/a-thumb.webp')`);
+    assert.equal(psql(`select count(*) from storage.objects where name like '${E}/a%'`), '0');
+  });
+
+  await t.test('hidden (moderated) works disappear for everyone', () => {
+    put(E, `${E}/h.webp`);
+    put(E, `${E}/h-thumb.webp`);
+    const [id] = publish(E, { image: `${E}/h.webp`, thumb: `${E}/h-thumb.webp`, title: 'Hidden' }).split('|');
+    as('service_role', `update artworks set hidden = true where id = '${id}'`);
+    assert.equal(as('anon', `select count(*) from artworks where id = '${id}'`), '0');
+    assert.ok(!JSON.parse(as('anon', 'select community_snapshot()::text')).uploads.some((u) => u.id === id));
+  });
+
+  await t.test('an artist can publish at most 20 works a day', () => {
+    as(E, `do $$ begin
+      for i in 1..19 loop
+        insert into storage.objects (bucket_id, name) values ('artworks', '${E}/n' || i || '.webp'), ('artworks', '${E}/n' || i || '-t.webp');
+        perform publish_artwork('Work ' || i, 'digital', 'Futurism', '', 2026, 100, '${E}/n' || i || '.webp', '${E}/n' || i || '-t.webp', 800, 600);
+      end loop;
+    end $$`);
+    put(E, `${E}/z.webp`);
+    put(E, `${E}/z-thumb.webp`);
+    assert.throws(() => publish(E, { image: `${E}/z.webp`, thumb: `${E}/z-thumb.webp` }), (e) => /Daily limit reached/.test(String(e.stderr)));
   });
 
   await t.test('ensure_profile heals a missing profile', () => {

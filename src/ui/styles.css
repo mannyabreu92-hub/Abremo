@@ -593,6 +593,16 @@ button.tag:hover { color: var(--text); }
 .toast-action { margin-left: 12px; color: var(--gold); font-weight: 600; pointer-events: auto; }
 .toast.has-action { pointer-events: auto; }
 
+/* Studio uploads */
+.dropzone { overflow: hidden; }
+.upload-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--bg-2); opacity: .35; pointer-events: none; }
+.upload-status { min-height: 1.4em; font-size: 13.5px; color: var(--text-2); }
+.upload-status[data-kind="error"] { color: var(--nope); }
+.upload .btn:disabled { opacity: .6; cursor: progress; }
+.work-row { display: flex; align-items: center; gap: 4px; }
+.work-row .rank-row { flex: 1; min-width: 0; }
+.work-row .icon-btn:hover { color: var(--nope); }
+
 /* Installable app */
 .get-app { margin-top: -6px; }
 .get-app .icon { color: var(--gold); }

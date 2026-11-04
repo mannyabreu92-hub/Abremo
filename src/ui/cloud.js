@@ -92,6 +92,37 @@ export async function createSupabaseCloud(url, key) {
       return check(await sb.from('profiles').update(fields).eq('id', user.id).select().single());
     },
 
+    /** Public URL prefix for images in the artworks bucket. */
+    storageBase: `${url.replace(/\/+$/, '')}/storage/v1/object/public/artworks/`,
+
+    /** Upload the full image and thumbnail into the artist's own folder, then publish. */
+    async publishArtwork({ image, thumb, width, height, title, category, style, medium, year, price }) {
+      if (!user) throw new Error('Sign in first');
+      const bucket = sb.storage.from('artworks');
+      const id = crypto.randomUUID();
+      const ext = image.type === 'image/webp' ? 'webp' : 'jpg';
+      const imagePath = `${user.id}/${id}.${ext}`;
+      const thumbPath = `${user.id}/${id}-thumb.${ext}`;
+      const opts = (blob) => ({ contentType: blob.type, cacheControl: '31536000', upsert: false });
+      check(await bucket.upload(imagePath, image, opts(image)));
+      try {
+        check(await bucket.upload(thumbPath, thumb, opts(thumb)));
+        return check(await sb.rpc('publish_artwork', {
+          p_title: title, p_category: category, p_style: style, p_medium: medium || '', p_year: year, p_price: price,
+          p_image_path: imagePath, p_thumb_path: thumbPath, p_width: width, p_height: height,
+        }));
+      } catch (e) {
+        await bucket.remove([imagePath, thumbPath]).catch(() => {});
+        throw e;
+      }
+    },
+
+    async deleteArtwork(id) {
+      const rows = check(await sb.rpc('delete_artwork', { p_id: id }));
+      const row = Array.isArray(rows) ? rows[0] : rows;
+      if (row) await sb.storage.from('artworks').remove([row.image_path, row.thumb_path].filter(Boolean)).catch(() => {});
+    },
+
     async importGuest({ reactions, follows }) {
       if (reactions.length) check(await sb.from('reactions').upsert(reactions, { onConflict: 'user_id,artwork_id', ignoreDuplicates: true }));
       if (follows.length) check(await sb.from('follows').upsert(follows, { onConflict: 'user_id,artist_id', ignoreDuplicates: true }));
