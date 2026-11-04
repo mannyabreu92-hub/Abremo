@@ -13,6 +13,9 @@ export const initials = (name) => String(name || '?').split(/\s+/).map((p) => p[
 
 // ——— Icons (1.5px stroke, 24 grid) ———
 const P = {
+  brush: '<path fill="currentColor" stroke="none" d="M3.6 17.6c5.2-1.4 10.1-5.3 16.2-10.9.5-.4 1.1.2.7.7-5 6.4-10.5 10.6-16.4 11.4-.8.1-1.1-1-.5-1.2z"/><path d="M6.8 20.2c2.6-.7 5.2-2 7.7-3.9" stroke-width="1.1" opacity=".55"/>',
+  treasure: '<rect x="3.5" y="7.5" width="13" height="13" rx="1"/><rect x="6.5" y="10.5" width="7" height="7" rx=".5"/><path fill="currentColor" stroke="none" d="M19.2 1.6l.95 2.25 2.25.95-2.25.95-.95 2.25-.95-2.25-2.25-.95 2.25-.95z"/>',
+  admire: '<path d="M12 19.2c-4.1-2.6-7.6-5.6-7.6-9.1 0-2.3 1.8-4 3.9-4 1.6 0 3 .9 3.7 2.3.7-1.4 2.1-2.3 3.7-2.3 2.1 0 3.9 1.7 3.9 4 0 3.5-3.5 6.5-7.6 9.1"/><path d="M12 19.2c.7 1 1.8 1.6 3.1 1.5"/>',
   heart: '<path d="M12 20.5s-7.5-4.6-9.2-9.4A4.9 4.9 0 0 1 12 6.6a4.9 4.9 0 0 1 9.2 4.5C19.5 15.9 12 20.5 12 20.5z"/>',
   bookmark: '<path d="M6.5 3.5h11v17l-5.5-4-5.5 4z"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -130,7 +133,7 @@ export function ArtworkCard(art, ctx = {}) {
       ${rank ? `<span class="rank-tag">No. ${rank}</span>` : ''}
     </button>
     <div class="art-quick">
-      <button class="quick-btn${liked ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${art.id}" aria-pressed="${liked}" aria-label="${liked ? 'Unlike' : 'Like'} ${esc(art.title)}">${Icon('heart', { size: 18 })}</button>
+      <button class="quick-btn${liked ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${art.id}" aria-pressed="${liked}" aria-label="Admire ${esc(art.title)}">${Icon('admire', { size: 18 })}</button>
       <button class="quick-btn${saved ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${art.id}" aria-pressed="${saved}" aria-label="${saved ? 'Remove from collection' : 'Save to collection'}">${Icon('bookmark', { size: 18 })}</button>
     </div>
     <div class="art-caption">
@@ -166,7 +169,7 @@ export function FeaturedArtwork(art, { artist, label, reaction, influence, actio
         <div><dt>Price</dt><dd>${money(art.price)}</dd></div>
       </dl>
       <div class="featured-actions">
-        <button class="btn btn-icon${reaction === 'like' || reaction === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${art.id}" aria-label="Like">${Icon('heart', { size: 18 })}</button>
+        <button class="btn btn-icon${reaction === 'like' || reaction === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${art.id}" aria-label="Admire">${Icon('admire', { size: 18 })}</button>
         <button class="btn btn-icon${reaction === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${art.id}" aria-label="Save to collection">${Icon('bookmark', { size: 18 })}</button>
         ${PremiumButton('View work', { act: 'artwork', variant: 'secondary', attrs: `data-id="${art.id}"` })}
         ${PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${art.id}"` })}
