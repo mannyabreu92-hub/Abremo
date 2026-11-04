@@ -1,4 +1,12 @@
 {
+  "redirects": [
+    {
+      "source": "/((?!sw\\.js$).*)",
+      "has": [{ "type": "host", "value": "gabangi.vercel.app" }],
+      "destination": "https://abremi.vercel.app/$1",
+      "permanent": true
+    }
+  ],
   "headers": [
     {
       "source": "/sw.js",

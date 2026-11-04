@@ -43,33 +43,50 @@ const RUNTIME = 'abremi-runtime-v1';
 const RUNTIME_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net'];
 const PAGE_TIMEOUT_MS = 4000;
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'reload' })))));
-});
+// The app moved from gabangi.vercel.app to abremi.vercel.app. On the old address this worker
+// retires: it clears its caches, removes itself and reloads open pages, so the server's
+// redirect can take visitors to the new address instead of a stale offline copy.
+const RETIRED_HOSTS = ['gabangi.vercel.app'];
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-    // Old versions, plus caches from before the rename to Abremi.
-    const stale = (k) => (k.startsWith('abremi-shell-') && k !== SHELL) || k.startsWith('gabangi-');
-    await Promise.all(keys.filter(stale).map((k) => caches.delete(k)));
-    await self.clients.claim();
-  })());
-});
+if (RETIRED_HOSTS.includes(self.location.hostname)) {
+  self.addEventListener('install', () => self.skipWaiting());
+  self.addEventListener('activate', (event) => {
+    event.waitUntil((async () => {
+      await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
+      await self.registration.unregister();
+      const pages = await self.clients.matchAll({ type: 'window' });
+      await Promise.all(pages.map((page) => page.navigate(page.url).catch(() => {})));
+    })());
+  });
+} else {
+  self.addEventListener('install', (event) => {
+    event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'reload' })))));
+  });
 
-self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
-});
+  self.addEventListener('activate', (event) => {
+    event.waitUntil((async () => {
+      const keys = await caches.keys();
+      // Old versions, plus caches from before the rename to Abremi.
+      const stale = (k) => (k.startsWith('abremi-shell-') && k !== SHELL) || k.startsWith('gabangi-');
+      await Promise.all(keys.filter(stale).map((k) => caches.delete(k)));
+      await self.clients.claim();
+    })());
+  });
 
-self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  if (request.method !== 'GET') return;
-  const url = new URL(request.url);
-  if (url.hostname.endsWith('.supabase.co') || url.hostname.endsWith('.supabase.in')) return; // live data: network only
-  if (request.mode === 'navigate') return event.respondWith(page(request));
-  if (url.origin === self.location.origin) return event.respondWith(shell(request));
-  if (RUNTIME_HOSTS.includes(url.hostname)) return event.respondWith(staleWhileRevalidate(request));
-});
+  self.addEventListener('message', (event) => {
+    if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+  });
+
+  self.addEventListener('fetch', (event) => {
+    const { request } = event;
+    if (request.method !== 'GET') return;
+    const url = new URL(request.url);
+    if (url.hostname.endsWith('.supabase.co') || url.hostname.endsWith('.supabase.in')) return; // live data: network only
+    if (request.mode === 'navigate') return event.respondWith(page(request));
+    if (url.origin === self.location.origin) return event.respondWith(shell(request));
+    if (RUNTIME_HOSTS.includes(url.hostname)) return event.respondWith(staleWhileRevalidate(request));
+  });
+}
 
 /** Pages: fresh from the network when possible, the cached app when offline or slow. */
 async function page(request) {
