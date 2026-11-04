@@ -626,6 +626,131 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     fails('anon', 'select * from my_achievements()', /permission denied|Sign in/);
   });
 
+  // ——— Phase 2B (0008): Artist Arena and Creative Challenges ———
+  const G = '00000000-0000-0000-0000-000000000501';
+  const V = ['00000000-0000-0000-0000-000000000511', '00000000-0000-0000-0000-000000000512', '00000000-0000-0000-0000-000000000513'];
+  let comp, eEntry, gEntry, eWork, gWork;
+  const create = (who, kind = 'weekly', extra = {}) => {
+    const x = { title: 'Blue Hour', category: '', country: '', open: "now() - interval '1 hour'", voting: "now() + interval '1 day'", close: "now() + interval '2 days'", ...extra };
+    return as(who, `select id from create_competition('${kind}', '${x.title}', 'Paint the hour after rain.', 'One vote per member.', '${x.category}', '${x.country}', ${x.open}, ${x.voting}, ${x.close})`);
+  };
+  await t.test('competitions: only moderators create or cancel them; schedules and scope are validated', () => {
+    fails(A, `select create_competition('weekly', 'Mine', '', '', '', '', now(), now() + interval '1 day', now() + interval '2 days')`, /Admins only|permission denied/);
+    fails('anon', `select create_competition('weekly', 'Mine', '', '', '', '', now(), now() + interval '1 day', now() + interval '2 days')`, /permission denied/);
+    fails(P[1], `select create_competition('weekly', 'Backwards', '', '', '', '', now(), now() - interval '1 day', now() + interval '2 days')`, /competitions_schedule/);
+    fails(P[1], `select create_competition('category', 'No medium', '', '', '', '', now(), now() + interval '1 day', now() + interval '2 days')`, /competitions_scope/);
+    comp = create(P[1]);
+    assert.match(as(P[1], `select action from admin_audit_log() where action = 'competition.created' limit 1`), /competition\.created/);
+    for (const who of ['anon', A]) noRowsFor(who, `with u as (insert into competitions (kind, title, entries_open_at, voting_opens_at, voting_closes_at) values ('weekly', 'Sneaky', now(), now() + interval '1 day', now() + interval '2 days') returning 1) select count(*) from u`);
+    assert.equal(JSON.parse(as('anon', 'select arena()')).find((c) => c.id === comp).phase, 'entries');
+  });
+
+  await t.test('entries: one own published work per artist, while entries are open; eligibility enforced', () => {
+    psql(`insert into auth.users (id, email) values ('${G}', 'gil@example.com'); update profiles set role = 'artist', country = 'PT' where id = '${G}'`);
+    psql(`update artworks set created_at = now() - interval '2 days' where owner_id = '${E}'`);
+    put(E, `${E}/c1.webp`); put(E, `${E}/c1-thumb.webp`);
+    [eWork] = publish(E, { image: `${E}/c1.webp`, thumb: `${E}/c1-thumb.webp`, title: 'Rain' }).split('|');
+    put(G, `${G}/g1.webp`); put(G, `${G}/g1-thumb.webp`);
+    [gWork] = publish(G, { image: `${G}/g1.webp`, thumb: `${G}/g1-thumb.webp`, title: 'After Rain' }).split('|');
+    eEntry = as(E, `select id from enter_competition('${comp}', '${eWork}')`);
+    fails(E, `select enter_competition('${comp}', '${eWork}')`, /already have an entry/);
+    fails(A, `select enter_competition('${comp}', '${gWork}')`, /your own published work/);
+    fails(G, `select enter_competition('${comp}', '${seed.artworks[0].id}')`, /your own published work/, 'sample works can’t enter');
+    fails('anon', `select enter_competition('${comp}', '${gWork}')`, /permission denied|Sign in/);
+    gEntry = as(G, `select id from enter_competition('${comp}', '${gWork}')`);
+    assert.equal(as(E, `select count(*) from my_achievements() where code = 'first_entry'`), '1');
+    const photo = create(P[1], 'category', { title: 'Photography Week', category: 'photography' });
+    fails(G, `select enter_competition('${photo}', '${gWork}')`, /different medium/);
+    const fr = create(P[1], 'country', { title: 'Best of France', country: 'FR' });
+    fails(G, `select enter_competition('${fr}', '${gWork}')`, /another country/);
+    psql(`update artists set created_at = now() - interval '2 years' where owner_id = '${G}'`);
+    const em = create(P[1], 'emerging', { title: 'New Voices' });
+    fails(G, `select enter_competition('${em}', '${gWork}')`, /last 12 months/);
+    psql(`update artists set created_at = now() where owner_id = '${G}'`);
+    as(G, `select enter_competition('${em}', '${gWork}')`); // eligible again
+    as(G, `select withdraw_entry('${em}')`);
+    fails(G, `select withdraw_entry('${em}')`, /no entry/);
+    noRowsFor(A, `with u as (insert into competition_entries (competition_id, artwork_id, user_id) values ('${comp}', '${gWork}', '${A}') returning 1) select count(*) from u`);
+    fails(B, `select cast_competition_vote('${comp}', '${gEntry}')`, /Voting is not open/);
+  });
+
+  await t.test('voting: one vote per eligible member, changeable, never for yourself; totals hidden until close', () => {
+    psql(`insert into auth.users (id, email) values ${V.map((v, i) => `('${v}', 'voter${i}@example.com')`).join(', ')}`);
+    psql(`update competitions set voting_opens_at = now() - interval '1 minute' where id = '${comp}'`);
+    fails(V[0], `select cast_competition_vote('${comp}', '${gEntry}')`, /after 3 days/);
+    psql(`update profiles set created_at = now() - interval '4 days' where id in (${V.map((v) => `'${v}'`).join(', ')})`);
+    fails(V[0], `select cast_competition_vote('${comp}', '${gEntry}')`, /at least 5 works/);
+    psql(`insert into reactions (user_id, artwork_id, kind) select v, a.id, 'like' from unnest(array[${V.map((v) => `'${v}'::uuid`).join(', ')}]) v, (select id from artworks where owner_id is null order by id limit 5) a`);
+    as(V[0], `select cast_competition_vote('${comp}', '${eEntry}')`);
+    as(V[0], `select cast_competition_vote('${comp}', '${gEntry}')`); // changed their mind
+    as(V[1], `select cast_competition_vote('${comp}', '${gEntry}')`);
+    as(V[2], `select cast_competition_vote('${comp}', '${eEntry}')`);
+    assert.equal(psql(`select count(*) from competition_votes where competition_id = '${comp}'`), '3', 'one vote per member');
+    psql(`update profiles set created_at = now() - interval '4 days' where id = '${E}'`);
+    psql(`insert into reactions (user_id, artwork_id, kind) select '${E}', id, 'like' from artworks where owner_id is null order by id desc limit 5 on conflict do nothing`);
+    fails(E, `select cast_competition_vote('${comp}', '${eEntry}')`, /your own entry/);
+    fails(E, `select enter_competition('${comp}', '${eWork}')`, /Entries are not open/);
+    assert.equal(as(V[0], `select count(*) from competition_votes`), '1', 'you see only your own vote');
+    noRowsFor('anon', `select count(*) from competition_votes`);
+    const d = JSON.parse(as(B, `select competition_detail('${comp}')`));
+    assert.equal(d.phase, 'voting');
+    assert.equal(d.results, null, 'no totals while voting');
+    assert.equal(d.entries.length, 2);
+    assert.equal(JSON.parse(as(V[0], `select competition_detail('${comp}')`)).my_vote, gEntry);
+    noRowsFor(V[0], `with u as (update competition_votes set entry_id = '${eEntry}' returning 1) select count(*) from u`);
+  });
+
+  await t.test('closing: places (ties share), achievements, and notifications to entrants and followers', () => {
+    as(B, `insert into follows (artist_id) values ('m_${G}')`);
+    psql(`update competitions set voting_closes_at = now() - interval '1 second' where id = '${comp}'`);
+    const arena = JSON.parse(as('anon', 'select arena()'));
+    const c = arena.find((x) => x.id === comp);
+    assert.equal(c.phase, 'closed');
+    assert.equal(c.winner, gWork);
+    const d = JSON.parse(as('anon', `select competition_detail('${comp}')`));
+    assert.deepEqual(d.results.entries.map((r) => [r.artwork, r.votes, r.place]), [[gWork, 2, 1], [eWork, 1, 2]]);
+    assert.equal(d.results.voters, 3);
+    assert.equal(as(G, `select string_agg(code, ',' order by code) from my_achievements() where code in ('competition_winner', 'podium_finish')`), 'competition_winner,podium_finish');
+    assert.equal(as(E, `select string_agg(code, ',' order by code) from my_achievements() where code in ('competition_winner', 'podium_finish')`), 'podium_finish');
+    assert.match(as('anon', `select string_agg(code, ',') from artist_achievements('m_${G}')`), /competition_winner/);
+    assert.match(as(E, `select title from notifications`), /placed 2nd in “Blue Hour”/);
+    assert.match(as(G, `select title from notifications`), /placed 1st/);
+    assert.match(as(B, `select title from notifications`), /won “Blue Hour”/);
+    assert.equal(as(A, `select count(*) from notifications where user_id = '${E}'`), '0', 'notifications are private');
+    as(E, 'select mark_notifications_read()');
+    assert.equal(as(E, `select count(*) from notifications where read_at is null`), '0');
+    as('anon', 'select arena()');
+    assert.equal(psql(`select count(*) from notifications where title like '%Blue Hour%'`), '3', 'results are announced once');
+    fails(V[0], `select cast_competition_vote('${comp}', '${eEntry}')`, /Voting is not open/);
+    // A tie shares the place.
+    const tie = create(P[1], 'challenge', { title: 'Tie Break' });
+    const te = as(E, `select id from enter_competition('${tie}', '${eWork}')`);
+    const tg = as(G, `select id from enter_competition('${tie}', '${gWork}')`);
+    psql(`update competitions set voting_opens_at = now() - interval '1 minute' where id = '${tie}'`);
+    as(V[0], `select cast_competition_vote('${tie}', '${te}')`);
+    as(V[1], `select cast_competition_vote('${tie}', '${tg}')`);
+    psql(`update competitions set voting_closes_at = now() - interval '1 second' where id = '${tie}'`);
+    assert.deepEqual(JSON.parse(as('anon', `select competition_detail('${tie}')`)).results.entries.map((r) => r.place), [1, 1]);
+    assert.equal(as(E, `select count(*) from my_achievements() where code = 'competition_winner'`), '1', 'a shared first place wins');
+  });
+
+  await t.test('cancelled competitions take no entries and are logged', () => {
+    const x = create(P[1], 'daily', { title: 'Called Off' });
+    fails(A, `select cancel_competition('${x}')`, /Admins only|permission denied/);
+    as(P[1], `select cancel_competition('${x}', 'Wrong dates')`);
+    fails(E, `select enter_competition('${x}', '${eWork}')`, /Entries are not open/);
+    assert.equal(JSON.parse(as('anon', 'select arena()')).find((c) => c.id === x).phase, 'cancelled');
+    assert.match(as(P[1], `select details->>'note' from admin_audit_log() where action = 'competition.cancelled' limit 1`), /Wrong dates/);
+    fails(P[1], `select cancel_competition('${comp}')`, /already ended/);
+  });
+
+  await t.test('0008 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0008_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('competitions', 'competition_entries', 'competition_votes', 'notifications')`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('competitions', 'competition_entries', 'competition_votes', 'notifications')`), '4');
+  });
+
   await t.test('0007 can be undone, and setup.sql re-applies it', () => {
     psql(file('supabase/migrations/down/0007_down.sql'));
     assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('integrity_flags', 'member_achievements', 'achievement_definitions')`), '0');

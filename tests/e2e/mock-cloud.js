@@ -47,6 +47,40 @@ window.__abremiCloud = async () => {
     for (const f of countedFollows(db)) rep[f.artist_id] = (rep[f.artist_id] || 0) + W[f.role];
     return { scores, artist_scores: Object.entries(rep).filter(([, s]) => s > 0).map(([a, s]) => ({ a, s })) };
   };
+  // Competitions (0008): phases follow the schedule; closing records places and announces results once.
+  const phaseOf = (c, now = Date.now()) => (c.cancelled_at ? 'cancelled' : now < Date.parse(c.entries_open_at) ? 'upcoming'
+    : now < Date.parse(c.voting_opens_at) ? 'entries' : now < Date.parse(c.voting_closes_at) ? 'voting' : 'closed');
+  const pick = (c) => ({ id: c.id, kind: c.kind, title: c.title, brief: c.brief, category: c.category, country: c.country,
+    entries_open_at: c.entries_open_at, voting_opens_at: c.voting_opens_at, voting_closes_at: c.voting_closes_at });
+  const eligibility = (db, uid) => {
+    if (!uid) return 'Sign in to vote';
+    if (Date.parse(profileOf(db, uid).created_at) > Date.now() - 3 * 86400e3) return 'New accounts can vote after 3 days';
+    if (counted(db).filter((r) => r.user_id === uid && r.kind !== 'pass').length < 5) return 'Like at least 5 works to vote';
+    return null;
+  };
+  const award = (db, uid, code, evidence) => { ((db.achievements ||= {})[uid] ||= {})[code] ||= { code, awarded_at: new Date().toISOString(), evidence }; };
+  const closeDue = (db) => {
+    let changed = false;
+    for (const c of db.competitions || []) {
+      if (c.closed_at || c.cancelled_at || phaseOf(c) !== 'closed') continue;
+      const entries = (db.entries || []).filter((e) => e.competition_id === c.id)
+        .map((e) => ({ e, votes: (db.compVotes || []).filter((v) => v.entry_id === e.id).length }))
+        .sort((a, b) => b.votes - a.votes || a.e.at - b.e.at);
+      const res = entries.map(({ e, votes }) => ({ entry: e.id, artwork: e.artwork_id, votes, place: votes > 0 ? 1 + entries.filter((x) => x.votes > votes).length : null }));
+      c.closed_at = new Date().toISOString();
+      c.results = { entries: res, voters: (db.compVotes || []).filter((v) => v.competition_id === c.id).length };
+      db.notifications ||= [];
+      for (const r of res) {
+        const e = entries.find((x) => x.e.id === r.entry).e;
+        if (r.place === 1) award(db, e.user_id, 'competition_winner', { competition: c.id });
+        if (r.place && r.place <= 3) award(db, e.user_id, 'podium_finish', { competition: c.id });
+        const ord = r.place === 1 ? '1st' : r.place === 2 ? '2nd' : r.place === 3 ? '3rd' : `${r.place}th`;
+        db.notifications.push({ id: crypto.randomUUID(), user_id: e.user_id, kind: 'competition_result', title: r.place ? `Your entry placed ${ord} in “${c.title}”` : `Results are in for “${c.title}”`, link: `competition/${c.id}`, created_at: new Date().toISOString(), read_at: null });
+      }
+      changed = true;
+    }
+    if (changed) save(db);
+  };
   const snapshotOf = (db) => ({
     ...scoresOf(db),
     reactions: group(counted(db).filter((r) => r.kind !== 'pass'), (r) => ({ key: `${r.artwork_id}|${r.kind}|${r.role}`, out: { a: r.artwork_id, k: r.kind, r: r.role } })),
@@ -175,7 +209,7 @@ window.__abremiCloud = async () => {
         reviews: db.reviews.map((r) => ({ user: r.user_id, rating: r.rating })),
       }, { me: user?.id || null, country });
     },
-    async profile() { needUser(); const db = load(); const p = profileOf(db, user.id); save(db); return p; },
+    async profile() { needUser(); const db = load(); const isNew = !db.profiles[user.id]; const p = profileOf(db, user.id); if (isNew) save(db); return p; },
     async mine() {
       await wait();
       if (!user) return { reactions: [], follows: [], reviews: [] };
@@ -356,6 +390,9 @@ window.__abremiCloud = async () => {
         { code: 'first_discovery', audience: 'member', label: 'First Discovery', criteria: 'Liked or saved your first work.', sort: 10 },
         { code: 'master_curator', audience: 'member', label: 'Master Curator', criteria: 'Built 3 collections with at least 5 works each.', sort: 30 },
         { code: 'first_work', audience: 'artist', label: 'First Work', criteria: 'Published a first work on Abremi.', sort: 100 },
+        { code: 'first_entry', audience: 'artist', label: 'First Entry', criteria: 'Entered a first Arena competition or Creative Challenge.', sort: 150 },
+        { code: 'podium_finish', audience: 'artist', label: 'Podium Finish', criteria: 'Placed in the top 3 of an Arena competition or Creative Challenge.', sort: 160 },
+        { code: 'competition_winner', audience: 'artist', label: 'Competition Winner', criteria: 'Won an Arena competition or Creative Challenge (1st place, ties included).', sort: 170 },
       ];
     },
     async myAchievements() {
@@ -364,12 +401,13 @@ window.__abremiCloud = async () => {
       const db = load();
       db.achievements ||= {};
       const mine = (db.achievements[user.id] ||= {});
-      const award = (code, evidence) => { if (!mine[code]) mine[code] = { code, awarded_at: new Date().toISOString(), evidence }; };
+      let changed = false;
+      const award = (code, evidence) => { if (!mine[code]) { mine[code] = { code, awarded_at: new Date().toISOString(), evidence }; changed = true; } };
       const first = counted(db).find((r) => r.user_id === user.id && r.kind !== 'pass');
       if (first) award('first_discovery', { artwork: first.artwork_id });
       const work = db.uploads.find((u) => u.owner === user.id);
       if (work) award('first_work', { artwork: work.id });
-      save(db);
+      if (changed) save(db); // only write when something changed (tabs share this store)
       const defs = await this.achievementDefinitions();
       return Object.values(mine).map((m) => ({ ...defs.find((d) => d.code === m.code), ...m }));
     },
@@ -386,17 +424,18 @@ window.__abremiCloud = async () => {
       const db = load();
       if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
       db.flags ||= [];
+      let added = false;
       const hourAgo = Date.now() - 3600e3;
       const byWork = {};
       for (const r of counted(db)) if (r.kind !== 'pass' && (r.at || 0) > hourAgo) (byWork[r.artwork_id] ||= []).push(r);
       for (const [id, rows] of Object.entries(byWork)) {
         const fresh = rows.filter((r) => Date.parse(profileOf(db, r.user_id).created_at) > (r.at || 0) - 72 * 3600e3).length;
         if (rows.length >= 10 && fresh / rows.length >= 0.6 && !db.flags.some((f) => f.target_id === id)) {
-          db.flags.push({ id: crypto.randomUUID(), kind: 'new_account_burst', target_type: 'artwork', target_id: id, status: 'open', created_at: new Date().toISOString(),
+          added = true; db.flags.push({ id: crypto.randomUUID(), kind: 'new_account_burst', target_type: 'artwork', target_id: id, status: 'open', created_at: new Date().toISOString(),
             details: { total: rows.length, new_accounts: fresh, since: Math.min(...rows.map((r) => r.at)), until: Math.max(...rows.map((r) => r.at)) } });
         }
       }
-      save(db);
+      if (added) save(db);
       const titles = Object.fromEntries(seed.artworks.map((w) => [w.id, w.title]));
       return db.flags.filter((f) => f.status === 'open').map((f) => ({ ...f, title: titles[f.target_id] || f.target_id }));
     },
@@ -417,6 +456,101 @@ window.__abremiCloud = async () => {
       (db.audit ||= []).unshift({ action: exclude ? 'integrity_flag.confirmed' : 'integrity_flag.dismissed', actor_email: user.email, created_at: new Date().toISOString(), details: { excluded: n, note } });
       save(db);
       return n;
+    },
+    // ——— Phase 2B (same rules as supabase/migrations/0008_competitions.sql) ———
+    async arena() {
+      await wait();
+      const db = load();
+      closeDue(db);
+      return (db.competitions || []).slice().sort((a, b) => Date.parse(b.voting_closes_at) - Date.parse(a.voting_closes_at)).map((c) => ({
+        ...pick(c), phase: phaseOf(c),
+        entries: (db.entries || []).filter((e) => e.competition_id === c.id).length,
+        my_entry: (db.entries || []).find((e) => e.competition_id === c.id && e.user_id === user?.id)?.artwork_id || null,
+        winner: c.results?.entries.find((r) => r.place === 1)?.artwork || null,
+      }));
+    },
+    async competition(id) {
+      await wait();
+      const db = load();
+      closeDue(db);
+      const c = (db.competitions || []).find((x) => x.id === id);
+      if (!c) return null;
+      const why = eligibility(db, user?.id);
+      return { ...pick(c), rules: c.rules, phase: phaseOf(c), results: c.results || null,
+        entries: (db.entries || []).filter((e) => e.competition_id === id).map((e) => ({ id: e.id, artwork: e.artwork_id, mine: e.user_id === user?.id })),
+        my_vote: (db.compVotes || []).find((v) => v.competition_id === id && v.user_id === user?.id)?.entry_id || null,
+        can_vote: !why, vote_blocker: why };
+    },
+    async createCompetition({ kind, title, brief = '', rules = '', category = '', country = '', entriesOpenAt, votingOpensAt, votingClosesAt }) {
+      await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      if (!(Date.parse(entriesOpenAt) < Date.parse(votingOpensAt) && Date.parse(votingOpensAt) < Date.parse(votingClosesAt))) throw new Error('new row for relation "competitions" violates check constraint "competitions_schedule"');
+      if ((kind === 'category') !== Boolean(category) || (kind === 'country') !== Boolean(country)) throw new Error('violates check constraint "competitions_scope"');
+      const c = { id: crypto.randomUUID(), kind, title: title.trim(), brief, rules, category: category || null, country: country || null,
+        entries_open_at: new Date(entriesOpenAt).toISOString(), voting_opens_at: new Date(votingOpensAt).toISOString(), voting_closes_at: new Date(votingClosesAt).toISOString() };
+      (db.competitions ||= []).push(c);
+      (db.audit ||= []).unshift({ action: 'competition.created', actor_email: user.email, created_at: new Date().toISOString(), details: { title: c.title } });
+      save(db);
+      return c;
+    },
+    async cancelCompetition(id) {
+      await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      const c = db.competitions.find((x) => x.id === id && !x.cancelled_at && !x.closed_at);
+      if (!c) throw new Error('That competition has already ended');
+      c.cancelled_at = new Date().toISOString();
+      save(db);
+    },
+    async enterCompetition(id, artworkId) {
+      needUser(); await wait();
+      const db = load();
+      const c = (db.competitions || []).find((x) => x.id === id);
+      if (!c) throw new Error('Competition not found');
+      if (phaseOf(c) !== 'entries') throw new Error('Entries are not open');
+      const w = db.uploads.find((u) => u.id === artworkId);
+      if (!w || w.owner !== user.id) throw new Error('You can only enter your own published work');
+      if (c.kind === 'category' && w.category !== c.category) throw new Error('This competition is for a different medium');
+      if (c.kind === 'country' && profileOf(db, user.id).country !== c.country) throw new Error('This competition is for artists from another country');
+      db.entries ||= [];
+      if (db.entries.some((e) => e.competition_id === id && e.user_id === user.id)) throw new Error('You already have an entry in this competition');
+      const e = { id: crypto.randomUUID(), competition_id: id, artwork_id: artworkId, user_id: user.id, at: tick() };
+      db.entries.push(e);
+      award(db, user.id, 'first_entry', { competition: id });
+      save(db);
+      return e;
+    },
+    async withdrawEntry(id) {
+      needUser(); await wait();
+      const db = load();
+      const c = (db.competitions || []).find((x) => x.id === id);
+      if (!c || phaseOf(c) !== 'entries') throw new Error('Entries can be withdrawn only while entries are open');
+      db.entries = (db.entries || []).filter((e) => !(e.competition_id === id && e.user_id === user.id));
+      save(db);
+    },
+    async voteCompetition(id, entryId) {
+      needUser(); await wait();
+      const db = load();
+      const c = (db.competitions || []).find((x) => x.id === id);
+      if (!c || phaseOf(c) !== 'voting') throw new Error('Voting is not open');
+      const why = eligibility(db, user.id);
+      if (why) throw new Error(why);
+      const e = (db.entries || []).find((x) => x.id === entryId && x.competition_id === id);
+      if (!e) throw new Error('That entry is not in this competition');
+      if (e.user_id === user.id) throw new Error('You can’t vote for your own entry');
+      db.compVotes = (db.compVotes || []).filter((v) => !(v.competition_id === id && v.user_id === user.id));
+      db.compVotes.push({ competition_id: id, user_id: user.id, entry_id: entryId });
+      save(db);
+    },
+    async notifications() {
+      await wait();
+      return user ? (load().notifications || []).filter((n) => n.user_id === user.id).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)) : [];
+    },
+    async markNotificationsRead() {
+      const db = load();
+      for (const n of db.notifications || []) if (n.user_id === user?.id && !n.read_at) n.read_at = new Date().toISOString();
+      save(db);
     },
     async auditLog() {
       const db = load();

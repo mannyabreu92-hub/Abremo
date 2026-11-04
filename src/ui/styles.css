@@ -1190,3 +1190,33 @@ div.rank-row:hover { background: transparent; }
 .audit-list li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .audit-list b { color: var(--text); font-weight: 600; }
 .achievement-criteria { display: block; color: var(--muted); font-size: 0.8rem; margin-top: 4px; line-height: 1.4; }
+
+/* ——— Phase 2B: Artist Arena and Creative Challenges ——— */
+.arena-tabs { margin: 14px 0 18px; }
+.competition-list { display: grid; gap: 12px; }
+@media (min-width: 900px) { .competition-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.competition-card { display: flex; align-items: center; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--abremi-surface); color: var(--text); text-decoration: none; transition: border-color .2s, background .2s; min-width: 0; }
+.competition-card:hover { border-color: var(--abremi-border-gold); background: var(--surface-hover); }
+.competition-card > .icon { flex: none; color: var(--muted); }
+.competition-cover { flex: none; width: 64px; height: 64px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; background: var(--abremi-surface-elevated); color: var(--gold); }
+.competition-cover img, .competition-cover svg:not(.icon) { width: 100%; height: 100%; object-fit: cover; }
+.competition-text { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.competition-text b { font-family: 'Playfair Display', Georgia, serif; font-weight: 500; font-size: 1.12rem; overflow-wrap: anywhere; }
+.competition-text small { color: var(--text-2); }
+.competition-card.phase-voting .eyebrow { color: var(--abremi-success); }
+.competition-page .page-head { margin-bottom: 18px; }
+.countdown { display: inline-flex; align-items: center; gap: 6px; color: var(--gold); margin: 6px 0 4px; font-weight: 500; }
+.entry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 12px 0 8px; }
+@media (min-width: 900px) { .entry-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.entry-tile { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.entry-tile.is-voted .art-card { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 14px; }
+.entry-tile.is-winner .art-card { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 14px; }
+.result-line { color: var(--text-2); font-size: 0.92rem; }
+.place { font-family: 'Playfair Display', Georgia, serif; font-size: 1.1rem; color: var(--text); margin-right: 4px; }
+.place-1 { color: var(--gold); }
+.competition-rules p { color: var(--text-2); line-height: 1.6; max-width: 70ch; }
+.create-competition { display: grid; gap: 4px; margin-bottom: 18px; }
+.field-row-3 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.admin-competition { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.arena-view .battle-head .lede { max-width: 46ch; }
+.arena-view .arena-tabs { justify-self: center; }

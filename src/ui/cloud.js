@@ -249,6 +249,38 @@ export async function createSupabaseCloud(url, key) {
     async resolveFlag(id, exclude, note) {
       return check(await sb.rpc('resolve_integrity_flag', { p_id: id, p_exclude: exclude, p_note: note || null }));
     },
+    // ——— Phase 2B: Artist Arena and Creative Challenges ———
+    async arena() {
+      return check(await sb.rpc('arena'));
+    },
+    async competition(id) {
+      return check(await sb.rpc('competition_detail', { p_id: id }));
+    },
+    async createCompetition({ kind, title, brief, rules, category, country, entriesOpenAt, votingOpensAt, votingClosesAt }) {
+      return check(await sb.rpc('create_competition', {
+        p_kind: kind, p_title: title, p_brief: brief || '', p_rules: rules || '', p_category: category || '', p_country: country || '',
+        p_entries_open_at: entriesOpenAt, p_voting_opens_at: votingOpensAt, p_voting_closes_at: votingClosesAt,
+      }));
+    },
+    async cancelCompetition(id, note) {
+      check(await sb.rpc('cancel_competition', { p_id: id, p_note: note || null }));
+    },
+    async enterCompetition(id, artworkId) {
+      return check(await sb.rpc('enter_competition', { p_competition: id, p_artwork: artworkId }));
+    },
+    async withdrawEntry(id) {
+      check(await sb.rpc('withdraw_entry', { p_competition: id }));
+    },
+    async voteCompetition(id, entryId) {
+      check(await sb.rpc('cast_competition_vote', { p_competition: id, p_entry: entryId }));
+    },
+    async notifications() {
+      if (!user) return [];
+      return check(await sb.from('notifications').select('id, kind, title, link, created_at, read_at').order('created_at', { ascending: false }).limit(50));
+    },
+    async markNotificationsRead() {
+      if (user) check(await sb.rpc('mark_notifications_read'));
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },
