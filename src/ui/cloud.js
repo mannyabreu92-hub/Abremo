@@ -292,6 +292,59 @@ export async function createSupabaseCloud(url, key) {
     async weeklyReports() {
       return check(await sb.rpc('my_weekly_reports'));
     },
+    // ——— Phase 4: Collector Radar ———
+    async sendInquiry({ artworkId = null, artistId = null, kind, message }) {
+      return check(await sb.rpc('send_inquiry', { p_artwork: artworkId, p_artist: artistId, p_kind: kind, p_message: message }));
+    },
+    async replyInquiry(id, body) {
+      check(await sb.rpc('reply_inquiry', { p_id: id, p_body: body }));
+    },
+    async setInquiryStatus(id, status) {
+      check(await sb.rpc('set_inquiry_status', { p_id: id, p_status: status }));
+    },
+    async markInquiryRead(id) {
+      check(await sb.rpc('mark_inquiry_read', { p_id: id }));
+    },
+    async inquiries() {
+      return user ? check(await sb.rpc('my_inquiries')) : [];
+    },
+    async inquiryThread(id) {
+      return check(await sb.rpc('inquiry_thread', { p_id: id }));
+    },
+    async setBlock(inquiryId, on) {
+      check(await sb.rpc('set_block', { p_inquiry: inquiryId, p_block: on }));
+    },
+    async reportInquiry(id, reason) {
+      check(await sb.rpc('report_inquiry', { p_id: id, p_reason: reason }));
+    },
+    async inquiryReports() {
+      return check(await sb.rpc('admin_inquiry_reports'));
+    },
+    async resolveInquiryReport(id, close, note) {
+      check(await sb.rpc('resolve_inquiry_report', { p_id: id, p_close: close, p_note: note || null }));
+    },
+    async collectorInterest() {
+      return check(await sb.rpc('collector_interest'));
+    },
+    // ——— Phase 4: Drops ———
+    async drops() {
+      return check(await sb.rpc('drops_overview'));
+    },
+    async drop(id) {
+      return check(await sb.rpc('drop_detail', { p_id: id }));
+    },
+    async createDrop({ title, description, releaseAt, artworkIds }) {
+      return check(await sb.rpc('create_drop', { p_title: title, p_description: description || '', p_release_at: releaseAt, p_artworks: artworkIds, p_teaser: artworkIds[0] }));
+    },
+    async cancelDrop(id, note) {
+      check(await sb.rpc('cancel_drop', { p_id: id, p_note: note || null }));
+    },
+    async subscribeDrop(id, on) {
+      check(await sb.rpc('subscribe_drop', { p_id: id, p_on: on }));
+    },
+    async scheduledWorks() {
+      return user ? check(await sb.rpc('my_scheduled_works')) : [];
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },

@@ -18,7 +18,7 @@ npm run lint      # ESLint
 npm run typecheck # TypeScript checks the JavaScript through JSDoc (app.js joins as it is split into src/ui/views/)
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
 npm run test:db   # Supabase migration + security rules on a real Postgres (set ABREMI_PG)
-npm run test:e2e  # Phase 3 (Studio analytics), Phase 2B (Arena competitions), Phase 2A (ranking integrity, achievements), Phase 1 (profiles, artwork details, collections, sample catalog), sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
+npm run test:e2e  # Phase 4 (Collector Radar, Drops), Phase 3 (Studio analytics), Phase 2B (Arena competitions), Phase 2A (ranking integrity, achievements), Phase 1 (profiles, artwork details, collections, sample catalog), sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
 ```
 
 ### Accounts and the shared database
@@ -37,6 +37,8 @@ Add a Supabase database and it switches to **community mode**:
 - **Fair rankings (Phase 2A):** the server calculates five separate scores (artwork popularity, artist reputation, critic credibility, collector interest, battle performance) and publishes how ("How rankings work" on Rankings). Rankings show All Time, **Trending This Week** (each like halves in value every 7 days) and **Collectors' Picks**. Your own likes, saves, reviews, follows and battle votes never count; there are hourly rate limits; bursts of likes from brand-new accounts go to moderators, who can exclude them (recorded, never deleted).
 - **Artist Arena and Creative Challenges (Phase 2B):** Arena → Competitions. Moderators create daily, weekly, medium, country, emerging-artist and themed competitions from templates. Artists enter one of their own works; every eligible member (account 3+ days old, 5+ likes) has one vote, equal for every role, changeable until close and never for their own entry. Vote totals stay hidden until the server closes the competition on schedule, publishes places (ties share), awards First Entry, Podium Finish and Competition Winner, and notifies entrants and the winners' followers. History lists past results.
 - **Artist Studio analytics (Phase 3):** Studio → Analytics (`#studio`). Totals for 7, 30 or 90 days against the period before: impressions, artwork views and profile visits (each person once a day; members and guests shown apart, guests approximate; your own views never count), likes, saves and new followers. Daily charts with table views, per-work figures, and the audience by role and by country (from members' profile countries; countries with fewer than 3 people grouped as Other; never who). A weekly report arrives every Monday. Free for every artist until subscriptions are verified on the server.
+- **Collector Radar (Phase 4):** **Inquire** opens a real, private conversation with the artist about a work (buying, a question) or about the artist (a commission, sponsorship); there are no simulated purchases with real accounts. Only the two people can read it; each sees the other's display name, never an email. Members whose accounts are 3+ days old can write (10 new conversations a day); artists reply, decline or close from their **Inbox**; anyone can block or report. The Studio shows inquiries and verified collectors' saves per work (counts only).
+- **Drops (Phase 4):** artists schedule releases of 1 to 12 works (Studio → Schedule a drop). Until the release the works are hidden from everyone else; the drop page shows a countdown and a blurred teaser, followers are notified at announcement and release, and anyone can tap **Notify me**. Drops appear on Home.
 - **Achievements:** earned on the server, each with a published rule and a record of why it was earned. Artist achievements show on artist pages; member achievements stay private.
 - **Following feed:** Home → Following shows the newest work from artists you follow.
 - **Security headers:** a strict Content-Security-Policy (scripts from this site only; supabase-js is served from `src/vendor/`), plus frame, referrer, permissions and HSTS headers, set in `vercel.json` and applied by `npm start` too.
@@ -168,7 +170,7 @@ tests/                node:test suites
 ## Prototype limits (what production needs)
 - **Backend:** accounts and the shared database are built (see above). Ranking integrity covers self-votes, rate limits and new-account bursts; more fraud signals (shared devices, vote rings) are still to come.
 - **Recognition:** uses on-device pixel statistics today. Production would use a vision model behind the same `features → prediction → matches` interface.
-- **Payments and messaging** are simulated and stay on the device. A real version needs Stripe Connect or similar for payouts.
+- **Payments** are not taken. With accounts, inquiries are real conversations; purchases remain a demo-mode preview until verified checkout arrives (Phase 6).
 - **Catalog art** is generated procedurally, so the demo ships no copyrighted images. Uploaded images are stored in localStorage (about 5 MB limit).
 
 See [`docs/PITCH.md`](docs/PITCH.md) for the investor pitch.

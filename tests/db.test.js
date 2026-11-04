@@ -749,7 +749,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
   let eArt;
   const rec = (who, events, guest = null) => Number(as(who, `select record_events('${JSON.stringify(events)}'::jsonb, ${guest ? `'${guest}'` : 'null'})`));
   await t.test('events: once per viewer per day, never your own, guests separate, sample works ignored, no direct access', () => {
-    eArt = psql(`select id from artworks where owner_id = '${E}' order by created_at limit 1`);
+    eArt = psql(`select id from artworks where owner_id = '${E}' and not hidden order by id limit 1`); // (several share a timestamp)
     const evs = [{ k: 'impression', t: eArt }, { k: 'artwork_view', t: eArt }, { k: 'profile_visit', t: `m_${E}` }];
     assert.equal(rec(B, evs), 3);
     assert.equal(rec(B, evs), 0, 'once per day');
