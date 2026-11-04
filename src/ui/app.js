@@ -28,6 +28,7 @@ import { plansPage, galleryForm, galleryPageHTML, feedbackSheet, membershipCardH
 import { adminPage } from './views/admin.js';
 import { indexPage, badgeEmbedHTML } from './views/index.js';
 import { ordersPage } from './views/orders.js';
+import { welcomeCardHTML, tourSheet, joinPage, WELCOME_KEY } from './views/launch.js';
 import { guidePanelHTML, replyHTML, GUIDE_COPY } from './views/assistant.js';
 import { aboutHTML, installCardHTML, iosInstallHTML, signInHTML, accountCardHTML } from './views/account.js';
 import {
@@ -172,7 +173,7 @@ const VIEWS = {
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
   art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition, studio: renderStudio,
   inbox: renderInbox, inquiry: renderInquiry, drop: renderDrop, coach: renderCoach, opportunities: renderOpportunities,
-  plans: renderPlans, gallery: renderGallery, index: renderIndex, orders: renderOrders,
+  plans: renderPlans, gallery: renderGallery, index: renderIndex, orders: renderOrders, join: renderJoin,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -617,6 +618,7 @@ function renderHome(root) {
     </section>
 
     <div class="shell">
+      ${welcomed() ? '' : welcomeCardHTML()}
       ${masterpieceHTML(mp)}
       ${COMMUNITY ? (radar.drops ? dropsSection(radar.drops, { image: storageImage }) : (loadDrops(), '')) : ''}
       ${emergingHTML()}
@@ -660,7 +662,7 @@ function renderHome(root) {
 
 function footerHTML() {
   return `<footer class="footer">${AbremiSymbol(18)}<span class="brand-word">Abremi</span><span>Discover art. Shape culture.</span>
-    <nav class="footer-links" aria-label="More"><a href="#index">The Index</a><a href="#opportunities">Opportunities</a><a href="#plans">Plans</a>${COMMUNITY ? '<button class="link" data-act="feedback-open">Send feedback</button>' : ''}<button class="link" data-act="about">About</button></nav></footer>`;
+    <nav class="footer-links" aria-label="More"><a href="#join">For artists</a><a href="#index">The Index</a><a href="#opportunities">Opportunities</a><a href="#plans">Plans</a>${COMMUNITY ? '<button class="link" data-act="feedback-open">Send feedback</button>' : ''}<button class="link" data-act="about">About</button></nav></footer>`;
 }
 
 // ——— Discover (swipe) ———
@@ -869,6 +871,7 @@ function artworkSheet(id) {
         ${isMine(w) && COMMUNITY ? PremiumButton('Edit', { act: 'edit-artwork', variant: 'secondary', icon: 'pen', attrs: `data-id="${id}"` }) : ''}
         ${isMine(w) ? PremiumButton('Delete', { act: 'delete-artwork', variant: 'ghost', attrs: `data-id="${id}" data-danger` }) : ''}
         ${IconButton('share', 'Share this artwork', { act: 'share-artwork', attrs: `data-id="${id}"` })}
+        ${w.member && w.image ? IconButton('download', 'Share card for Instagram', { act: 'share-card', attrs: `data-id="${id}"` }) : ''}
       </div>
       ${myReview ? `<blockquote class="quote"><span class="stars-static">${'★'.repeat(myReview.rating)}${'☆'.repeat(5 - myReview.rating)}</span>${esc(myReview.text)}</blockquote>` : ''}
       <div class="stat-row">
@@ -1265,6 +1268,38 @@ function reportError(message, source) {
 }
 window.addEventListener('error', (e) => reportError(e.message, e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : null));
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack?.split('\n')[1]?.trim()));
+
+// ——— Beta launch kit: welcome, tour, #join, share cards ———
+const welcomed = () => { try { return Boolean(localStorage.getItem(WELCOME_KEY)); } catch { return true; } };
+const markWelcomed = () => { try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* private mode */ } };
+let tourStep = 0;
+
+function renderJoin(root) {
+  root.innerHTML = joinPage({ community: COMMUNITY, signedIn: Boolean(me), isArtist: state.user.role === 'artist' || Boolean(world.artistById[myArtistId()]), salesOn: Boolean(member.flags?.sales_enabled) });
+}
+
+/** A 1080×1350 card (Instagram portrait) of a member's work with its title, artist and the Abremi mark. */
+async function shareCard(w) {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  await new Promise((ok, no) => { img.onload = ok; img.onerror = no; img.src = w.image; });
+  const c = document.createElement('canvas');
+  c.width = 1080; c.height = 1350;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0b0c0d'; g.fillRect(0, 0, c.width, c.height);
+  const box = { x: 90, y: 90, w: 900, h: 930 };
+  const scale = Math.min(box.w / img.naturalWidth, box.h / img.naturalHeight);
+  const iw = img.naturalWidth * scale, ih = img.naturalHeight * scale;
+  g.drawImage(img, box.x + (box.w - iw) / 2, box.y + (box.h - ih) / 2, iw, ih);
+  g.strokeStyle = 'rgba(214,173,104,.55)'; g.lineWidth = 2; g.strokeRect(60, 60, 960, 1230);
+  g.fillStyle = '#f3efe7'; g.font = '500 54px "Playfair Display", Georgia, serif';
+  g.fillText(w.title.length > 30 ? `${w.title.slice(0, 29)}…` : w.title, 90, 1110, 900);
+  g.fillStyle = '#b9b3a8'; g.font = '400 32px Inter, Helvetica, Arial, sans-serif';
+  g.fillText(artistOf(w)?.name || '', 90, 1162, 900);
+  g.fillStyle = '#d6ad68'; g.font = '500 24px Inter, Helvetica, Arial, sans-serif';
+  g.fillText(`ON ABREMI  ·  ${location.host}`.toUpperCase(), 90, 1236, 900);
+  return new Promise((ok) => c.toBlob(ok, 'image/png'));
+}
 
 // ——— Checkout and orders (#orders) ———
 // Buying is shown only when sales are switched on and the artist can be paid (both checked again
@@ -3076,6 +3111,25 @@ const ACTIONS = {
   'index-publish': async () => {
     try { await cloud.publishIndex(); idx.cache.clear(); toast('This week’s Index is published.', { force: true }); }
     catch (e) { toast(e?.message || 'Could not publish it.', { force: true }); }
+  },
+  'tour-open': () => { tourStep = 0; openSheet(() => tourSheet(tourStep)); },
+  'tour-next': (el) => { tourStep = Number(el.dataset.v) || 0; refreshSheet(); },
+  'tour-done': () => { markWelcomed(); closeSheet(); location.hash = 'discover'; },
+  'welcome-dismiss': () => { markWelcomed(); renderView(); },
+  'join-artist': () => { location.hash = 'profile'; setTimeout(() => $('[data-act=set-role][data-v=artist]')?.click(), 300); },
+  'share-card': async (el) => {
+    const w = world.artworkById[el.dataset.id];
+    try {
+      const blob = await shareCard(w);
+      const file = new File([blob], `${w.title.replace(/[^\w-]+/g, '-').slice(0, 40) || 'abremi'}.png`, { type: 'image/png' });
+      if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: `${w.title} on Abremi` }); return; }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = file.name;
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast('Share card saved. Post it with a link to your Abremi page.', { force: true });
+    } catch { toast('Could not make the card. Try again in a moment.', { force: true }); }
   },
   'checkout-buy': async (el) => {
     if (!me) return openSignIn();

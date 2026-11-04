@@ -1502,3 +1502,21 @@ div.rank-row:hover { background: transparent; }
 .order-card h3 { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 19px; }
 .order-card p { margin: 0; }
 .payout-card .btn { justify-self: start; }
+
+/* Beta launch kit */
+.welcome-card { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin: 0 0 22px; padding: 16px 20px;
+  border: 1px solid var(--abremi-border-gold); border-radius: 18px; background: var(--gold-soft); }
+.welcome-card p { margin: 0; }
+.welcome-actions { display: flex; align-items: center; gap: 8px; }
+.tour { display: grid; gap: 14px; }
+.tour-icons { display: flex; gap: 12px; color: var(--abremi-gold); }
+.tour-icons span { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--abremi-border-gold); }
+.tour-dots { display: flex; gap: 6px; }
+.tour-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+.tour-dots i.is-on { background: var(--abremi-gold); }
+.join-hero .btn { margin-top: 18px; }
+.join-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+.join-list li { display: flex; gap: 14px; align-items: flex-start; }
+.join-list p { margin: 4px 0 0; color: var(--text-2); font-size: 14.5px; line-height: 1.5; }
+.join-icon { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: var(--abremi-gold); border: 1px solid var(--abremi-border-gold); }
+.join-steps { padding-left: 20px; display: grid; gap: 8px; color: var(--text-2); margin: 0 0 18px; }
