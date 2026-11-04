@@ -92,3 +92,10 @@ test('achievements are earned from real milestones only', () => {
   assert.deepEqual(got, ['firstDiscovery', 'hiddenGem', 'trendHunter', 'culturalScout', 'masterCurator', 'earlyBeliever1k']);
   assert.deepEqual(earnedAchievements({ discoveries: [], now: now({}) }), []);
 });
+
+test('daily masterpiece works with a single ranked work', () => {
+  const only = [{ item: { id: 'w1' }, score: 3, rank: 1 }];
+  const pick = dailyMasterpiece(only, () => 0, new Date(2026, 10, 4, 12));
+  assert.equal(pick.artwork.id, 'w1');
+  assert.equal(pick.rank, 1);
+});

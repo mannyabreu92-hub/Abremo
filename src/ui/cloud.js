@@ -1,7 +1,22 @@
 // Community backend (Supabase). Every call the app makes to the server goes through this
 // adapter, so the UI can be tested against a stand-in with the same methods.
 
-const SUPABASE_JS = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
+// supabase-js 2.45.4 (MIT), served from this site rather than a CDN so the app runs only code we ship
+// (and a strict Content-Security-Policy can allow scripts from 'self' only). See src/vendor/.
+const SUPABASE_JS = new URL('../vendor/supabase.js', import.meta.url).href;
+
+/** @returns {Promise<any>} the supabase-js UMD global */
+function loadSupabase() {
+  const g = /** @type {any} */ (self);
+  if (g.supabase?.createClient) return Promise.resolve(g.supabase);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = SUPABASE_JS;
+    s.onload = () => (g.supabase?.createClient ? resolve(g.supabase) : reject(new Error('Sign-in library failed to start')));
+    s.onerror = () => reject(new Error('Could not load the sign-in library'));
+    document.head.append(s);
+  });
+}
 
 const toUser = (session) => (session?.user ? { id: session.user.id, email: session.user.email || '' } : null);
 
@@ -11,7 +26,7 @@ function check({ data, error }) {
 }
 
 export async function createSupabaseCloud(url, key) {
-  const { createClient } = await import(SUPABASE_JS);
+  const { createClient } = await loadSupabase();
   const sb = createClient(url, key, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' },
   });
@@ -94,6 +109,7 @@ export async function createSupabaseCloud(url, key) {
      * Live updates: calls onChange when community totals change (the database bumps a public
      * pulse row; no individual vote is sent), and onStatus(true/false) as the connection comes and goes.
      */
+    /** @param {() => void} onChange @param {(connected: boolean) => void} [onStatus] */
     onPulse(onChange, onStatus = () => {}) {
       sb.channel('abremi-pulse')
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'community_pulse' }, () => onChange())
@@ -162,6 +178,63 @@ export async function createSupabaseCloud(url, key) {
         await bucket.remove([imagePath, thumbPath]).catch(() => {});
         throw e;
       }
+    },
+
+    /** Upload a portrait into the artist's own folder; returns its storage path. */
+    async uploadPortrait(blob) {
+      if (!user) throw new Error('Sign in first');
+      const path = `${user.id}/portrait-${crypto.randomUUID()}.${blob.type === 'image/webp' ? 'webp' : 'jpg'}`;
+      check(await sb.storage.from('artworks').upload(path, blob, { contentType: blob.type, cacheControl: '31536000', upsert: false }));
+      return path;
+    },
+
+    async updateArtistProfile({ bio, statement, website, instagram, city, avatarPath }) {
+      return check(await sb.rpc('update_artist_profile', {
+        p_bio: bio, p_statement: statement, p_website: website, p_instagram: instagram, p_city: city, p_avatar_path: avatarPath || null,
+      }));
+    },
+
+    async updateArtwork(id, { title, category, style, medium, year, price, description, dimensions, availability }) {
+      return check(await sb.rpc('update_artwork', {
+        p_id: id, p_title: title, p_category: category, p_style: style, p_medium: medium || '', p_year: year, p_price: price,
+        p_description: description || '', p_dimensions: dimensions || '', p_availability: availability || 'available',
+      }));
+    },
+
+    // ——— Collections (private unless the owner shares them) ———
+    async myCollections() {
+      if (!user) return { collections: [], items: [] };
+      const [collections, items] = await Promise.all([
+        sb.from('collections').select('id, name, description, is_private, created_at').eq('owner_id', user.id).order('created_at'),
+        sb.from('collection_items').select('collection_id, artwork_id, added_at, collections!inner(owner_id)').eq('collections.owner_id', user.id),
+      ]);
+      return { collections: check(collections), items: check(items).map(({ collection_id, artwork_id, added_at }) => ({ collection_id, artwork_id, added_at })) };
+    },
+    async createCollection({ name, description = '', isPrivate = true }) {
+      return check(await sb.from('collections').insert({ name, description: description || null, is_private: isPrivate }).select('id, name, description, is_private, created_at').single());
+    },
+    async updateCollection(id, fields) {
+      const row = {};
+      if ('name' in fields) row.name = fields.name;
+      if ('description' in fields) row.description = fields.description || null;
+      if ('isPrivate' in fields) row.is_private = fields.isPrivate;
+      check(await sb.from('collections').update(row).eq('id', id));
+    },
+    async deleteCollection(id) {
+      check(await sb.from('collections').delete().eq('id', id));
+    },
+    async addToCollection(id, artworkId) {
+      check(await sb.from('collection_items').upsert({ collection_id: id, artwork_id: artworkId }, { onConflict: 'collection_id,artwork_id', ignoreDuplicates: true }));
+    },
+    async removeFromCollection(id, artworkId) {
+      check(await sb.from('collection_items').delete().eq('collection_id', id).eq('artwork_id', artworkId));
+    },
+    /** A shared collection (or your own private one). null when it's private or doesn't exist. */
+    async publicCollection(id) {
+      return check(await sb.rpc('public_collection', { p_id: id }));
+    },
+    async auditLog() {
+      return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },
 
     async deleteArtwork(id) {

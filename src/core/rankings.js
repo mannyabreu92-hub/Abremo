@@ -14,7 +14,7 @@ export function hourKey(date = new Date()) {
 
 export function rankMap(ranked) {
   const m = {};
-  for (const r of ranked) m[r.item.id] = r.rank;
+  for (const r of ranked) if (r.rank != null) m[r.item.id] = r.rank;
   return m;
 }
 

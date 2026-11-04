@@ -5,7 +5,6 @@ const path = require('node:path');
 
 const OUT = path.join(__dirname, '..', 'icons');
 const BASE = process.argv[2] || 'http://localhost:5173/';
-const FONT = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,500&display=block';
 
 // The ABREMI symbol (same paths as AbremiSymbol in src/ui/components.js): flat champagne gold, no gradient.
 const SYMBOL = '<path d="M15.3 3.2 3.6 28.8h6.2L17.9 9.6z"/><path d="M16.4 3.2h2.1l10 25.6h-2.2z"/><path d="M10.6 20.3h13.4l.6 1.7H10z"/>';

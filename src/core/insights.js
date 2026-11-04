@@ -43,7 +43,8 @@ export function dailyMasterpiece(ranked, credOf, now = new Date()) {
   if (!pool.length) return null;
   const pickFor = (key, exclude) => {
     const rng = mulberry32(hashString(`masterpiece:${key}`));
-    const options = pool.filter((r) => r.item.id !== exclude);
+    // Avoid repeating yesterday's pick, unless it is the only candidate.
+    const options = pool.length > 1 ? pool.filter((r) => r.item.id !== exclude) : pool;
     const weights = options.map((r) => (0.15 + credOf(r.item)) * Math.sqrt(r.score + 1));
     let x = rng() * weights.reduce((a, b) => a + b, 0);
     for (let i = 0; i < options.length; i++) {
@@ -56,7 +57,7 @@ export function dailyMasterpiece(ranked, credOf, now = new Date()) {
   yesterday.setDate(yesterday.getDate() - 1);
   const prev = pickFor(dayKey(yesterday));
   const pick = pickFor(dayKey(now), prev.item.id);
-  return { artwork: pick.item, rank: ranked.indexOf(pick) + 1, day: dayKey(now), revealAt: nextRevealAt(now) };
+  return { artwork: pick.item, rank: pick.rank ?? ranked.indexOf(pick) + 1, day: dayKey(now), revealAt: nextRevealAt(now) };
 }
 
 /**

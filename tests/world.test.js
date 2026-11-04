@@ -75,3 +75,26 @@ test('chart snapshot rolls over once per hour', () => {
   assert.equal(movement('x', 1, r2.previous), 1);
   assert.equal(movement('y', 1, r2.previous), null);
 });
+
+test('community catalog: sample works carry no simulated activity, and only real activity is ranked', async () => {
+  const { sampleCatalog } = await import('../src/core/community.js');
+  const { START_RATING } = await import('../src/core/elo.js');
+  const cat = sampleCatalog(buildSeedWorld());
+  assert.ok(cat.artworks.every((w) => w.sample && w.elo === START_RATING && Object.values(w.counts.likes).every((n) => n === 0) && w.counts.reviews.count === 0));
+  assert.ok(cat.artists.every((a) => a.sample && Object.values(a.followers).every((n) => n === 0)));
+  const liked = cat.artworks[42];
+  const battled = cat.artworks[7];
+  const world = createWorld(cat, {
+    ...emptyState(), rankedOnly: true, followerDeltas: {}, memberArtists: [], memberArtworks: [],
+    deltas: { [liked.id]: { likes: { fan: 2, artist: 0, critic: 0, collector: 0 }, saves: { fan: 0, artist: 0, critic: 0, collector: 0 }, reviews: { count: 0, ratingSum: 0 } } },
+    elo: { [battled.id]: 1216 },
+  });
+  const ranked = world.topArtworks().filter((r) => r.rank != null);
+  assert.deepEqual(ranked.map((r) => [r.item.id, r.rank]), [[liked.id, 1]]);
+  assert.equal(world.topArtworks().length, cat.artworks.length, 'everything stays browsable');
+  assert.deepEqual(Object.keys(world.globalArtistRanks), [liked.artistId]);
+  assert.deepEqual(world.topElo().filter((r) => r.rank != null).map((r) => r.item.id), [battled.id], 'only works that have battled are on the battle chart');
+  // Demo mode is unchanged: everything is ranked.
+  const demo = createWorld(buildSeedWorld(), emptyState());
+  assert.ok(demo.topArtworks().every((r) => r.rank > 0));
+});

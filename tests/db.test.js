@@ -9,6 +9,7 @@ import { battleResult, expectedScore } from '../src/core/elo.js';
 import { buildSeedWorld } from '../src/core/seed.js';
 import { seedSQL, setupSQL } from '../scripts/gen-seed-sql.js';
 import { memberBoards } from '../src/core/leaderboards.js';
+import { sampleCatalog } from '../src/core/community.js';
 
 const flags = process.env.ABREMI_PG?.split(/\s+/).filter(Boolean);
 const skip = !flags && 'set ABREMI_PG to run database tests';
@@ -41,7 +42,7 @@ const A = '00000000-0000-0000-0000-00000000000a';
 const B = '00000000-0000-0000-0000-00000000000b';
 const C = '00000000-0000-0000-0000-00000000000c';
 const E = '00000000-0000-0000-0000-00000000000e';
-const seed = buildSeedWorld();
+const seed = sampleCatalog(buildSeedWorld()); // the shared catalog: every work starts at the same rating
 const [w1, w2] = (() => {
   const a = seed.artworks[0];
   return [a, seed.artworks.find((w) => w.artistId !== a.artistId)];
@@ -450,5 +451,96 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.equal(as(D, 'select count(*) from profiles'), '0');
     assert.equal(as(D, 'select role from ensure_profile()'), 'fan');
     fails('anon', 'select * from ensure_profile()', /permission denied|Sign in/);
+  });
+
+  // ——— Phase 1 (0006): audit trail, artist profiles, artwork details, collections ———
+  await t.test('audit trail: sensitive actions are recorded; only admins can read it', () => {
+    const log = as(P[1], `select string_agg(action, ',' order by created_at) from admin_audit_log()`);
+    assert.match(log, /role_application\.approved/);
+    assert.match(log, /role_application\.declined/);
+    assert.match(log, /role\.revoked/);
+    assert.equal(as(P[1], `select actor_email from admin_audit_log() where action = 'role.revoked' limit 1`), 'admin@example.com');
+    fails(P[0], 'select * from admin_audit_log()', /Admins only|permission denied/);
+    for (const who of ['anon', P[0]]) noRowsFor(who, 'select count(*) from audit_events');
+    fails(P[0], `select log_audit('x', 'y', 'z')`, /permission denied/);
+    noRowsFor(P[0], `with u as (insert into audit_events (action, target_type, target_id) values ('fake', 'x', 'y') returning 1) select count(*) from u`);
+  });
+
+  await t.test('artist profiles: owners edit their own, with validated links and portraits', () => {
+    put(E, `${E}/portrait.webp`);
+    as(E, `select * from update_artist_profile('Painter of light.', 'I paint coastlines.', 'https://example.org', '@eve.paints', 'Lisbon', '${E}/portrait.webp')`);
+    assert.equal(psql(`select bio || '|' || instagram || '|' || city from artists where owner_id = '${E}'`), 'Painter of light.|eve.paints|Lisbon');
+    fails(E, `select * from update_artist_profile('', '', 'http://insecure.example', '', '', null)`, /artists_profile_valid/);
+    fails(E, `select * from update_artist_profile('', '', '', 'bad handle!', '', null)`, /artists_profile_valid/);
+    fails(E, `select * from update_artist_profile('', '', '', '', '', '${A}/portrait.webp')`, /Upload the portrait/);
+    fails(E, `select * from update_artist_profile('${'x'.repeat(1001)}', '', '', '', '', null)`, /artists_profile_valid/);
+    fails(B, `select * from update_artist_profile('Not mine', '', '', '', '', null)`, /Switch to the Artist role/);
+    fails('anon', `select * from update_artist_profile('x', '', '', '', '', null)`, /permission denied|Sign in/);
+    noRowsFor(B, `with u as (update artists set bio = 'hacked' where owner_id = '${E}' returning 1) select count(*) from u`);
+    assert.equal(psql(`select bio from artists where owner_id = '${E}'`), 'Painter of light.');
+    const snap = JSON.parse(as('anon', 'select community_snapshot()'));
+    assert.equal(snap.artists.find((a) => a.id === `m_${E}`).city, 'Lisbon');
+  });
+
+  let work;
+  await t.test('artwork details: only the owner edits; availability is validated; deletions are recorded', () => {
+    psql(`update artworks set created_at = now() - interval '2 days' where owner_id = '${E}'`); // earlier tests used today's upload limit
+    put(E, `${E}/p1.webp`); put(E, `${E}/p1-thumb.webp`);
+    [work] = publish(E, { image: `${E}/p1.webp`, thumb: `${E}/p1-thumb.webp`, title: 'Harbour' }).split('|');
+    const edit = (who, id, availability = 'available', description = 'Oil on linen, 2026.') =>
+      as(who, `select availability from update_artwork('${id}', 'Harbour at Dusk', 'oil', 'Realism', 'Oil on linen', 2026, 900, '${description}', '60 × 80 cm', '${availability}')`);
+    assert.equal(edit(E, work, 'sold'), 'sold');
+    assert.equal(psql(`select title || '|' || dimensions || '|' || price from artworks where id = '${work}'`), 'Harbour at Dusk|60 × 80 cm|900');
+    fails(B, `select * from update_artwork('${work}', 'Mine now', 'oil', 'Realism', '', 2026, 10, '', '', 'available')`, /Not your artwork/);
+    fails(E, `select * from update_artwork('${seed.artworks[0].id}', 'Catalog', 'oil', 'Realism', '', 2026, 10, '', '', 'available')`, /Not your artwork/);
+    fails(E, `select * from update_artwork('${work}', 'Harbour', 'oil', 'Realism', '', 2026, 900, '', '', 'auction')`, /artworks_details_valid/);
+    fails(E, `select * from update_artwork('${work}', 'Harbour', 'oil', 'Realism', '', 2026, 900, '${'x'.repeat(2001)}', '', 'available')`, /artworks_details_valid/);
+    const snap = JSON.parse(as('anon', 'select community_snapshot()'));
+    assert.equal(snap.uploads.find((u) => u.id === work).availability, 'sold');
+    put(E, `${E}/p2.webp`); put(E, `${E}/p2-thumb.webp`);
+    const [gone] = publish(E, { image: `${E}/p2.webp`, thumb: `${E}/p2-thumb.webp`, title: 'Gone' }).split('|');
+    as(E, `select * from delete_artwork('${gone}')`);
+    assert.equal(psql(`select details->>'title' from audit_events where action = 'artwork.deleted' and target_id = '${gone}'`), 'Gone');
+  });
+
+  await t.test('collections: private by default, owner-only writes, public ones shareable', () => {
+    const id = as(A, `insert into collections (name) values ('Night skies') returning id`);
+    as(A, `insert into collection_items (collection_id, artwork_id) values ('${id}', '${seed.artworks[5].id}'), ('${id}', '${work}')`);
+    assert.equal(as(A, `select is_private from collections where id = '${id}'`), 't', 'private by default');
+    for (const who of ['anon', B]) {
+      assert.equal(as(who, `select count(*) from collections where id = '${id}'`), '0');
+      assert.equal(as(who, `select count(*) from collection_items where collection_id = '${id}'`), '0');
+      assert.equal(as(who, `select public_collection('${id}') is null`), 't');
+    }
+    fails(B, `insert into collection_items (collection_id, artwork_id) values ('${id}', '${seed.artworks[6].id}')`, /row-level security/);
+    fails(B, `insert into collections (owner_id, name) values ('${A}', 'Planted')`, /row-level security/);
+    noRowsFor(B, `with u as (update collections set name = 'Mine' where id = '${id}' returning 1) select count(*) from u`);
+    noRowsFor(B, `with u as (delete from collections where id = '${id}' returning 1) select count(*) from u`);
+    fails(A, `update collections set owner_id = '${B}' where id = '${id}'`, /permission denied/);
+    as(A, `update collections set is_private = false, description = 'Blue hours' where id = '${id}'`);
+    const shared = JSON.parse(as('anon', `select public_collection('${id}')`));
+    assert.equal(shared.name, 'Night skies');
+    assert.equal(shared.owner_name, 'Ana');
+    assert.equal(shared.mine, false);
+    assert.deepEqual(shared.items.sort(), [seed.artworks[5].id, work].sort());
+    assert.equal(as(B, `select count(*) from collection_items where collection_id = '${id}'`), '2', 'public collections are readable');
+    psql(`update artworks set hidden = true where id = '${work}'`);
+    assert.deepEqual(JSON.parse(as('anon', `select public_collection('${id}')`)).items, [seed.artworks[5].id], 'moderated works drop out');
+    psql(`update artworks set hidden = false where id = '${work}'`);
+    fails(A, `insert into collections (name) values ('   ')`, /check constraint/);
+    fails(A, `insert into collection_items (collection_id, artwork_id) values ('${id}', 'no-such-work')`, /foreign key/);
+    as(A, `delete from collections where id = '${id}'`);
+    assert.equal(psql(`select count(*) from collection_items where collection_id = '${id}'`), '0', 'items go with their collection');
+  });
+
+  await t.test('0006 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0006_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('collections', 'collection_items', 'audit_events')`), '0');
+    assert.equal(psql(`select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'artists' and column_name = 'bio'`), '0');
+    psql(`update artworks set created_at = now() - interval '2 days' where owner_id = '${E}'`);
+    put(E, `${E}/p3.webp`); put(E, `${E}/p3-thumb.webp`);
+    assert.ok(publish(E, { image: `${E}/p3.webp`, thumb: `${E}/p3-thumb.webp`, title: 'After undo' }), 'publishing still works after the undo');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('collections', 'collection_items', 'audit_events')`), '3');
   });
 });

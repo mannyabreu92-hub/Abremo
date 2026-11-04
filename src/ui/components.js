@@ -61,6 +61,10 @@ export function AbremiLogo({ size = 26 } = {}) {
   return `<span class="abremi-logo">${AbremiSymbol(size)}<span class="brand-word">Abremi</span></span>`;
 }
 
+/**
+ * @param {string} name
+ * @param {{ size?: number, label?: string }} [opts]
+ */
 export function Icon(name, { size = 20, label } = {}) {
   const a11y = label ? `role="img" aria-label="${esc(label)}"` : 'aria-hidden="true"';
   return `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" ${a11y}>${P[name] || ''}</svg>`;
@@ -88,14 +92,24 @@ export function ArtImage(art, { eager = false, full = false, className = '' } = 
 export function Avatar(artist, size = 'md') {
   if (!artist) return '';
   const p = PALETTES[(artist.palette || 0) % PALETTES.length];
+  if (artist.avatar) return `<span class="avatar avatar-${size} has-photo" aria-hidden="true"><img src="${esc(artist.avatar)}" alt="" loading="lazy" decoding="async"></span>`;
   return `<span class="avatar avatar-${size}" style="--a1:${p[1]};--a2:${p[3]}" aria-hidden="true">${esc(initials(artist.name))}</span>`;
 }
 
 // ——— Buttons ———
+/**
+ * @param {string} label
+ * @param {{ act?: string, variant?: string, icon?: string, attrs?: string, size?: string }} [opts]
+ */
 export function PremiumButton(label, { act, variant = 'primary', icon, attrs = '', size = '' } = {}) {
   return `<button class="btn btn-${variant}${size ? ` btn-${size}` : ''}" ${act ? `data-act="${act}"` : ''} ${attrs}>${icon ? Icon(icon, { size: 18 }) : ''}<span>${label}</span></button>`;
 }
 
+/**
+ * @param {string} icon
+ * @param {string} label
+ * @param {{ act?: string, attrs?: string, className?: string }} [opts]
+ */
 export function IconButton(icon, label, { act, attrs = '', className = '' } = {}) {
   return `<button class="icon-btn ${className}" ${act ? `data-act="${act}"` : ''} aria-label="${esc(label)}" title="${esc(label)}" ${attrs}>${Icon(icon)}</button>`;
 }
@@ -123,7 +137,7 @@ export function ArtworkCard(art, ctx = {}) {
         <h3 class="art-title"><button data-act="artwork" data-id="${art.id}">${esc(art.title)}</button></h3>
         ${artist ? `<button class="art-artist" data-act="artist" data-id="${artist.id}">${esc(artist.name)}</button>` : ''}
         <p class="art-meta">${details ? `${esc(art.medium || cat?.label || '')}${art.year ? ` · ${art.year}` : ''}` : `${esc(cat?.label || '')}${art.year ? `, ${art.year}` : ''}`}</p>
-        ${details && art.price ? `<p class="art-price">${money(art.price)}</p>` : ''}
+        ${details && art.price && !art.sample ? `<p class="art-price">${money(art.price)}</p>` : ''}
       </div>
       ${score != null ? `<span class="art-score">${score}</span>` : ''}
     </div>
@@ -162,6 +176,10 @@ export function FeaturedArtwork(art, { artist, label, reaction, influence, actio
 }
 
 // ——— Artists ———
+/**
+ * @param {any} artist
+ * @param {{ cover?: any, following?: boolean, score?: number, rank?: number, signals?: string }} ctx
+ */
 export function ArtistCard(artist, { cover, following, score, rank, signals = '' }) {
   return `<article class="artist-card">
     <button class="artist-cover" data-act="artist" data-id="${artist.id}" aria-label="Open ${esc(artist.name)}">${cover ? ArtImage(cover) : ''}</button>

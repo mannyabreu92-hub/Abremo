@@ -4,6 +4,7 @@
 import { emptyRoleCounts, ROLE_IDS } from './scoring.js';
 import { CATEGORIES, STYLES, PALETTES, CURRENT_YEAR } from './seed.js';
 import { hashString } from './random.js';
+import { START_RATING } from './elo.js';
 
 export function emptyCommunity() {
   return { deltas: {}, followerDeltas: {}, elo: {}, members: 0, fetchedAt: 0, artists: [], artworks: [] };
@@ -11,6 +12,19 @@ export function emptyCommunity() {
 
 const emptyDelta = () => ({ likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } });
 const CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
+
+/**
+ * The shared catalog in community mode: the same sample works and artists, but with none of the
+ * demo's simulated likes, followers, reviews or battle ratings. Every number shown in community
+ * mode comes from real members.
+ */
+export function sampleCatalog(seed) {
+  return {
+    ...seed,
+    artists: seed.artists.map((a) => ({ ...a, followers: emptyRoleCounts(), sample: true })),
+    artworks: seed.artworks.map((w) => ({ ...w, counts: emptyDelta(), elo: START_RATING, sample: true })),
+  };
+}
 
 /** Storage paths become public URLs; data: and http(s) URLs (the test backend) pass through. */
 export function imageURL(path, storageBase = '') {
@@ -41,12 +55,15 @@ export function uploadsToArtworks(uploads = [], storageBase = '') {
       counts: emptyDelta(),
       elo: 1200,
       createdAt: Date.parse(u.created_at) || 0,
+      description: u.description || '',
+      dimensions: u.dimensions || '',
+      availability: u.availability || 'available',
       member: true,
     }));
 }
 
 /** Member artists, with medium and movements taken from their own uploads. */
-export function membersToArtists(members = [], artworks = []) {
+export function membersToArtists(members = [], artworks = [], storageBase = '') {
   return (members || []).map((m) => {
     const works = artworks.filter((w) => w.artistId === m.id);
     const ranked = (key) => {
@@ -65,6 +82,13 @@ export function membersToArtists(members = [], artworks = []) {
       followers: emptyRoleCounts(),
       palette: hashString(m.id) % PALETTES.length,
       member: true,
+      bio: m.bio || '',
+      statement: m.statement || '',
+      website: /^https:\/\//.test(m.website || '') ? m.website : '',
+      instagram: m.instagram || '',
+      city: m.city || '',
+      avatarPath: m.avatar_path || '',
+      avatar: m.avatar_path ? imageURL(m.avatar_path, storageBase) : '',
     };
   });
 }
@@ -91,12 +115,33 @@ export function snapshotToCommunity(snap, now = Date.now(), { storageBase = '' }
   for (const r of snap?.ratings || []) if (Number.isFinite(r.v)) out.elo[r.a] = r.v;
   out.members = snap?.members || 0;
   out.artworks = uploadsToArtworks(snap?.uploads, storageBase);
-  out.artists = membersToArtists(snap?.artists, out.artworks);
+  out.artists = membersToArtists(snap?.artists, out.artworks, storageBase);
   out.fetchedAt = now;
   return out;
 }
 
 /** The signed-in person's own rows → the app's state fields. */
+/** The app's labels for artwork availability (as reported by the artist). */
+export const AVAILABILITY = {
+  available: 'Available',
+  on_request: 'Price on request',
+  sold: 'Sold',
+  not_for_sale: 'Not for sale',
+};
+
+/** Server collections → the shape the app uses ({ id, name, description, private, ids, at }). */
+export function collectionsToState(rows = [], items = []) {
+  return (rows || []).map((c) => ({
+    id: c.id,
+    name: c.name,
+    description: c.description || '',
+    private: c.is_private !== false,
+    ids: (items || []).filter((i) => i.collection_id === c.id).sort((a, b) => Date.parse(b.added_at) - Date.parse(a.added_at)).map((i) => i.artwork_id),
+    at: Date.parse(c.created_at) || 0,
+    server: true,
+  }));
+}
+
 export function mineToState({ reactions = [], follows = [], reviews = [] } = {}) {
   const interactions = {};
   const interactionRoles = {};

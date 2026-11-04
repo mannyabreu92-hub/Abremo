@@ -870,6 +870,397 @@ exception when others then
   raise notice 'Hourly schedule not set up (%). Charts are kept on the first visit each hour instead.', sqlerrm;
 end $$;
 
+-- ═════ 0006_profiles_artworks_collections.sql ═════
+-- Abremi Phase 1: audit trail, artist profiles, artwork details, and collections on the server.
+-- Adds tables and columns only; nothing existing is removed. To undo, run
+-- supabase/migrations/down/0006_down.sql (that drops what this file adds, including its data).
+
+-- ——— 1. Audit trail ———
+-- Sensitive actions (role decisions, role removals, artwork deletions) are recorded here.
+-- Nobody can read or write the table through the API; moderators read it with admin_audit_log().
+create table if not exists public.audit_events (
+  id uuid primary key default gen_random_uuid(),
+  actor_id uuid references auth.users (id) on delete set null,
+  action text not null check (char_length(action) between 1 and 60),
+  target_type text not null check (char_length(target_type) between 1 and 40),
+  target_id text not null,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists audit_events_target_idx on public.audit_events (target_type, target_id, created_at desc);
+create index if not exists audit_events_created_idx on public.audit_events (created_at desc);
+alter table public.audit_events enable row level security;
+revoke all on public.audit_events from anon, authenticated;
+
+create or replace function public.log_audit(p_action text, p_target_type text, p_target_id text, p_details jsonb default '{}'::jsonb)
+returns void language sql security definer set search_path = public as $$
+  insert into audit_events (actor_id, action, target_type, target_id, details)
+  values (auth.uid(), p_action, p_target_type, p_target_id, coalesce(p_details, '{}'::jsonb))
+$$;
+revoke all on function public.log_audit(text, text, text, jsonb) from public, anon, authenticated;
+
+create or replace function public.admin_audit_log(p_limit integer default 100)
+returns table (id uuid, created_at timestamptz, action text, target_type text, target_id text, details jsonb, actor_email text)
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not is_admin() then
+    raise exception 'Admins only' using errcode = '42501';
+  end if;
+  return query
+    select e.id, e.created_at, e.action, e.target_type, e.target_id, e.details, u.email::text
+    from audit_events e left join auth.users u on u.id = e.actor_id
+    order by e.created_at desc
+    limit least(greatest(coalesce(p_limit, 100), 1), 500);
+end $$;
+revoke all on function public.admin_audit_log(integer) from public, anon;
+grant execute on function public.admin_audit_log(integer) to authenticated;
+
+-- Role decisions and removals, now recorded. (Same rules as 0004.)
+create or replace function public.decide_role_application(p_id uuid, p_approve boolean, p_note text default null)
+returns public.role_applications
+language plpgsql security definer set search_path = public as $$
+declare
+  app public.role_applications;
+begin
+  if not is_admin() then
+    raise exception 'Admins only' using errcode = '42501';
+  end if;
+  update role_applications
+     set status = case when p_approve then 'approved' else 'declined' end,
+         decision_note = nullif(btrim(coalesce(p_note, '')), ''),
+         decided_at = now(),
+         decided_by = auth.uid()
+   where id = p_id and status = 'pending'
+  returning * into app;
+  if app.id is null then
+    raise exception 'That application is no longer pending' using errcode = 'P0001';
+  end if;
+  if p_approve then
+    update profiles set role = app.role where id = app.user_id;
+  end if;
+  perform log_audit(case when p_approve then 'role_application.approved' else 'role_application.declined' end,
+                    'profile', app.user_id::text,
+                    jsonb_build_object('application', app.id, 'role', app.role, 'note', app.decision_note));
+  return app;
+end $$;
+
+-- Removing a role no longer overwrites the original decision note; the reason goes to the audit trail.
+create or replace function public.revoke_role(p_user uuid, p_note text default null) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  old_role text;
+begin
+  if not is_admin() then
+    raise exception 'Admins only' using errcode = '42501';
+  end if;
+  select role into old_role from profiles where id = p_user and role in ('critic', 'collector') for update;
+  if old_role is null then
+    raise exception 'That member has no verified role' using errcode = 'P0001';
+  end if;
+  update profiles set role = 'fan' where id = p_user;
+  perform log_audit('role.revoked', 'profile', p_user::text,
+                    jsonb_build_object('role', old_role, 'note', nullif(btrim(coalesce(p_note, '')), '')));
+end $$;
+
+-- ——— 2. Artist profiles (on the existing artists table: no duplicate profile table) ———
+alter table public.artists add column if not exists bio text;
+alter table public.artists add column if not exists statement text;
+alter table public.artists add column if not exists website text;
+alter table public.artists add column if not exists instagram text;
+alter table public.artists add column if not exists city text;
+alter table public.artists add column if not exists avatar_path text;
+alter table public.artists add column if not exists updated_at timestamptz not null default now();
+alter table public.artists drop constraint if exists artists_profile_valid;
+alter table public.artists add constraint artists_profile_valid check (
+  char_length(coalesce(bio, '')) <= 1000
+  and char_length(coalesce(statement, '')) <= 2000
+  and (website is null or (website ~ '^https://[^[:space:]<>"]+$' and char_length(website) <= 200))
+  and (instagram is null or instagram ~ '^[A-Za-z0-9._]{1,30}$')
+  and char_length(coalesce(city, '')) <= 60
+  and (avatar_path is null or (owner_id is not null and split_part(avatar_path, '/', 1) = owner_id::text))
+);
+
+-- The member's artist row, created on first use (publishing, or editing the profile).
+create or replace function public.ensure_member_artist(p_uid uuid) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  me public.profiles;
+  member_artist text := 'm_' || p_uid::text;
+begin
+  select * into me from profiles where id = p_uid;
+  insert into artists (id, name, country, owner_id) values (member_artist, me.name, me.country, p_uid)
+  on conflict (id) do update set name = excluded.name, country = excluded.country;
+  return member_artist;
+end $$;
+revoke all on function public.ensure_member_artist(uuid) from public, anon, authenticated;
+
+create or replace function public.update_artist_profile(
+  p_bio text, p_statement text, p_website text, p_instagram text, p_city text, p_avatar_path text
+) returns public.artists
+language plpgsql security definer set search_path = public as $$
+declare
+  uid uuid := auth.uid();
+  row public.artists;
+  clean_avatar text := nullif(btrim(coalesce(p_avatar_path, '')), '');
+begin
+  if uid is null then
+    raise exception 'Sign in first' using errcode = '42501';
+  end if;
+  if not exists (select 1 from artists where owner_id = uid)
+     and (select role from profiles where id = uid) is distinct from 'artist' then
+    raise exception 'Switch to the Artist role to set up an artist profile' using errcode = '42501';
+  end if;
+  if clean_avatar is not null and not exists (
+       select 1 from storage.objects o
+        where o.bucket_id = 'artworks' and o.name = clean_avatar and (storage.foldername(o.name))[1] = uid::text) then
+    raise exception 'Upload the portrait before saving' using errcode = '22023';
+  end if;
+  perform ensure_member_artist(uid);
+  update artists set
+    bio = nullif(btrim(coalesce(p_bio, '')), ''),
+    statement = nullif(btrim(coalesce(p_statement, '')), ''),
+    website = nullif(btrim(coalesce(p_website, '')), ''),
+    instagram = nullif(ltrim(btrim(coalesce(p_instagram, '')), '@'), ''),
+    city = nullif(btrim(coalesce(p_city, '')), ''),
+    avatar_path = clean_avatar,
+    updated_at = now()
+  where owner_id = uid
+  returning * into row;
+  return row;
+end $$;
+revoke all on function public.update_artist_profile(text, text, text, text, text, text) from public, anon;
+grant execute on function public.update_artist_profile(text, text, text, text, text, text) to authenticated;
+
+-- Publishing uses the shared helper (same rules as 0002).
+create or replace function public.publish_artwork(
+  p_title text, p_category text, p_style text, p_medium text, p_year integer, p_price integer,
+  p_image_path text, p_thumb_path text, p_width integer, p_height integer
+) returns public.artworks
+language plpgsql security definer set search_path = public as $$
+declare
+  uid uuid := auth.uid();
+  member_artist text;
+  work public.artworks;
+begin
+  if uid is null then
+    raise exception 'Sign in first' using errcode = '42501';
+  end if;
+  if (select role from profiles where id = uid) is distinct from 'artist' then
+    raise exception 'Switch to the Artist role to publish work' using errcode = '42501';
+  end if;
+  if (select count(*) from artworks a where a.owner_id = uid and a.created_at > now() - interval '1 day') >= 20 then
+    raise exception 'Daily limit reached: 20 new works per day' using errcode = 'P0001';
+  end if;
+  if (select count(*) from storage.objects o where o.bucket_id = 'artworks' and o.name in (p_image_path, p_thumb_path)
+        and (storage.foldername(o.name))[1] = uid::text) < 2 then
+    raise exception 'Upload the image before publishing' using errcode = '22023';
+  end if;
+  member_artist := ensure_member_artist(uid);
+  insert into artworks (id, artist_id, title, base_elo, owner_id, category, style, medium, year, price,
+                        image_path, thumb_path, width, height)
+  values ('u_' || replace(gen_random_uuid()::text, '-', ''), member_artist, btrim(p_title), 1200, uid,
+          p_category, p_style, nullif(btrim(coalesce(p_medium, '')), ''), p_year, p_price,
+          p_image_path, p_thumb_path, p_width, p_height)
+  returning * into work;
+  return work;
+end $$;
+
+-- ——— 3. Artwork details ———
+alter table public.artworks add column if not exists description text;
+alter table public.artworks add column if not exists dimensions text;
+alter table public.artworks add column if not exists availability text;
+alter table public.artworks add column if not exists updated_at timestamptz not null default now();
+alter table public.artworks drop constraint if exists artworks_details_valid;
+alter table public.artworks add constraint artworks_details_valid check (
+  char_length(coalesce(description, '')) <= 2000
+  and char_length(coalesce(dimensions, '')) <= 60
+  -- 'sold' is what the artist reports; verified sales are a separate, later feature.
+  and (availability is null or availability in ('available', 'sold', 'not_for_sale', 'on_request'))
+  and (owner_id is not null or (description is null and dimensions is null and availability is null))
+);
+
+create or replace function public.update_artwork(
+  p_id text, p_title text, p_category text, p_style text, p_medium text, p_year integer, p_price integer,
+  p_description text, p_dimensions text, p_availability text
+) returns public.artworks
+language plpgsql security definer set search_path = public as $$
+declare
+  work public.artworks;
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in first' using errcode = '42501';
+  end if;
+  update artworks set
+    title = btrim(p_title), category = p_category, style = p_style,
+    medium = nullif(btrim(coalesce(p_medium, '')), ''), year = p_year, price = p_price,
+    description = nullif(btrim(coalesce(p_description, '')), ''),
+    dimensions = nullif(btrim(coalesce(p_dimensions, '')), ''),
+    availability = coalesce(nullif(p_availability, ''), 'available'),
+    updated_at = now()
+  where id = p_id and owner_id = auth.uid()
+  returning * into work;
+  if work.id is null then
+    raise exception 'Not your artwork' using errcode = '42501';
+  end if;
+  return work;
+end $$;
+revoke all on function public.update_artwork(text, text, text, text, text, integer, integer, text, text, text) from public, anon;
+grant execute on function public.update_artwork(text, text, text, text, text, integer, integer, text, text, text) to authenticated;
+
+-- Deleting a work is now recorded. (Same rules as 0002.)
+create or replace function public.delete_artwork(p_id text)
+returns table (image_path text, thumb_path text)
+language plpgsql security definer set search_path = public as $$
+declare
+  gone public.artworks;
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in first' using errcode = '42501';
+  end if;
+  delete from artworks a where a.id = p_id and a.owner_id = auth.uid() returning a.* into gone;
+  if gone.id is null then
+    raise exception 'Not your artwork' using errcode = '42501';
+  end if;
+  perform log_audit('artwork.deleted', 'artwork', gone.id, jsonb_build_object('title', gone.title));
+  image_path := gone.image_path;
+  thumb_path := gone.thumb_path;
+  return next;
+end $$;
+
+-- ——— 4. Collections (private by default) ———
+create table if not exists public.collections (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  name text not null check (char_length(btrim(name)) between 1 and 60),
+  description text check (char_length(coalesce(description, '')) <= 500),
+  is_private boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists collections_owner_idx on public.collections (owner_id, created_at);
+
+create table if not exists public.collection_items (
+  collection_id uuid not null references public.collections (id) on delete cascade,
+  artwork_id text not null references public.artworks (id) on delete cascade,
+  added_at timestamptz not null default now(),
+  primary key (collection_id, artwork_id)
+);
+create index if not exists collection_items_artwork_idx on public.collection_items (artwork_id);
+
+create or replace function public.guard_collection() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' and (select count(*) from collections where owner_id = new.owner_id) >= 100 then
+    raise exception 'You can have up to 100 collections' using errcode = 'P0001';
+  end if;
+  if tg_op = 'UPDATE' and new.owner_id <> old.owner_id then
+    raise exception 'Collections cannot change owner' using errcode = '42501';
+  end if;
+  new.name := btrim(new.name);
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists collections_guard on public.collections;
+create trigger collections_guard before insert or update on public.collections
+  for each row execute function public.guard_collection();
+
+create or replace function public.guard_collection_item() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if (select count(*) from collection_items where collection_id = new.collection_id) >= 500 then
+    raise exception 'A collection can hold up to 500 works' using errcode = 'P0001';
+  end if;
+  update collections set updated_at = now() where id = new.collection_id;
+  return new;
+end $$;
+drop trigger if exists collection_items_guard on public.collection_items;
+create trigger collection_items_guard before insert on public.collection_items
+  for each row execute function public.guard_collection_item();
+
+alter table public.collections enable row level security;
+alter table public.collection_items enable row level security;
+
+drop policy if exists "own or public collections" on public.collections;
+create policy "own or public collections" on public.collections for select
+  using (owner_id = auth.uid() or not is_private);
+drop policy if exists "create own collections" on public.collections;
+create policy "create own collections" on public.collections for insert to authenticated
+  with check (owner_id = auth.uid());
+drop policy if exists "edit own collections" on public.collections;
+create policy "edit own collections" on public.collections for update to authenticated
+  using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+drop policy if exists "delete own collections" on public.collections;
+create policy "delete own collections" on public.collections for delete to authenticated
+  using (owner_id = auth.uid());
+
+drop policy if exists "items of visible collections" on public.collection_items;
+create policy "items of visible collections" on public.collection_items for select
+  using (exists (select 1 from collections c where c.id = collection_id and (c.owner_id = auth.uid() or not c.is_private)));
+drop policy if exists "add to own collections" on public.collection_items;
+create policy "add to own collections" on public.collection_items for insert to authenticated
+  with check (exists (select 1 from collections c where c.id = collection_id and c.owner_id = auth.uid()));
+drop policy if exists "remove from own collections" on public.collection_items;
+create policy "remove from own collections" on public.collection_items for delete to authenticated
+  using (exists (select 1 from collections c where c.id = collection_id and c.owner_id = auth.uid()));
+
+revoke all on public.collections, public.collection_items from anon, authenticated;
+grant select on public.collections, public.collection_items to anon, authenticated;
+grant insert, delete on public.collections, public.collection_items to authenticated;
+grant update (name, description, is_private) on public.collections to authenticated;
+
+-- A shared (public) collection, with the curator's display name. Private ones are never returned
+-- to anyone but their owner.
+create or replace function public.public_collection(p_id uuid) returns json
+language sql stable security definer set search_path = public as $$
+  select json_build_object(
+    'id', c.id, 'name', c.name, 'description', c.description, 'is_private', c.is_private,
+    'owner_name', p.name, 'mine', coalesce(c.owner_id = auth.uid(), false), 'updated_at', c.updated_at,
+    'items', coalesce((select json_agg(i.artwork_id order by i.added_at desc)
+                         from collection_items i join artworks a on a.id = i.artwork_id
+                        where i.collection_id = c.id and not a.hidden), '[]'::json))
+  from collections c join profiles p on p.id = c.owner_id
+  where c.id = p_id and (not c.is_private or c.owner_id = auth.uid())
+$$;
+revoke all on function public.public_collection(uuid) from public;
+grant execute on function public.public_collection(uuid) to anon, authenticated;
+
+-- ——— 5. Community snapshot: artist profiles and artwork details too (still totals only) ———
+create or replace function public.community_snapshot() returns json
+language sql stable security definer set search_path = public as $$
+  select json_build_object(
+    'reactions', coalesce((
+      select json_agg(t) from (
+        select artwork_id as a, kind as k, role as r, count(*)::int as n
+        from reactions where kind in ('like', 'super') group by 1, 2, 3
+      ) t), '[]'::json),
+    'reviews', coalesce((
+      select json_agg(t) from (
+        select artwork_id as a, count(*)::int as n, sum(rating)::int as s from reviews group by 1
+      ) t), '[]'::json),
+    'follows', coalesce((
+      select json_agg(t) from (
+        select artist_id as a, role as r, count(*)::int as n from follows group by 1, 2
+      ) t), '[]'::json),
+    'ratings', coalesce((
+      select json_agg(t) from (select artwork_id as a, rating as v from artwork_ratings) t
+    ), '[]'::json),
+    'members', (select count(*)::int from profiles),
+    'artists', coalesce((
+      select json_agg(t) from (
+        select id, name, country, created_at, bio, statement, website, instagram, city, avatar_path
+        from artists where owner_id is not null
+      ) t), '[]'::json),
+    'uploads', coalesce((
+      select json_agg(t) from (
+        select id, artist_id, title, category, style, medium, year, price,
+               image_path, thumb_path, width, height, created_at, description, dimensions, availability
+        from artworks where owner_id is not null and not hidden
+        order by created_at desc limit 2000
+      ) t), '[]'::json)
+  )
+$$;
+grant execute on function public.community_snapshot() to anon, authenticated;
+
 -- Generated by scripts/gen-seed-sql.js from src/core/seed.js. Do not edit by hand.
 begin;
 insert into public.artists (id, name, country) values
@@ -1119,624 +1510,624 @@ insert into public.artists (id, name, country) values
   ('a239', 'Álvaro Ruiz', 'ES')
 on conflict (id) do update set name = excluded.name, country = excluded.country;
 insert into public.artworks (id, artist_id, title, base_elo) values
-  ('w0', 'a0', 'Starry Dreams', 1440),
-  ('w1', 'a0', 'Red Atlas', 1475),
-  ('w2', 'a1', 'Midnight Ocean', 1460),
-  ('w3', 'a1', 'Neon Ocean', 1475),
-  ('w4', 'a1', 'Crimson Storm', 1477),
-  ('w5', 'a2', 'Electric Dreams', 1460),
-  ('w6', 'a2', 'Starry Mirror', 1413),
-  ('w7', 'a3', 'Burning Fever', 1174),
-  ('w8', 'a3', 'Golden Bloom', 1199),
-  ('w9', 'a3', 'Midnight Storm', 1145),
-  ('w10', 'a4', 'Crimson Tide', 1164),
-  ('w11', 'a4', 'Hollow Machine', 1068),
-  ('w12', 'a5', 'Burning Figure', 1520),
-  ('w13', 'a5', 'Liquid Harbor', 1493),
-  ('w14', 'a5', 'Salt Atlas', 1480),
-  ('w15', 'a6', 'Tender Window', 1273),
-  ('w16', 'a6', 'Paper Dreams', 1113),
-  ('w17', 'a6', 'Silent Portrait', 1209),
-  ('w18', 'a7', 'Neon Portrait', 1128),
-  ('w19', 'a7', 'Crimson Choir', 1091),
-  ('w20', 'a7', 'Iron Engine', 1119),
-  ('w21', 'a8', 'Crimson City', 1066),
-  ('w22', 'a8', 'Hidden Horizon', 1075),
-  ('w23', 'a9', 'Silent Bloom', 1136),
-  ('w24', 'a9', 'Salt Revolution', 1137),
-  ('w25', 'a10', 'Winter Mirror', 1262),
-  ('w26', 'a10', 'Neon Echo', 1310),
-  ('w27', 'a10', 'Lunar Engine', 1387),
-  ('w28', 'a11', 'Wild Dreams', 1025),
-  ('w29', 'a11', 'Midnight Fever', 968),
-  ('w30', 'a11', 'Wild Window', 1023),
-  ('w31', 'a12', 'Electric Choir', 979),
-  ('w32', 'a12', 'Burning Signal', 1132),
-  ('w33', 'a12', 'Salt Archive', 1124),
-  ('w34', 'a13', 'Liquid Atlas', 1145),
-  ('w35', 'a13', 'Hidden Portrait', 1095),
-  ('w36', 'a13', 'Velvet Dreams', 1063),
-  ('w37', 'a14', 'Golden Mother', 1226),
-  ('w38', 'a14', 'Broken Signal', 1118),
-  ('w39', 'a14', 'Quiet Portrait', 1190),
-  ('w40', 'a15', 'Silent Engine', 1078),
-  ('w41', 'a15', 'Sacred Cathedral', 1171),
-  ('w42', 'a16', 'Electric Cathedral', 996),
-  ('w43', 'a16', 'Neon Figure', 1044),
-  ('w44', 'a16', 'Sacred Lullaby', 1009),
-  ('w45', 'a17', 'Glass Orchard', 1054),
-  ('w46', 'a17', 'Red Cathedral', 1035),
-  ('w47', 'a17', 'Amber Engine', 1050),
+  ('w0', 'a0', 'Starry Dreams', 1200),
+  ('w1', 'a0', 'Red Atlas', 1200),
+  ('w2', 'a1', 'Midnight Ocean', 1200),
+  ('w3', 'a1', 'Neon Ocean', 1200),
+  ('w4', 'a1', 'Crimson Storm', 1200),
+  ('w5', 'a2', 'Electric Dreams', 1200),
+  ('w6', 'a2', 'Starry Mirror', 1200),
+  ('w7', 'a3', 'Burning Fever', 1200),
+  ('w8', 'a3', 'Golden Bloom', 1200),
+  ('w9', 'a3', 'Midnight Storm', 1200),
+  ('w10', 'a4', 'Crimson Tide', 1200),
+  ('w11', 'a4', 'Hollow Machine', 1200),
+  ('w12', 'a5', 'Burning Figure', 1200),
+  ('w13', 'a5', 'Liquid Harbor', 1200),
+  ('w14', 'a5', 'Salt Atlas', 1200),
+  ('w15', 'a6', 'Tender Window', 1200),
+  ('w16', 'a6', 'Paper Dreams', 1200),
+  ('w17', 'a6', 'Silent Portrait', 1200),
+  ('w18', 'a7', 'Neon Portrait', 1200),
+  ('w19', 'a7', 'Crimson Choir', 1200),
+  ('w20', 'a7', 'Iron Engine', 1200),
+  ('w21', 'a8', 'Crimson City', 1200),
+  ('w22', 'a8', 'Hidden Horizon', 1200),
+  ('w23', 'a9', 'Silent Bloom', 1200),
+  ('w24', 'a9', 'Salt Revolution', 1200),
+  ('w25', 'a10', 'Winter Mirror', 1200),
+  ('w26', 'a10', 'Neon Echo', 1200),
+  ('w27', 'a10', 'Lunar Engine', 1200),
+  ('w28', 'a11', 'Wild Dreams', 1200),
+  ('w29', 'a11', 'Midnight Fever', 1200),
+  ('w30', 'a11', 'Wild Window', 1200),
+  ('w31', 'a12', 'Electric Choir', 1200),
+  ('w32', 'a12', 'Burning Signal', 1200),
+  ('w33', 'a12', 'Salt Archive', 1200),
+  ('w34', 'a13', 'Liquid Atlas', 1200),
+  ('w35', 'a13', 'Hidden Portrait', 1200),
+  ('w36', 'a13', 'Velvet Dreams', 1200),
+  ('w37', 'a14', 'Golden Mother', 1200),
+  ('w38', 'a14', 'Broken Signal', 1200),
+  ('w39', 'a14', 'Quiet Portrait', 1200),
+  ('w40', 'a15', 'Silent Engine', 1200),
+  ('w41', 'a15', 'Sacred Cathedral', 1200),
+  ('w42', 'a16', 'Electric Cathedral', 1200),
+  ('w43', 'a16', 'Neon Figure', 1200),
+  ('w44', 'a16', 'Sacred Lullaby', 1200),
+  ('w45', 'a17', 'Glass Orchard', 1200),
+  ('w46', 'a17', 'Red Cathedral', 1200),
+  ('w47', 'a17', 'Amber Engine', 1200),
   ('w48', 'a18', 'Broken Cathedral', 1200),
-  ('w49', 'a18', 'Sacred Mother', 1197),
-  ('w50', 'a19', 'Floating Market', 1479),
-  ('w51', 'a19', 'Blue Figure', 1490),
-  ('w52', 'a19', 'Neon Signal', 1458),
-  ('w53', 'a20', 'Red Revolution', 1486),
-  ('w54', 'a20', 'Glass Cathedral', 1517),
-  ('w55', 'a21', 'Liquid Orchard', 1460),
-  ('w56', 'a21', 'Hollow Storm', 1425),
-  ('w57', 'a22', 'Starry Revolution', 976),
-  ('w58', 'a22', 'Iron Lullaby', 1062),
-  ('w59', 'a22', 'Broken Engine', 1033),
-  ('w60', 'a23', 'Velvet Revolution', 1368),
-  ('w61', 'a23', 'Winter City', 1336),
-  ('w62', 'a23', 'Tender Machine', 1386),
-  ('w63', 'a24', 'Hollow Echo', 959),
-  ('w64', 'a24', 'Winter Portrait', 1034),
-  ('w65', 'a24', 'Amber Archive', 1048),
-  ('w66', 'a25', 'Midnight Market', 1207),
-  ('w67', 'a25', 'Wild Figure', 1208),
-  ('w68', 'a25', 'Velvet Market', 1149),
-  ('w69', 'a26', 'Winter Requiem', 1246),
-  ('w70', 'a26', 'Midnight Saint', 1244),
-  ('w71', 'a26', 'Iron Mother', 1210),
-  ('w72', 'a27', 'Red Orchard', 1199),
-  ('w73', 'a27', 'Wild Cathedral', 1240),
-  ('w74', 'a28', 'Winter Machine', 1046),
-  ('w75', 'a28', 'Blue Saint', 1050),
-  ('w76', 'a29', 'Quiet Echo', 1378),
-  ('w77', 'a29', 'Blue Atlas', 1428),
-  ('w78', 'a29', 'Quiet Requiem', 1494),
-  ('w79', 'a30', 'Tender Desert', 1114),
-  ('w80', 'a30', 'Liquid Tide', 997),
-  ('w81', 'a30', 'Liquid Mirror', 1072),
-  ('w82', 'a31', 'Burning Window', 1097),
-  ('w83', 'a31', 'Wild Storm', 1020),
-  ('w84', 'a31', 'Tender Atlas', 1078),
-  ('w85', 'a32', 'Lunar Storm', 1174),
-  ('w86', 'a32', 'Liquid Echo', 1205),
-  ('w87', 'a32', 'Velvet City', 1251),
-  ('w88', 'a33', 'Midnight Engine', 1418),
-  ('w89', 'a33', 'Lunar Orchard', 1320),
-  ('w90', 'a34', 'Blue Cathedral', 1187),
-  ('w91', 'a34', 'Last Bloom', 1192),
-  ('w92', 'a35', 'Hollow Archive', 1418),
-  ('w93', 'a35', 'Golden Horizon', 1377),
-  ('w94', 'a36', 'Glass Window', 1085),
-  ('w95', 'a36', 'Last Archive', 1084),
-  ('w96', 'a36', 'Midnight Archive', 1118),
-  ('w97', 'a37', 'Electric Bloom', 1412),
-  ('w98', 'a37', 'Restless Echo', 1351),
-  ('w99', 'a38', 'Restless Tide', 1050)
+  ('w49', 'a18', 'Sacred Mother', 1200),
+  ('w50', 'a19', 'Floating Market', 1200),
+  ('w51', 'a19', 'Blue Figure', 1200),
+  ('w52', 'a19', 'Neon Signal', 1200),
+  ('w53', 'a20', 'Red Revolution', 1200),
+  ('w54', 'a20', 'Glass Cathedral', 1200),
+  ('w55', 'a21', 'Liquid Orchard', 1200),
+  ('w56', 'a21', 'Hollow Storm', 1200),
+  ('w57', 'a22', 'Starry Revolution', 1200),
+  ('w58', 'a22', 'Iron Lullaby', 1200),
+  ('w59', 'a22', 'Broken Engine', 1200),
+  ('w60', 'a23', 'Velvet Revolution', 1200),
+  ('w61', 'a23', 'Winter City', 1200),
+  ('w62', 'a23', 'Tender Machine', 1200),
+  ('w63', 'a24', 'Hollow Echo', 1200),
+  ('w64', 'a24', 'Winter Portrait', 1200),
+  ('w65', 'a24', 'Amber Archive', 1200),
+  ('w66', 'a25', 'Midnight Market', 1200),
+  ('w67', 'a25', 'Wild Figure', 1200),
+  ('w68', 'a25', 'Velvet Market', 1200),
+  ('w69', 'a26', 'Winter Requiem', 1200),
+  ('w70', 'a26', 'Midnight Saint', 1200),
+  ('w71', 'a26', 'Iron Mother', 1200),
+  ('w72', 'a27', 'Red Orchard', 1200),
+  ('w73', 'a27', 'Wild Cathedral', 1200),
+  ('w74', 'a28', 'Winter Machine', 1200),
+  ('w75', 'a28', 'Blue Saint', 1200),
+  ('w76', 'a29', 'Quiet Echo', 1200),
+  ('w77', 'a29', 'Blue Atlas', 1200),
+  ('w78', 'a29', 'Quiet Requiem', 1200),
+  ('w79', 'a30', 'Tender Desert', 1200),
+  ('w80', 'a30', 'Liquid Tide', 1200),
+  ('w81', 'a30', 'Liquid Mirror', 1200),
+  ('w82', 'a31', 'Burning Window', 1200),
+  ('w83', 'a31', 'Wild Storm', 1200),
+  ('w84', 'a31', 'Tender Atlas', 1200),
+  ('w85', 'a32', 'Lunar Storm', 1200),
+  ('w86', 'a32', 'Liquid Echo', 1200),
+  ('w87', 'a32', 'Velvet City', 1200),
+  ('w88', 'a33', 'Midnight Engine', 1200),
+  ('w89', 'a33', 'Lunar Orchard', 1200),
+  ('w90', 'a34', 'Blue Cathedral', 1200),
+  ('w91', 'a34', 'Last Bloom', 1200),
+  ('w92', 'a35', 'Hollow Archive', 1200),
+  ('w93', 'a35', 'Golden Horizon', 1200),
+  ('w94', 'a36', 'Glass Window', 1200),
+  ('w95', 'a36', 'Last Archive', 1200),
+  ('w96', 'a36', 'Midnight Archive', 1200),
+  ('w97', 'a37', 'Electric Bloom', 1200),
+  ('w98', 'a37', 'Restless Echo', 1200),
+  ('w99', 'a38', 'Restless Tide', 1200)
 on conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;
 insert into public.artworks (id, artist_id, title, base_elo) values
-  ('w100', 'a38', 'Glass Ocean', 1053),
-  ('w101', 'a39', 'Starry Fever', 1059),
-  ('w102', 'a39', 'Glass Signal', 1015),
-  ('w103', 'a40', 'Iron Horizon', 1069),
-  ('w104', 'a40', 'Broken Orchard', 985),
-  ('w105', 'a41', 'Floating Machine', 1037),
-  ('w106', 'a41', 'Electric Atlas', 1051),
-  ('w107', 'a42', 'Salt Mother', 1414),
-  ('w108', 'a42', 'Neon City', 1457),
-  ('w109', 'a42', 'Last Requiem', 1487),
-  ('w110', 'a43', 'Liquid Desert', 1524),
-  ('w111', 'a43', 'Last Orchard', 1425),
-  ('w112', 'a43', 'Salt Engine', 1450),
-  ('w113', 'a44', 'Electric Machine', 1445),
-  ('w114', 'a44', 'Crimson Echo', 1347),
-  ('w115', 'a45', 'Hollow Engine', 1038),
-  ('w116', 'a45', 'Golden Saint', 1054),
-  ('w117', 'a46', 'Iron Cathedral', 1435),
-  ('w118', 'a46', 'Burning Mother', 1482),
-  ('w119', 'a47', 'Sacred Ocean', 1104),
-  ('w120', 'a47', 'Lunar Signal', 1100),
-  ('w121', 'a47', 'Neon Orchard', 1016),
-  ('w122', 'a48', 'Silent Machine', 981),
-  ('w123', 'a48', 'Crimson Requiem', 1033),
-  ('w124', 'a48', 'Tender Signal', 969),
-  ('w125', 'a49', 'Wild Bloom', 1195),
-  ('w126', 'a49', 'Floating Garden', 1117),
-  ('w127', 'a50', 'Crimson Revolution', 1031),
-  ('w128', 'a50', 'Neon Mother', 1104),
-  ('w129', 'a51', 'Wild Echo', 1257),
-  ('w130', 'a51', 'Hollow Atlas', 1216),
-  ('w131', 'a51', 'Amber Market', 1273),
-  ('w132', 'a52', 'Hidden Revolution', 958),
-  ('w133', 'a52', 'Quiet Figure', 1023),
-  ('w134', 'a53', 'Distant Saint', 1044),
-  ('w135', 'a53', 'Last Lullaby', 1054),
-  ('w136', 'a53', 'Winter Orchard', 1100),
-  ('w137', 'a54', 'Midnight Choir', 1284),
-  ('w138', 'a54', 'Glass Mirror', 1253),
-  ('w139', 'a55', 'Crimson Mother', 1174),
-  ('w140', 'a55', 'Hollow Window', 1181),
-  ('w141', 'a56', 'Silent Revolution', 1053),
-  ('w142', 'a56', 'Blue Portrait', 1188),
-  ('w143', 'a56', 'Broken Dreams', 1121),
-  ('w144', 'a57', 'Restless Market', 1158),
-  ('w145', 'a57', 'Sacred Atlas', 1278),
-  ('w146', 'a58', 'Red Storm', 1091),
-  ('w147', 'a58', 'Velvet Horizon', 1025),
-  ('w148', 'a58', 'Iron Bloom', 951),
-  ('w149', 'a59', 'Last Fever', 1345),
-  ('w150', 'a59', 'Golden Harbor', 1252),
-  ('w151', 'a59', 'Tender Archive', 1208),
-  ('w152', 'a60', 'Burning Revolution', 1099),
-  ('w153', 'a60', 'Neon Fever', 1157),
-  ('w154', 'a61', 'Restless Storm', 1018),
-  ('w155', 'a61', 'Wild Portrait', 1053),
-  ('w156', 'a61', 'Hidden Market', 1033),
-  ('w157', 'a62', 'Last City', 1094),
-  ('w158', 'a62', 'Lunar Desert', 958),
-  ('w159', 'a62', 'Restless Revolution', 1065),
-  ('w160', 'a63', 'Quiet Signal', 1148),
-  ('w161', 'a63', 'Winter Bloom', 1097),
-  ('w162', 'a63', 'Restless Signal', 1160),
-  ('w163', 'a64', 'Lunar Garden', 1133),
-  ('w164', 'a64', 'Broken Tide', 1231),
-  ('w165', 'a65', 'Paper Mother', 1075),
-  ('w166', 'a65', 'Burning Desert', 1080),
-  ('w167', 'a65', 'Distant Requiem', 1145),
-  ('w168', 'a66', 'Iron Requiem', 1246),
-  ('w169', 'a66', 'Amber Dreams', 1136),
-  ('w170', 'a66', 'Glass Echo', 1239),
-  ('w171', 'a67', 'Paper Harbor', 1161),
-  ('w172', 'a67', 'Electric Window', 966),
-  ('w173', 'a67', 'Golden City', 1121),
-  ('w174', 'a68', 'Lunar Saint', 1197),
-  ('w175', 'a68', 'Blue Harbor', 1188),
-  ('w176', 'a69', 'Hidden Mother', 1420),
-  ('w177', 'a69', 'Glass Archive', 1399),
-  ('w178', 'a69', 'Hidden Cathedral', 1280),
-  ('w179', 'a70', 'Wild Signal', 1157),
-  ('w180', 'a70', 'Golden Lullaby', 1092),
-  ('w181', 'a71', 'Broken City', 1113),
-  ('w182', 'a71', 'Restless Ocean', 1151),
-  ('w183', 'a72', 'Neon Requiem', 1451),
-  ('w184', 'a72', 'Crimson Window', 1460),
-  ('w185', 'a73', 'Starry Signal', 1094),
-  ('w186', 'a73', 'Neon Storm', 1097),
-  ('w187', 'a74', 'Hollow Saint', 1367),
-  ('w188', 'a74', 'Starry Storm', 1223),
-  ('w189', 'a74', 'Electric Figure', 1191),
-  ('w190', 'a75', 'Paper Mirror', 1505),
-  ('w191', 'a75', 'Blue Signal', 1447),
-  ('w192', 'a76', 'Last Echo', 1202),
-  ('w193', 'a76', 'Hollow Cathedral', 1185),
-  ('w194', 'a77', 'Electric Horizon', 1191),
+  ('w100', 'a38', 'Glass Ocean', 1200),
+  ('w101', 'a39', 'Starry Fever', 1200),
+  ('w102', 'a39', 'Glass Signal', 1200),
+  ('w103', 'a40', 'Iron Horizon', 1200),
+  ('w104', 'a40', 'Broken Orchard', 1200),
+  ('w105', 'a41', 'Floating Machine', 1200),
+  ('w106', 'a41', 'Electric Atlas', 1200),
+  ('w107', 'a42', 'Salt Mother', 1200),
+  ('w108', 'a42', 'Neon City', 1200),
+  ('w109', 'a42', 'Last Requiem', 1200),
+  ('w110', 'a43', 'Liquid Desert', 1200),
+  ('w111', 'a43', 'Last Orchard', 1200),
+  ('w112', 'a43', 'Salt Engine', 1200),
+  ('w113', 'a44', 'Electric Machine', 1200),
+  ('w114', 'a44', 'Crimson Echo', 1200),
+  ('w115', 'a45', 'Hollow Engine', 1200),
+  ('w116', 'a45', 'Golden Saint', 1200),
+  ('w117', 'a46', 'Iron Cathedral', 1200),
+  ('w118', 'a46', 'Burning Mother', 1200),
+  ('w119', 'a47', 'Sacred Ocean', 1200),
+  ('w120', 'a47', 'Lunar Signal', 1200),
+  ('w121', 'a47', 'Neon Orchard', 1200),
+  ('w122', 'a48', 'Silent Machine', 1200),
+  ('w123', 'a48', 'Crimson Requiem', 1200),
+  ('w124', 'a48', 'Tender Signal', 1200),
+  ('w125', 'a49', 'Wild Bloom', 1200),
+  ('w126', 'a49', 'Floating Garden', 1200),
+  ('w127', 'a50', 'Crimson Revolution', 1200),
+  ('w128', 'a50', 'Neon Mother', 1200),
+  ('w129', 'a51', 'Wild Echo', 1200),
+  ('w130', 'a51', 'Hollow Atlas', 1200),
+  ('w131', 'a51', 'Amber Market', 1200),
+  ('w132', 'a52', 'Hidden Revolution', 1200),
+  ('w133', 'a52', 'Quiet Figure', 1200),
+  ('w134', 'a53', 'Distant Saint', 1200),
+  ('w135', 'a53', 'Last Lullaby', 1200),
+  ('w136', 'a53', 'Winter Orchard', 1200),
+  ('w137', 'a54', 'Midnight Choir', 1200),
+  ('w138', 'a54', 'Glass Mirror', 1200),
+  ('w139', 'a55', 'Crimson Mother', 1200),
+  ('w140', 'a55', 'Hollow Window', 1200),
+  ('w141', 'a56', 'Silent Revolution', 1200),
+  ('w142', 'a56', 'Blue Portrait', 1200),
+  ('w143', 'a56', 'Broken Dreams', 1200),
+  ('w144', 'a57', 'Restless Market', 1200),
+  ('w145', 'a57', 'Sacred Atlas', 1200),
+  ('w146', 'a58', 'Red Storm', 1200),
+  ('w147', 'a58', 'Velvet Horizon', 1200),
+  ('w148', 'a58', 'Iron Bloom', 1200),
+  ('w149', 'a59', 'Last Fever', 1200),
+  ('w150', 'a59', 'Golden Harbor', 1200),
+  ('w151', 'a59', 'Tender Archive', 1200),
+  ('w152', 'a60', 'Burning Revolution', 1200),
+  ('w153', 'a60', 'Neon Fever', 1200),
+  ('w154', 'a61', 'Restless Storm', 1200),
+  ('w155', 'a61', 'Wild Portrait', 1200),
+  ('w156', 'a61', 'Hidden Market', 1200),
+  ('w157', 'a62', 'Last City', 1200),
+  ('w158', 'a62', 'Lunar Desert', 1200),
+  ('w159', 'a62', 'Restless Revolution', 1200),
+  ('w160', 'a63', 'Quiet Signal', 1200),
+  ('w161', 'a63', 'Winter Bloom', 1200),
+  ('w162', 'a63', 'Restless Signal', 1200),
+  ('w163', 'a64', 'Lunar Garden', 1200),
+  ('w164', 'a64', 'Broken Tide', 1200),
+  ('w165', 'a65', 'Paper Mother', 1200),
+  ('w166', 'a65', 'Burning Desert', 1200),
+  ('w167', 'a65', 'Distant Requiem', 1200),
+  ('w168', 'a66', 'Iron Requiem', 1200),
+  ('w169', 'a66', 'Amber Dreams', 1200),
+  ('w170', 'a66', 'Glass Echo', 1200),
+  ('w171', 'a67', 'Paper Harbor', 1200),
+  ('w172', 'a67', 'Electric Window', 1200),
+  ('w173', 'a67', 'Golden City', 1200),
+  ('w174', 'a68', 'Lunar Saint', 1200),
+  ('w175', 'a68', 'Blue Harbor', 1200),
+  ('w176', 'a69', 'Hidden Mother', 1200),
+  ('w177', 'a69', 'Glass Archive', 1200),
+  ('w178', 'a69', 'Hidden Cathedral', 1200),
+  ('w179', 'a70', 'Wild Signal', 1200),
+  ('w180', 'a70', 'Golden Lullaby', 1200),
+  ('w181', 'a71', 'Broken City', 1200),
+  ('w182', 'a71', 'Restless Ocean', 1200),
+  ('w183', 'a72', 'Neon Requiem', 1200),
+  ('w184', 'a72', 'Crimson Window', 1200),
+  ('w185', 'a73', 'Starry Signal', 1200),
+  ('w186', 'a73', 'Neon Storm', 1200),
+  ('w187', 'a74', 'Hollow Saint', 1200),
+  ('w188', 'a74', 'Starry Storm', 1200),
+  ('w189', 'a74', 'Electric Figure', 1200),
+  ('w190', 'a75', 'Paper Mirror', 1200),
+  ('w191', 'a75', 'Blue Signal', 1200),
+  ('w192', 'a76', 'Last Echo', 1200),
+  ('w193', 'a76', 'Hollow Cathedral', 1200),
+  ('w194', 'a77', 'Electric Horizon', 1200),
   ('w195', 'a77', 'Tender Echo', 1200),
-  ('w196', 'a78', 'Golden Echo', 1053),
-  ('w197', 'a78', 'Restless Figure', 1051),
-  ('w198', 'a79', 'Wild Lullaby', 1129),
-  ('w199', 'a79', 'Broken Machine', 1169)
+  ('w196', 'a78', 'Golden Echo', 1200),
+  ('w197', 'a78', 'Restless Figure', 1200),
+  ('w198', 'a79', 'Wild Lullaby', 1200),
+  ('w199', 'a79', 'Broken Machine', 1200)
 on conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;
 insert into public.artworks (id, artist_id, title, base_elo) values
-  ('w200', 'a79', 'Winter Mother', 1166),
-  ('w201', 'a80', 'Floating Harbor', 1000),
-  ('w202', 'a80', 'Restless Portrait', 1108),
-  ('w203', 'a81', 'Starry Garden', 1027),
-  ('w204', 'a81', 'Red Mother', 1050),
-  ('w205', 'a81', 'Neon Garden', 1093),
-  ('w206', 'a82', 'Quiet Bloom', 1493),
-  ('w207', 'a82', 'Sacred Desert', 1423),
-  ('w208', 'a82', 'Hidden Choir', 1437),
-  ('w209', 'a83', 'Neon Dreams', 984),
-  ('w210', 'a83', 'Iron Choir', 1075),
-  ('w211', 'a84', 'Restless Engine', 1054),
-  ('w212', 'a84', 'Neon Market', 1047),
-  ('w213', 'a84', 'Floating Saint', 1111),
-  ('w214', 'a85', 'Burning Market', 1465),
-  ('w215', 'a85', 'Salt Garden', 1478),
-  ('w216', 'a85', 'Blue Mother', 1414),
-  ('w217', 'a86', 'Winter Atlas', 1083),
-  ('w218', 'a86', 'Electric Requiem', 1217),
-  ('w219', 'a86', 'Hidden Desert', 1229),
-  ('w220', 'a87', 'Glass Garden', 1114),
-  ('w221', 'a87', 'Quiet Saint', 963),
-  ('w222', 'a88', 'Floating Lullaby', 1031),
-  ('w223', 'a88', 'Paper Ocean', 1078),
-  ('w224', 'a89', 'Salt Figure', 1178),
-  ('w225', 'a89', 'Tender Ocean', 1147),
-  ('w226', 'a90', 'Liquid Horizon', 1057),
-  ('w227', 'a90', 'Sacred Echo', 1021),
-  ('w228', 'a90', 'Amber Fever', 1073),
-  ('w229', 'a91', 'Floating Choir', 1209),
-  ('w230', 'a91', 'Midnight Mirror', 1135),
-  ('w231', 'a92', 'Liquid Choir', 1202),
-  ('w232', 'a92', 'Starry Tide', 1191),
-  ('w233', 'a93', 'Amber Lullaby', 1344),
-  ('w234', 'a93', 'Floating Desert', 1448),
-  ('w235', 'a94', 'Blue Echo', 1007),
-  ('w236', 'a94', 'Golden Signal', 977),
-  ('w237', 'a94', 'Midnight Requiem', 996),
-  ('w238', 'a95', 'Winter Tide', 1249),
-  ('w239', 'a95', 'Tender Portrait', 1199),
-  ('w240', 'a95', 'Hollow Desert', 1172),
-  ('w241', 'a96', 'Midnight Desert', 975),
-  ('w242', 'a96', 'Hollow Bloom', 1159),
-  ('w243', 'a96', 'Silent Desert', 1046),
-  ('w244', 'a97', 'Amber Storm', 1088),
-  ('w245', 'a97', 'Broken Horizon', 1058),
-  ('w246', 'a97', 'Tender Orchard', 998),
-  ('w247', 'a98', 'Broken Mother', 1504),
-  ('w248', 'a98', 'Starry Cathedral', 1495),
-  ('w249', 'a98', 'Iron Figure', 1435),
-  ('w250', 'a99', 'Floating Cathedral', 1387),
-  ('w251', 'a99', 'Red Dreams', 1455),
-  ('w252', 'a99', 'Salt Storm', 1390),
-  ('w253', 'a100', 'Liquid Bloom', 1289),
-  ('w254', 'a100', 'Iron Revolution', 1312),
-  ('w255', 'a100', 'Distant Portrait', 1240),
-  ('w256', 'a101', 'Neon Machine', 1228),
-  ('w257', 'a101', 'Red Market', 1232),
-  ('w258', 'a101', 'Tender City', 1222),
-  ('w259', 'a102', 'Silent Storm', 973),
-  ('w260', 'a102', 'Hidden Bloom', 998),
-  ('w261', 'a102', 'Salt Market', 1018),
-  ('w262', 'a103', 'Velvet Portrait', 1060),
-  ('w263', 'a103', 'Crimson Portrait', 986),
-  ('w264', 'a103', 'Starry Harbor', 1103),
-  ('w265', 'a104', 'Liquid Engine', 1055),
-  ('w266', 'a104', 'Wild Harbor', 996),
-  ('w267', 'a105', 'Restless Choir', 1080),
-  ('w268', 'a105', 'Distant Window', 1073),
-  ('w269', 'a106', 'Floating Signal', 1100),
-  ('w270', 'a106', 'Wild Fever', 1046),
-  ('w271', 'a106', 'Electric Harbor', 1128),
-  ('w272', 'a107', 'Starry Machine', 1054),
-  ('w273', 'a107', 'Paper Lullaby', 993),
-  ('w274', 'a107', 'Winter Echo', 1034),
-  ('w275', 'a108', 'Neon Desert', 1262),
-  ('w276', 'a108', 'Electric Mother', 1248),
-  ('w277', 'a108', 'Glass Bloom', 1275),
-  ('w278', 'a109', 'Quiet Fever', 966),
-  ('w279', 'a109', 'Paper Desert', 1030),
-  ('w280', 'a109', 'Last Ocean', 1007),
-  ('w281', 'a110', 'Floating Portrait', 1175),
-  ('w282', 'a110', 'Glass Desert', 1155),
-  ('w283', 'a111', 'Blue Revolution', 1285),
-  ('w284', 'a111', 'Last Horizon', 1217),
-  ('w285', 'a111', 'Amber City', 1191),
-  ('w286', 'a112', 'Paper Bloom', 1308),
-  ('w287', 'a112', 'Hollow Lullaby', 1290),
-  ('w288', 'a113', 'Quiet Cathedral', 1047),
-  ('w289', 'a113', 'Neon Saint', 1060),
-  ('w290', 'a114', 'Glass Saint', 1015),
-  ('w291', 'a114', 'Distant Desert', 1068),
-  ('w292', 'a115', 'Lunar Archive', 1190),
-  ('w293', 'a115', 'Lunar Machine', 1192),
-  ('w294', 'a115', 'Quiet Tide', 1134),
-  ('w295', 'a116', 'Floating Figure', 1390),
-  ('w296', 'a116', 'Wild Horizon', 1420),
-  ('w297', 'a116', 'Hidden Engine', 1391),
-  ('w298', 'a117', 'Velvet Choir', 1035),
-  ('w299', 'a117', 'Midnight Lullaby', 1117)
+  ('w200', 'a79', 'Winter Mother', 1200),
+  ('w201', 'a80', 'Floating Harbor', 1200),
+  ('w202', 'a80', 'Restless Portrait', 1200),
+  ('w203', 'a81', 'Starry Garden', 1200),
+  ('w204', 'a81', 'Red Mother', 1200),
+  ('w205', 'a81', 'Neon Garden', 1200),
+  ('w206', 'a82', 'Quiet Bloom', 1200),
+  ('w207', 'a82', 'Sacred Desert', 1200),
+  ('w208', 'a82', 'Hidden Choir', 1200),
+  ('w209', 'a83', 'Neon Dreams', 1200),
+  ('w210', 'a83', 'Iron Choir', 1200),
+  ('w211', 'a84', 'Restless Engine', 1200),
+  ('w212', 'a84', 'Neon Market', 1200),
+  ('w213', 'a84', 'Floating Saint', 1200),
+  ('w214', 'a85', 'Burning Market', 1200),
+  ('w215', 'a85', 'Salt Garden', 1200),
+  ('w216', 'a85', 'Blue Mother', 1200),
+  ('w217', 'a86', 'Winter Atlas', 1200),
+  ('w218', 'a86', 'Electric Requiem', 1200),
+  ('w219', 'a86', 'Hidden Desert', 1200),
+  ('w220', 'a87', 'Glass Garden', 1200),
+  ('w221', 'a87', 'Quiet Saint', 1200),
+  ('w222', 'a88', 'Floating Lullaby', 1200),
+  ('w223', 'a88', 'Paper Ocean', 1200),
+  ('w224', 'a89', 'Salt Figure', 1200),
+  ('w225', 'a89', 'Tender Ocean', 1200),
+  ('w226', 'a90', 'Liquid Horizon', 1200),
+  ('w227', 'a90', 'Sacred Echo', 1200),
+  ('w228', 'a90', 'Amber Fever', 1200),
+  ('w229', 'a91', 'Floating Choir', 1200),
+  ('w230', 'a91', 'Midnight Mirror', 1200),
+  ('w231', 'a92', 'Liquid Choir', 1200),
+  ('w232', 'a92', 'Starry Tide', 1200),
+  ('w233', 'a93', 'Amber Lullaby', 1200),
+  ('w234', 'a93', 'Floating Desert', 1200),
+  ('w235', 'a94', 'Blue Echo', 1200),
+  ('w236', 'a94', 'Golden Signal', 1200),
+  ('w237', 'a94', 'Midnight Requiem', 1200),
+  ('w238', 'a95', 'Winter Tide', 1200),
+  ('w239', 'a95', 'Tender Portrait', 1200),
+  ('w240', 'a95', 'Hollow Desert', 1200),
+  ('w241', 'a96', 'Midnight Desert', 1200),
+  ('w242', 'a96', 'Hollow Bloom', 1200),
+  ('w243', 'a96', 'Silent Desert', 1200),
+  ('w244', 'a97', 'Amber Storm', 1200),
+  ('w245', 'a97', 'Broken Horizon', 1200),
+  ('w246', 'a97', 'Tender Orchard', 1200),
+  ('w247', 'a98', 'Broken Mother', 1200),
+  ('w248', 'a98', 'Starry Cathedral', 1200),
+  ('w249', 'a98', 'Iron Figure', 1200),
+  ('w250', 'a99', 'Floating Cathedral', 1200),
+  ('w251', 'a99', 'Red Dreams', 1200),
+  ('w252', 'a99', 'Salt Storm', 1200),
+  ('w253', 'a100', 'Liquid Bloom', 1200),
+  ('w254', 'a100', 'Iron Revolution', 1200),
+  ('w255', 'a100', 'Distant Portrait', 1200),
+  ('w256', 'a101', 'Neon Machine', 1200),
+  ('w257', 'a101', 'Red Market', 1200),
+  ('w258', 'a101', 'Tender City', 1200),
+  ('w259', 'a102', 'Silent Storm', 1200),
+  ('w260', 'a102', 'Hidden Bloom', 1200),
+  ('w261', 'a102', 'Salt Market', 1200),
+  ('w262', 'a103', 'Velvet Portrait', 1200),
+  ('w263', 'a103', 'Crimson Portrait', 1200),
+  ('w264', 'a103', 'Starry Harbor', 1200),
+  ('w265', 'a104', 'Liquid Engine', 1200),
+  ('w266', 'a104', 'Wild Harbor', 1200),
+  ('w267', 'a105', 'Restless Choir', 1200),
+  ('w268', 'a105', 'Distant Window', 1200),
+  ('w269', 'a106', 'Floating Signal', 1200),
+  ('w270', 'a106', 'Wild Fever', 1200),
+  ('w271', 'a106', 'Electric Harbor', 1200),
+  ('w272', 'a107', 'Starry Machine', 1200),
+  ('w273', 'a107', 'Paper Lullaby', 1200),
+  ('w274', 'a107', 'Winter Echo', 1200),
+  ('w275', 'a108', 'Neon Desert', 1200),
+  ('w276', 'a108', 'Electric Mother', 1200),
+  ('w277', 'a108', 'Glass Bloom', 1200),
+  ('w278', 'a109', 'Quiet Fever', 1200),
+  ('w279', 'a109', 'Paper Desert', 1200),
+  ('w280', 'a109', 'Last Ocean', 1200),
+  ('w281', 'a110', 'Floating Portrait', 1200),
+  ('w282', 'a110', 'Glass Desert', 1200),
+  ('w283', 'a111', 'Blue Revolution', 1200),
+  ('w284', 'a111', 'Last Horizon', 1200),
+  ('w285', 'a111', 'Amber City', 1200),
+  ('w286', 'a112', 'Paper Bloom', 1200),
+  ('w287', 'a112', 'Hollow Lullaby', 1200),
+  ('w288', 'a113', 'Quiet Cathedral', 1200),
+  ('w289', 'a113', 'Neon Saint', 1200),
+  ('w290', 'a114', 'Glass Saint', 1200),
+  ('w291', 'a114', 'Distant Desert', 1200),
+  ('w292', 'a115', 'Lunar Archive', 1200),
+  ('w293', 'a115', 'Lunar Machine', 1200),
+  ('w294', 'a115', 'Quiet Tide', 1200),
+  ('w295', 'a116', 'Floating Figure', 1200),
+  ('w296', 'a116', 'Wild Horizon', 1200),
+  ('w297', 'a116', 'Hidden Engine', 1200),
+  ('w298', 'a117', 'Velvet Choir', 1200),
+  ('w299', 'a117', 'Midnight Lullaby', 1200)
 on conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;
 insert into public.artworks (id, artist_id, title, base_elo) values
-  ('w300', 'a117', 'Paper Window', 1138),
-  ('w301', 'a118', 'Wild Atlas', 1134),
-  ('w302', 'a118', 'Golden Cathedral', 1219),
-  ('w303', 'a118', 'Last Cathedral', 1140),
-  ('w304', 'a119', 'Restless Dreams', 1023),
-  ('w305', 'a119', 'Winter Revolution', 1054),
-  ('w306', 'a120', 'Red Desert', 1042),
-  ('w307', 'a120', 'Floating Revolution', 1086),
-  ('w308', 'a120', 'Glass Market', 996),
-  ('w309', 'a121', 'Lunar Dreams', 1081),
-  ('w310', 'a121', 'Golden Machine', 1031),
-  ('w311', 'a121', 'Burning Garden', 1011),
-  ('w312', 'a122', 'Sacred City', 1425),
-  ('w313', 'a122', 'Blue Bloom', 1423),
-  ('w314', 'a122', 'Broken Market', 1387),
-  ('w315', 'a123', 'Salt Choir', 1130),
-  ('w316', 'a123', 'Glass City', 1260),
-  ('w317', 'a124', 'Crimson Mirror', 1121),
-  ('w318', 'a124', 'Lunar Requiem', 1133),
-  ('w319', 'a125', 'Amber Cathedral', 1416),
-  ('w320', 'a125', 'Salt Saint', 1392),
-  ('w321', 'a126', 'Winter Storm', 1035),
-  ('w322', 'a126', 'Hollow Figure', 1022),
-  ('w323', 'a126', 'Last Portrait', 1080),
-  ('w324', 'a127', 'Red Machine', 1088),
-  ('w325', 'a127', 'Red Lullaby', 1072),
-  ('w326', 'a128', 'Tender Horizon', 1157),
-  ('w327', 'a128', 'Velvet Archive', 1072),
-  ('w328', 'a129', 'Salt Mirror', 1442),
-  ('w329', 'a129', 'Burning Dreams', 1490),
-  ('w330', 'a130', 'Floating Bloom', 1189),
-  ('w331', 'a130', 'Silent Tide', 1182),
-  ('w332', 'a131', 'Hollow Revolution', 1060),
-  ('w333', 'a131', 'Liquid Machine', 964),
-  ('w334', 'a131', 'Quiet Engine', 1030),
-  ('w335', 'a132', 'Broken Choir', 1050),
-  ('w336', 'a132', 'Starry Desert', 1092),
-  ('w337', 'a132', 'Crimson Bloom', 1061),
-  ('w338', 'a133', 'Red Horizon', 1407),
-  ('w339', 'a133', 'Liquid Ocean', 1359),
-  ('w340', 'a134', 'Last Desert', 1217),
-  ('w341', 'a134', 'Wild Choir', 1280),
-  ('w342', 'a134', 'Blue Machine', 1136),
-  ('w343', 'a135', 'Hollow Garden', 1036),
-  ('w344', 'a135', 'Silent Echo', 1041),
-  ('w345', 'a135', 'Liquid Market', 1056),
-  ('w346', 'a136', 'Liquid Archive', 1320),
-  ('w347', 'a136', 'Velvet Garden', 1400),
-  ('w348', 'a136', 'Silent Ocean', 1380),
-  ('w349', 'a137', 'Burning Machine', 1207),
-  ('w350', 'a137', 'Red City', 1091),
-  ('w351', 'a138', 'Electric Echo', 1070),
-  ('w352', 'a138', 'Starry Archive', 960),
-  ('w353', 'a138', 'Restless Desert', 1027),
-  ('w354', 'a139', 'Broken Requiem', 993),
-  ('w355', 'a139', 'Burning Harbor', 1020),
-  ('w356', 'a139', 'Liquid Storm', 1069),
-  ('w357', 'a140', 'Glass Tide', 1355),
-  ('w358', 'a140', 'Lunar Cathedral', 1257),
-  ('w359', 'a141', 'Hollow Orchard', 1349),
-  ('w360', 'a141', 'Quiet Choir', 1238),
-  ('w361', 'a142', 'Starry Bloom', 1165),
-  ('w362', 'a142', 'Wild Saint', 1130),
-  ('w363', 'a143', 'Distant Tide', 1296),
-  ('w364', 'a143', 'Sacred Window', 1334),
-  ('w365', 'a143', 'Winter Fever', 1262),
-  ('w366', 'a144', 'Hidden Machine', 1099),
-  ('w367', 'a144', 'Hollow Portrait', 1133),
-  ('w368', 'a144', 'Glass Fever', 1025),
-  ('w369', 'a145', 'Amber Garden', 1312),
-  ('w370', 'a145', 'Tender Choir', 1335),
-  ('w371', 'a146', 'Midnight Portrait', 1130),
-  ('w372', 'a146', 'Quiet Harbor', 1158),
-  ('w373', 'a147', 'Quiet Machine', 1071),
-  ('w374', 'a147', 'Hidden Mirror', 1086),
-  ('w375', 'a148', 'Red Mirror', 1105),
-  ('w376', 'a148', 'Silent Cathedral', 1044),
-  ('w377', 'a148', 'Starry Atlas', 982),
-  ('w378', 'a149', 'Neon Cathedral', 1151),
-  ('w379', 'a149', 'Wild Archive', 1234),
-  ('w380', 'a149', 'Amber Ocean', 1179),
-  ('w381', 'a150', 'Iron Tide', 1446),
-  ('w382', 'a150', 'Last Choir', 1294),
-  ('w383', 'a151', 'Glass Horizon', 1115),
-  ('w384', 'a151', 'Red Ocean', 1017),
-  ('w385', 'a152', 'Golden Window', 968),
-  ('w386', 'a152', 'Floating Ocean', 1057),
-  ('w387', 'a152', 'Amber Window', 957),
-  ('w388', 'a153', 'Velvet Fever', 1093),
-  ('w389', 'a153', 'Sacred Bloom', 1062),
-  ('w390', 'a154', 'Silent Harbor', 1234),
-  ('w391', 'a154', 'Velvet Mirror', 1292),
-  ('w392', 'a155', 'Winter Window', 1189),
-  ('w393', 'a155', 'Salt Cathedral', 1034),
-  ('w394', 'a156', 'Tender Saint', 1333),
-  ('w395', 'a156', 'Restless Orchard', 1449),
-  ('w396', 'a156', 'Burning Bloom', 1396),
-  ('w397', 'a157', 'Hollow Mother', 1362),
-  ('w398', 'a157', 'Restless Archive', 1313),
-  ('w399', 'a157', 'Quiet Desert', 1333)
+  ('w300', 'a117', 'Paper Window', 1200),
+  ('w301', 'a118', 'Wild Atlas', 1200),
+  ('w302', 'a118', 'Golden Cathedral', 1200),
+  ('w303', 'a118', 'Last Cathedral', 1200),
+  ('w304', 'a119', 'Restless Dreams', 1200),
+  ('w305', 'a119', 'Winter Revolution', 1200),
+  ('w306', 'a120', 'Red Desert', 1200),
+  ('w307', 'a120', 'Floating Revolution', 1200),
+  ('w308', 'a120', 'Glass Market', 1200),
+  ('w309', 'a121', 'Lunar Dreams', 1200),
+  ('w310', 'a121', 'Golden Machine', 1200),
+  ('w311', 'a121', 'Burning Garden', 1200),
+  ('w312', 'a122', 'Sacred City', 1200),
+  ('w313', 'a122', 'Blue Bloom', 1200),
+  ('w314', 'a122', 'Broken Market', 1200),
+  ('w315', 'a123', 'Salt Choir', 1200),
+  ('w316', 'a123', 'Glass City', 1200),
+  ('w317', 'a124', 'Crimson Mirror', 1200),
+  ('w318', 'a124', 'Lunar Requiem', 1200),
+  ('w319', 'a125', 'Amber Cathedral', 1200),
+  ('w320', 'a125', 'Salt Saint', 1200),
+  ('w321', 'a126', 'Winter Storm', 1200),
+  ('w322', 'a126', 'Hollow Figure', 1200),
+  ('w323', 'a126', 'Last Portrait', 1200),
+  ('w324', 'a127', 'Red Machine', 1200),
+  ('w325', 'a127', 'Red Lullaby', 1200),
+  ('w326', 'a128', 'Tender Horizon', 1200),
+  ('w327', 'a128', 'Velvet Archive', 1200),
+  ('w328', 'a129', 'Salt Mirror', 1200),
+  ('w329', 'a129', 'Burning Dreams', 1200),
+  ('w330', 'a130', 'Floating Bloom', 1200),
+  ('w331', 'a130', 'Silent Tide', 1200),
+  ('w332', 'a131', 'Hollow Revolution', 1200),
+  ('w333', 'a131', 'Liquid Machine', 1200),
+  ('w334', 'a131', 'Quiet Engine', 1200),
+  ('w335', 'a132', 'Broken Choir', 1200),
+  ('w336', 'a132', 'Starry Desert', 1200),
+  ('w337', 'a132', 'Crimson Bloom', 1200),
+  ('w338', 'a133', 'Red Horizon', 1200),
+  ('w339', 'a133', 'Liquid Ocean', 1200),
+  ('w340', 'a134', 'Last Desert', 1200),
+  ('w341', 'a134', 'Wild Choir', 1200),
+  ('w342', 'a134', 'Blue Machine', 1200),
+  ('w343', 'a135', 'Hollow Garden', 1200),
+  ('w344', 'a135', 'Silent Echo', 1200),
+  ('w345', 'a135', 'Liquid Market', 1200),
+  ('w346', 'a136', 'Liquid Archive', 1200),
+  ('w347', 'a136', 'Velvet Garden', 1200),
+  ('w348', 'a136', 'Silent Ocean', 1200),
+  ('w349', 'a137', 'Burning Machine', 1200),
+  ('w350', 'a137', 'Red City', 1200),
+  ('w351', 'a138', 'Electric Echo', 1200),
+  ('w352', 'a138', 'Starry Archive', 1200),
+  ('w353', 'a138', 'Restless Desert', 1200),
+  ('w354', 'a139', 'Broken Requiem', 1200),
+  ('w355', 'a139', 'Burning Harbor', 1200),
+  ('w356', 'a139', 'Liquid Storm', 1200),
+  ('w357', 'a140', 'Glass Tide', 1200),
+  ('w358', 'a140', 'Lunar Cathedral', 1200),
+  ('w359', 'a141', 'Hollow Orchard', 1200),
+  ('w360', 'a141', 'Quiet Choir', 1200),
+  ('w361', 'a142', 'Starry Bloom', 1200),
+  ('w362', 'a142', 'Wild Saint', 1200),
+  ('w363', 'a143', 'Distant Tide', 1200),
+  ('w364', 'a143', 'Sacred Window', 1200),
+  ('w365', 'a143', 'Winter Fever', 1200),
+  ('w366', 'a144', 'Hidden Machine', 1200),
+  ('w367', 'a144', 'Hollow Portrait', 1200),
+  ('w368', 'a144', 'Glass Fever', 1200),
+  ('w369', 'a145', 'Amber Garden', 1200),
+  ('w370', 'a145', 'Tender Choir', 1200),
+  ('w371', 'a146', 'Midnight Portrait', 1200),
+  ('w372', 'a146', 'Quiet Harbor', 1200),
+  ('w373', 'a147', 'Quiet Machine', 1200),
+  ('w374', 'a147', 'Hidden Mirror', 1200),
+  ('w375', 'a148', 'Red Mirror', 1200),
+  ('w376', 'a148', 'Silent Cathedral', 1200),
+  ('w377', 'a148', 'Starry Atlas', 1200),
+  ('w378', 'a149', 'Neon Cathedral', 1200),
+  ('w379', 'a149', 'Wild Archive', 1200),
+  ('w380', 'a149', 'Amber Ocean', 1200),
+  ('w381', 'a150', 'Iron Tide', 1200),
+  ('w382', 'a150', 'Last Choir', 1200),
+  ('w383', 'a151', 'Glass Horizon', 1200),
+  ('w384', 'a151', 'Red Ocean', 1200),
+  ('w385', 'a152', 'Golden Window', 1200),
+  ('w386', 'a152', 'Floating Ocean', 1200),
+  ('w387', 'a152', 'Amber Window', 1200),
+  ('w388', 'a153', 'Velvet Fever', 1200),
+  ('w389', 'a153', 'Sacred Bloom', 1200),
+  ('w390', 'a154', 'Silent Harbor', 1200),
+  ('w391', 'a154', 'Velvet Mirror', 1200),
+  ('w392', 'a155', 'Winter Window', 1200),
+  ('w393', 'a155', 'Salt Cathedral', 1200),
+  ('w394', 'a156', 'Tender Saint', 1200),
+  ('w395', 'a156', 'Restless Orchard', 1200),
+  ('w396', 'a156', 'Burning Bloom', 1200),
+  ('w397', 'a157', 'Hollow Mother', 1200),
+  ('w398', 'a157', 'Restless Archive', 1200),
+  ('w399', 'a157', 'Quiet Desert', 1200)
 on conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;
 insert into public.artworks (id, artist_id, title, base_elo) values
-  ('w400', 'a158', 'Crimson Market', 999),
-  ('w401', 'a158', 'Neon Engine', 1055),
-  ('w402', 'a158', 'Hidden Garden', 1111),
-  ('w403', 'a159', 'Last Dreams', 1072),
-  ('w404', 'a159', 'Velvet Tide', 990),
-  ('w405', 'a160', 'Distant City', 1032),
-  ('w406', 'a160', 'Electric Engine', 1039),
-  ('w407', 'a161', 'Hidden Saint', 1428),
-  ('w408', 'a161', 'Burning Ocean', 1360),
-  ('w409', 'a161', 'Blue Ocean', 1342),
-  ('w410', 'a162', 'Winter Choir', 1114),
-  ('w411', 'a162', 'Crimson Figure', 1150),
-  ('w412', 'a162', 'Paper Choir', 1113),
-  ('w413', 'a163', 'Salt Signal', 1224),
-  ('w414', 'a163', 'Liquid Garden', 1269),
-  ('w415', 'a164', 'Iron Ocean', 1322),
-  ('w416', 'a164', 'Iron Storm', 1241),
-  ('w417', 'a165', 'Quiet Garden', 1042),
-  ('w418', 'a165', 'Blue Engine', 1100),
-  ('w419', 'a165', 'Blue Mirror', 1019),
-  ('w420', 'a166', 'Lunar Market', 1297),
-  ('w421', 'a166', 'Last Saint', 1333),
-  ('w422', 'a166', 'Winter Signal', 1296),
-  ('w423', 'a167', 'Quiet Window', 1282),
-  ('w424', 'a167', 'Midnight Echo', 1313),
-  ('w425', 'a168', 'Distant Dreams', 1059),
-  ('w426', 'a168', 'Winter Ocean', 1074),
-  ('w427', 'a169', 'Floating Requiem', 1144),
-  ('w428', 'a169', 'Crimson Machine', 1155),
-  ('w429', 'a169', 'Salt Horizon', 1179),
-  ('w430', 'a170', 'Restless Lullaby', 954),
-  ('w431', 'a170', 'Distant Revolution', 1040),
-  ('w432', 'a170', 'Neon Lullaby', 1071),
-  ('w433', 'a171', 'Lunar Atlas', 1187),
-  ('w434', 'a171', 'Lunar Lullaby', 1113),
-  ('w435', 'a172', 'Salt City', 1102),
-  ('w436', 'a172', 'Neon Revolution', 998),
-  ('w437', 'a173', 'Quiet Ocean', 975),
-  ('w438', 'a173', 'Floating Fever', 1054),
-  ('w439', 'a173', 'Crimson Engine', 1035),
-  ('w440', 'a174', 'Floating Orchard', 1196),
-  ('w441', 'a174', 'Winter Market', 1171),
-  ('w442', 'a175', 'Electric Revolution', 1444),
-  ('w443', 'a175', 'Silent Requiem', 1429),
-  ('w444', 'a176', 'Electric Orchard', 1171),
-  ('w445', 'a176', 'Paper Orchard', 1077),
-  ('w446', 'a176', 'Burning Orchard', 1265),
-  ('w447', 'a177', 'Lunar Harbor', 1251),
-  ('w448', 'a177', 'Lunar Mirror', 1321),
-  ('w449', 'a177', 'Silent Mirror', 1311),
-  ('w450', 'a178', 'Red Echo', 1444),
-  ('w451', 'a178', 'Hidden Dreams', 1457),
-  ('w452', 'a178', 'Paper Requiem', 1440),
-  ('w453', 'a179', 'Sacred Choir', 1186),
-  ('w454', 'a179', 'Midnight Orchard', 1333),
-  ('w455', 'a180', 'Lunar Choir', 984),
-  ('w456', 'a180', 'Neon Mirror', 1037),
-  ('w457', 'a180', 'Winter Saint', 954),
-  ('w458', 'a181', 'Hollow Mirror', 1052),
-  ('w459', 'a181', 'Quiet Mother', 1004),
-  ('w460', 'a182', 'Neon Atlas', 956),
-  ('w461', 'a182', 'Velvet Atlas', 1080),
-  ('w462', 'a182', 'Silent Mother', 1010),
-  ('w463', 'a183', 'Blue Tide', 1214),
-  ('w464', 'a183', 'Hollow Signal', 1131),
-  ('w465', 'a183', 'Distant Garden', 1098),
-  ('w466', 'a184', 'Distant Fever', 1397),
-  ('w467', 'a184', 'Lunar City', 1474),
-  ('w468', 'a184', 'Starry Echo', 1463),
-  ('w469', 'a185', 'Amber Revolution', 1128),
-  ('w470', 'a185', 'Sacred Orchard', 1084),
-  ('w471', 'a186', 'Restless Horizon', 1040),
-  ('w472', 'a186', 'Golden Dreams', 983),
-  ('w473', 'a186', 'Crimson Garden', 990),
-  ('w474', 'a187', 'Tender Fever', 1247),
-  ('w475', 'a187', 'Electric Tide', 1295),
-  ('w476', 'a187', 'Restless City', 1279),
-  ('w477', 'a188', 'Broken Archive', 1291),
-  ('w478', 'a188', 'Distant Mother', 1305),
-  ('w479', 'a188', 'Wild Desert', 1338),
-  ('w480', 'a189', 'Golden Mirror', 1194),
-  ('w481', 'a189', 'Iron Archive', 1166),
-  ('w482', 'a189', 'Lunar Figure', 1142),
-  ('w483', 'a190', 'Paper Machine', 1146),
-  ('w484', 'a190', 'Golden Storm', 1019),
-  ('w485', 'a191', 'Tender Tide', 1019),
-  ('w486', 'a191', 'Last Machine', 1075),
-  ('w487', 'a191', 'Salt Harbor', 1058),
-  ('w488', 'a192', 'Midnight Cathedral', 1319),
-  ('w489', 'a192', 'Amber Echo', 1411),
-  ('w490', 'a192', 'Winter Figure', 1422),
-  ('w491', 'a193', 'Floating Tide', 1016),
-  ('w492', 'a193', 'Burning Cathedral', 1093),
-  ('w493', 'a193', 'Golden Archive', 1106),
-  ('w494', 'a194', 'Hidden Requiem', 1387),
-  ('w495', 'a194', 'Distant Horizon', 1421),
-  ('w496', 'a195', 'Silent Figure', 1420),
-  ('w497', 'a195', 'Winter Archive', 1465),
-  ('w498', 'a195', 'Burning Engine', 1434),
-  ('w499', 'a196', 'Paper Fever', 1299)
+  ('w400', 'a158', 'Crimson Market', 1200),
+  ('w401', 'a158', 'Neon Engine', 1200),
+  ('w402', 'a158', 'Hidden Garden', 1200),
+  ('w403', 'a159', 'Last Dreams', 1200),
+  ('w404', 'a159', 'Velvet Tide', 1200),
+  ('w405', 'a160', 'Distant City', 1200),
+  ('w406', 'a160', 'Electric Engine', 1200),
+  ('w407', 'a161', 'Hidden Saint', 1200),
+  ('w408', 'a161', 'Burning Ocean', 1200),
+  ('w409', 'a161', 'Blue Ocean', 1200),
+  ('w410', 'a162', 'Winter Choir', 1200),
+  ('w411', 'a162', 'Crimson Figure', 1200),
+  ('w412', 'a162', 'Paper Choir', 1200),
+  ('w413', 'a163', 'Salt Signal', 1200),
+  ('w414', 'a163', 'Liquid Garden', 1200),
+  ('w415', 'a164', 'Iron Ocean', 1200),
+  ('w416', 'a164', 'Iron Storm', 1200),
+  ('w417', 'a165', 'Quiet Garden', 1200),
+  ('w418', 'a165', 'Blue Engine', 1200),
+  ('w419', 'a165', 'Blue Mirror', 1200),
+  ('w420', 'a166', 'Lunar Market', 1200),
+  ('w421', 'a166', 'Last Saint', 1200),
+  ('w422', 'a166', 'Winter Signal', 1200),
+  ('w423', 'a167', 'Quiet Window', 1200),
+  ('w424', 'a167', 'Midnight Echo', 1200),
+  ('w425', 'a168', 'Distant Dreams', 1200),
+  ('w426', 'a168', 'Winter Ocean', 1200),
+  ('w427', 'a169', 'Floating Requiem', 1200),
+  ('w428', 'a169', 'Crimson Machine', 1200),
+  ('w429', 'a169', 'Salt Horizon', 1200),
+  ('w430', 'a170', 'Restless Lullaby', 1200),
+  ('w431', 'a170', 'Distant Revolution', 1200),
+  ('w432', 'a170', 'Neon Lullaby', 1200),
+  ('w433', 'a171', 'Lunar Atlas', 1200),
+  ('w434', 'a171', 'Lunar Lullaby', 1200),
+  ('w435', 'a172', 'Salt City', 1200),
+  ('w436', 'a172', 'Neon Revolution', 1200),
+  ('w437', 'a173', 'Quiet Ocean', 1200),
+  ('w438', 'a173', 'Floating Fever', 1200),
+  ('w439', 'a173', 'Crimson Engine', 1200),
+  ('w440', 'a174', 'Floating Orchard', 1200),
+  ('w441', 'a174', 'Winter Market', 1200),
+  ('w442', 'a175', 'Electric Revolution', 1200),
+  ('w443', 'a175', 'Silent Requiem', 1200),
+  ('w444', 'a176', 'Electric Orchard', 1200),
+  ('w445', 'a176', 'Paper Orchard', 1200),
+  ('w446', 'a176', 'Burning Orchard', 1200),
+  ('w447', 'a177', 'Lunar Harbor', 1200),
+  ('w448', 'a177', 'Lunar Mirror', 1200),
+  ('w449', 'a177', 'Silent Mirror', 1200),
+  ('w450', 'a178', 'Red Echo', 1200),
+  ('w451', 'a178', 'Hidden Dreams', 1200),
+  ('w452', 'a178', 'Paper Requiem', 1200),
+  ('w453', 'a179', 'Sacred Choir', 1200),
+  ('w454', 'a179', 'Midnight Orchard', 1200),
+  ('w455', 'a180', 'Lunar Choir', 1200),
+  ('w456', 'a180', 'Neon Mirror', 1200),
+  ('w457', 'a180', 'Winter Saint', 1200),
+  ('w458', 'a181', 'Hollow Mirror', 1200),
+  ('w459', 'a181', 'Quiet Mother', 1200),
+  ('w460', 'a182', 'Neon Atlas', 1200),
+  ('w461', 'a182', 'Velvet Atlas', 1200),
+  ('w462', 'a182', 'Silent Mother', 1200),
+  ('w463', 'a183', 'Blue Tide', 1200),
+  ('w464', 'a183', 'Hollow Signal', 1200),
+  ('w465', 'a183', 'Distant Garden', 1200),
+  ('w466', 'a184', 'Distant Fever', 1200),
+  ('w467', 'a184', 'Lunar City', 1200),
+  ('w468', 'a184', 'Starry Echo', 1200),
+  ('w469', 'a185', 'Amber Revolution', 1200),
+  ('w470', 'a185', 'Sacred Orchard', 1200),
+  ('w471', 'a186', 'Restless Horizon', 1200),
+  ('w472', 'a186', 'Golden Dreams', 1200),
+  ('w473', 'a186', 'Crimson Garden', 1200),
+  ('w474', 'a187', 'Tender Fever', 1200),
+  ('w475', 'a187', 'Electric Tide', 1200),
+  ('w476', 'a187', 'Restless City', 1200),
+  ('w477', 'a188', 'Broken Archive', 1200),
+  ('w478', 'a188', 'Distant Mother', 1200),
+  ('w479', 'a188', 'Wild Desert', 1200),
+  ('w480', 'a189', 'Golden Mirror', 1200),
+  ('w481', 'a189', 'Iron Archive', 1200),
+  ('w482', 'a189', 'Lunar Figure', 1200),
+  ('w483', 'a190', 'Paper Machine', 1200),
+  ('w484', 'a190', 'Golden Storm', 1200),
+  ('w485', 'a191', 'Tender Tide', 1200),
+  ('w486', 'a191', 'Last Machine', 1200),
+  ('w487', 'a191', 'Salt Harbor', 1200),
+  ('w488', 'a192', 'Midnight Cathedral', 1200),
+  ('w489', 'a192', 'Amber Echo', 1200),
+  ('w490', 'a192', 'Winter Figure', 1200),
+  ('w491', 'a193', 'Floating Tide', 1200),
+  ('w492', 'a193', 'Burning Cathedral', 1200),
+  ('w493', 'a193', 'Golden Archive', 1200),
+  ('w494', 'a194', 'Hidden Requiem', 1200),
+  ('w495', 'a194', 'Distant Horizon', 1200),
+  ('w496', 'a195', 'Silent Figure', 1200),
+  ('w497', 'a195', 'Winter Archive', 1200),
+  ('w498', 'a195', 'Burning Engine', 1200),
+  ('w499', 'a196', 'Paper Fever', 1200)
 on conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;
 insert into public.artworks (id, artist_id, title, base_elo) values
-  ('w500', 'a196', 'Red Figure', 1270),
-  ('w501', 'a196', 'Winter Lullaby', 1284),
-  ('w502', 'a197', 'Silent Fever', 1044),
-  ('w503', 'a197', 'Midnight Tide', 1045),
-  ('w504', 'a197', 'Last Revolution', 1008),
-  ('w505', 'a198', 'Midnight Atlas', 1033),
-  ('w506', 'a198', 'Electric Archive', 1039),
-  ('w507', 'a199', 'Hollow Choir', 1285),
-  ('w508', 'a199', 'Hidden Harbor', 1343),
-  ('w509', 'a199', 'Starry Market', 1339),
-  ('w510', 'a200', 'Sacred Storm', 1179),
-  ('w511', 'a200', 'Glass Dreams', 1177),
-  ('w512', 'a201', 'Burning Lullaby', 1263),
-  ('w513', 'a201', 'Quiet Atlas', 1225),
-  ('w514', 'a201', 'Lunar Echo', 1175),
-  ('w515', 'a202', 'Quiet Mirror', 1388),
-  ('w516', 'a202', 'Golden Atlas', 1453),
-  ('w517', 'a202', 'Starry Window', 1447),
-  ('w518', 'a203', 'Starry Saint', 1075),
-  ('w519', 'a203', 'Sacred Machine', 1072),
-  ('w520', 'a204', 'Distant Bloom', 1122),
-  ('w521', 'a204', 'Electric Storm', 1171),
-  ('w522', 'a205', 'Paper Revolution', 1351),
-  ('w523', 'a205', 'Paper City', 1372),
-  ('w524', 'a205', 'Blue Window', 1337),
-  ('w525', 'a206', 'Neon Harbor', 1354),
-  ('w526', 'a206', 'Glass Revolution', 1483),
-  ('w527', 'a206', 'Broken Harbor', 1478),
-  ('w528', 'a207', 'Crimson Desert', 1015),
-  ('w529', 'a207', 'Iron Window', 1073),
-  ('w530', 'a207', 'Iron Fever', 1164),
-  ('w531', 'a208', 'Electric Portrait', 1231),
-  ('w532', 'a208', 'Wild Tide', 1077),
-  ('w533', 'a209', 'Distant Orchard', 1014),
-  ('w534', 'a209', 'Silent Lullaby', 978),
-  ('w535', 'a210', 'Restless Mirror', 1037),
-  ('w536', 'a210', 'Silent Archive', 1055),
-  ('w537', 'a211', 'Sacred Engine', 1018),
-  ('w538', 'a211', 'Iron Mirror', 991),
-  ('w539', 'a212', 'Golden Tide', 1219),
-  ('w540', 'a212', 'Tender Market', 1241),
-  ('w541', 'a212', 'Distant Echo', 1248),
-  ('w542', 'a213', 'Golden Choir', 1128),
-  ('w543', 'a213', 'Glass Machine', 1172),
-  ('w544', 'a214', 'Amber Orchard', 1030),
-  ('w545', 'a214', 'Quiet Storm', 1089),
-  ('w546', 'a214', 'Winter Horizon', 1163),
-  ('w547', 'a215', 'Salt Fever', 1241),
-  ('w548', 'a215', 'Midnight Harbor', 1068),
-  ('w549', 'a216', 'Electric Lullaby', 1431),
-  ('w550', 'a216', 'Winter Cathedral', 1356),
-  ('w551', 'a217', 'Tender Dreams', 1192),
-  ('w552', 'a217', 'Crimson Fever', 1164),
-  ('w553', 'a218', 'Broken Window', 978),
-  ('w554', 'a218', 'Restless Fever', 951),
-  ('w555', 'a218', 'Starry Requiem', 1048),
-  ('w556', 'a219', 'Tender Lullaby', 1354),
-  ('w557', 'a219', 'Glass Harbor', 1324),
-  ('w558', 'a220', 'Last Engine', 1166),
-  ('w559', 'a220', 'Burning Atlas', 1091),
-  ('w560', 'a221', 'Floating City', 1072),
-  ('w561', 'a221', 'Amber Choir', 1005),
-  ('w562', 'a222', 'Electric Desert', 1068),
-  ('w563', 'a222', 'Iron Harbor', 1108),
-  ('w564', 'a223', 'Hidden Archive', 1451),
-  ('w565', 'a223', 'Hollow Horizon', 1456),
-  ('w566', 'a224', 'Golden Portrait', 999),
-  ('w567', 'a224', 'Blue Lullaby', 994),
-  ('w568', 'a224', 'Crimson Horizon', 1093),
-  ('w569', 'a225', 'Velvet Ocean', 1061),
-  ('w570', 'a225', 'Amber Tide', 1107),
-  ('w571', 'a225', 'Sacred Fever', 1015),
-  ('w572', 'a226', 'Last Market', 1412),
-  ('w573', 'a226', 'Hidden Echo', 1366),
-  ('w574', 'a226', 'Restless Saint', 1319),
-  ('w575', 'a227', 'Burning Portrait', 1291),
-  ('w576', 'a227', 'Lunar Window', 1309),
-  ('w577', 'a228', 'Iron Signal', 1415),
-  ('w578', 'a228', 'Velvet Lullaby', 1351),
-  ('w579', 'a229', 'Blue Horizon', 1451),
-  ('w580', 'a229', 'Restless Mother', 1455),
-  ('w581', 'a229', 'Burning Saint', 1425),
-  ('w582', 'a230', 'Winter Desert', 1228),
-  ('w583', 'a230', 'Silent Signal', 1124),
-  ('w584', 'a231', 'Last Storm', 1375),
-  ('w585', 'a231', 'Broken Figure', 1224),
-  ('w586', 'a232', 'Iron Machine', 1156),
-  ('w587', 'a232', 'Velvet Bloom', 1146),
-  ('w588', 'a232', 'Neon Tide', 1092),
-  ('w589', 'a233', 'Floating Horizon', 1128),
-  ('w590', 'a233', 'Tender Figure', 1046),
-  ('w591', 'a234', 'Distant Atlas', 1399),
-  ('w592', 'a234', 'Salt Tide', 1465),
-  ('w593', 'a234', 'Hollow City', 1389),
-  ('w594', 'a235', 'Liquid Cathedral', 1045),
-  ('w595', 'a235', 'Electric Ocean', 1009),
-  ('w596', 'a236', 'Quiet Orchard', 1241),
-  ('w597', 'a236', 'Winter Engine', 1142),
-  ('w598', 'a237', 'Starry Mother', 1516),
-  ('w599', 'a237', 'Blue Orchard', 1438)
+  ('w500', 'a196', 'Red Figure', 1200),
+  ('w501', 'a196', 'Winter Lullaby', 1200),
+  ('w502', 'a197', 'Silent Fever', 1200),
+  ('w503', 'a197', 'Midnight Tide', 1200),
+  ('w504', 'a197', 'Last Revolution', 1200),
+  ('w505', 'a198', 'Midnight Atlas', 1200),
+  ('w506', 'a198', 'Electric Archive', 1200),
+  ('w507', 'a199', 'Hollow Choir', 1200),
+  ('w508', 'a199', 'Hidden Harbor', 1200),
+  ('w509', 'a199', 'Starry Market', 1200),
+  ('w510', 'a200', 'Sacred Storm', 1200),
+  ('w511', 'a200', 'Glass Dreams', 1200),
+  ('w512', 'a201', 'Burning Lullaby', 1200),
+  ('w513', 'a201', 'Quiet Atlas', 1200),
+  ('w514', 'a201', 'Lunar Echo', 1200),
+  ('w515', 'a202', 'Quiet Mirror', 1200),
+  ('w516', 'a202', 'Golden Atlas', 1200),
+  ('w517', 'a202', 'Starry Window', 1200),
+  ('w518', 'a203', 'Starry Saint', 1200),
+  ('w519', 'a203', 'Sacred Machine', 1200),
+  ('w520', 'a204', 'Distant Bloom', 1200),
+  ('w521', 'a204', 'Electric Storm', 1200),
+  ('w522', 'a205', 'Paper Revolution', 1200),
+  ('w523', 'a205', 'Paper City', 1200),
+  ('w524', 'a205', 'Blue Window', 1200),
+  ('w525', 'a206', 'Neon Harbor', 1200),
+  ('w526', 'a206', 'Glass Revolution', 1200),
+  ('w527', 'a206', 'Broken Harbor', 1200),
+  ('w528', 'a207', 'Crimson Desert', 1200),
+  ('w529', 'a207', 'Iron Window', 1200),
+  ('w530', 'a207', 'Iron Fever', 1200),
+  ('w531', 'a208', 'Electric Portrait', 1200),
+  ('w532', 'a208', 'Wild Tide', 1200),
+  ('w533', 'a209', 'Distant Orchard', 1200),
+  ('w534', 'a209', 'Silent Lullaby', 1200),
+  ('w535', 'a210', 'Restless Mirror', 1200),
+  ('w536', 'a210', 'Silent Archive', 1200),
+  ('w537', 'a211', 'Sacred Engine', 1200),
+  ('w538', 'a211', 'Iron Mirror', 1200),
+  ('w539', 'a212', 'Golden Tide', 1200),
+  ('w540', 'a212', 'Tender Market', 1200),
+  ('w541', 'a212', 'Distant Echo', 1200),
+  ('w542', 'a213', 'Golden Choir', 1200),
+  ('w543', 'a213', 'Glass Machine', 1200),
+  ('w544', 'a214', 'Amber Orchard', 1200),
+  ('w545', 'a214', 'Quiet Storm', 1200),
+  ('w546', 'a214', 'Winter Horizon', 1200),
+  ('w547', 'a215', 'Salt Fever', 1200),
+  ('w548', 'a215', 'Midnight Harbor', 1200),
+  ('w549', 'a216', 'Electric Lullaby', 1200),
+  ('w550', 'a216', 'Winter Cathedral', 1200),
+  ('w551', 'a217', 'Tender Dreams', 1200),
+  ('w552', 'a217', 'Crimson Fever', 1200),
+  ('w553', 'a218', 'Broken Window', 1200),
+  ('w554', 'a218', 'Restless Fever', 1200),
+  ('w555', 'a218', 'Starry Requiem', 1200),
+  ('w556', 'a219', 'Tender Lullaby', 1200),
+  ('w557', 'a219', 'Glass Harbor', 1200),
+  ('w558', 'a220', 'Last Engine', 1200),
+  ('w559', 'a220', 'Burning Atlas', 1200),
+  ('w560', 'a221', 'Floating City', 1200),
+  ('w561', 'a221', 'Amber Choir', 1200),
+  ('w562', 'a222', 'Electric Desert', 1200),
+  ('w563', 'a222', 'Iron Harbor', 1200),
+  ('w564', 'a223', 'Hidden Archive', 1200),
+  ('w565', 'a223', 'Hollow Horizon', 1200),
+  ('w566', 'a224', 'Golden Portrait', 1200),
+  ('w567', 'a224', 'Blue Lullaby', 1200),
+  ('w568', 'a224', 'Crimson Horizon', 1200),
+  ('w569', 'a225', 'Velvet Ocean', 1200),
+  ('w570', 'a225', 'Amber Tide', 1200),
+  ('w571', 'a225', 'Sacred Fever', 1200),
+  ('w572', 'a226', 'Last Market', 1200),
+  ('w573', 'a226', 'Hidden Echo', 1200),
+  ('w574', 'a226', 'Restless Saint', 1200),
+  ('w575', 'a227', 'Burning Portrait', 1200),
+  ('w576', 'a227', 'Lunar Window', 1200),
+  ('w577', 'a228', 'Iron Signal', 1200),
+  ('w578', 'a228', 'Velvet Lullaby', 1200),
+  ('w579', 'a229', 'Blue Horizon', 1200),
+  ('w580', 'a229', 'Restless Mother', 1200),
+  ('w581', 'a229', 'Burning Saint', 1200),
+  ('w582', 'a230', 'Winter Desert', 1200),
+  ('w583', 'a230', 'Silent Signal', 1200),
+  ('w584', 'a231', 'Last Storm', 1200),
+  ('w585', 'a231', 'Broken Figure', 1200),
+  ('w586', 'a232', 'Iron Machine', 1200),
+  ('w587', 'a232', 'Velvet Bloom', 1200),
+  ('w588', 'a232', 'Neon Tide', 1200),
+  ('w589', 'a233', 'Floating Horizon', 1200),
+  ('w590', 'a233', 'Tender Figure', 1200),
+  ('w591', 'a234', 'Distant Atlas', 1200),
+  ('w592', 'a234', 'Salt Tide', 1200),
+  ('w593', 'a234', 'Hollow City', 1200),
+  ('w594', 'a235', 'Liquid Cathedral', 1200),
+  ('w595', 'a235', 'Electric Ocean', 1200),
+  ('w596', 'a236', 'Quiet Orchard', 1200),
+  ('w597', 'a236', 'Winter Engine', 1200),
+  ('w598', 'a237', 'Starry Mother', 1200),
+  ('w599', 'a237', 'Blue Orchard', 1200)
 on conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;
 insert into public.artworks (id, artist_id, title, base_elo) values
-  ('w600', 'a237', 'Restless Cathedral', 1473),
-  ('w601', 'a238', 'Restless Bloom', 1152),
-  ('w602', 'a238', 'Electric Fever', 1241),
-  ('w603', 'a238', 'Crimson Signal', 1195),
-  ('w604', 'a239', 'Hidden Tide', 1183),
-  ('w605', 'a239', 'Hidden Orchard', 1160),
-  ('w606', 'a239', 'Paper Horizon', 1231)
+  ('w600', 'a237', 'Restless Cathedral', 1200),
+  ('w601', 'a238', 'Restless Bloom', 1200),
+  ('w602', 'a238', 'Electric Fever', 1200),
+  ('w603', 'a238', 'Crimson Signal', 1200),
+  ('w604', 'a239', 'Hidden Tide', 1200),
+  ('w605', 'a239', 'Hidden Orchard', 1200),
+  ('w606', 'a239', 'Paper Horizon', 1200)
 on conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;
 commit;

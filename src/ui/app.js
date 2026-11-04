@@ -4,7 +4,7 @@ import { battleResult, expectedScore, pickBattlePair, kFactor, LOSS_FACTOR, STAR
 import { nextArtwork, updateTaste, topStyles, EXPLOIT_RATIO } from '../core/feed.js';
 import { PLANS, checkoutBreakdown, hasFeature } from '../core/marketplace.js';
 import { BADGES, BADGE_RULES, userBadges } from '../core/badges.js';
-import { rank, rankMap, movement, rollSnapshot, hourKey } from '../core/rankings.js';
+import { rankMap, movement, rollSnapshot, hourKey } from '../core/rankings.js';
 import { extractFeatures, classifyStyle, guessMedium, similarArtists } from '../core/recognition.js';
 import { createWorld } from '../core/world.js';
 import { mulberry32, hashString } from '../core/random.js';
@@ -17,20 +17,22 @@ import { credibility, dailyMasterpiece, dayKey, momentum, percentiles, artistSig
 import { tasteScore, personalInfluence, dailyActivity, earnedAchievements, ACHIEVEMENTS, COLLECTION_PRESETS, MIN_DISCOVERIES } from '../core/taste.js';
 import { initPWA } from './pwa.js';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
-import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions } from '../core/community.js';
+import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, sampleCatalog, collectionsToState, AVAILABILITY } from '../core/community.js';
+import { artistProfileForm, validateArtistProfile, artworkEditForm, collectionEditForm } from './views/forms.js';
 import {
   esc, fmt, money, flag, countryName, initials, Icon, ArtImage, Avatar, PremiumButton, IconButton, AbremiSymbol,
-  ArtworkCard, ArtworkGrid, FeaturedArtwork, ArtistCard, CategoryFilter, Select, SearchBar,
+  ArtworkCard, ArtworkGrid, ArtistCard, CategoryFilter, Select, SearchBar,
   ArtBattleCard, BattleArena, CollectionCard, EmptyState, LoadingSkeleton, SectionHeader, Movement,
 } from './components.js';
 
 // ——— State ———
-const seed = buildSeedWorld();
-let state = loadState();
-
 // Community mode: everyone's likes, follows and votes are shared through Supabase.
 // Demo mode (no configuration): everything stays on this device, exactly as before.
 const COMMUNITY = Boolean(window.__abremiCloud || (SUPABASE_URL && SUPABASE_ANON_KEY));
+// Community mode shows the catalog as labelled sample works with no simulated activity:
+// every like, follower, review and battle rating it shows is real.
+const seed = COMMUNITY ? sampleCatalog(buildSeedWorld()) : buildSeedWorld();
+let state = loadState();
 let cloud = null; // backend adapter, once connected
 let me = null; // signed-in account { id, email }
 let pendingWrites = 0;
@@ -45,7 +47,7 @@ function viewState() {
   const c = state.community;
   return {
     ...state,
-    deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas,
+    deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas, rankedOnly: true,
     memberArtists: c.artists || [], memberArtworks: c.artworks || [], myArtistId: myArtistId(),
     uploads: [], // device-only demo uploads are not part of the shared catalog
   };
@@ -84,6 +86,10 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const role = () => ROLES.find((r) => r.id === state.user.role);
 const artistOf = (art) => world.artistById[art.artistId];
 const reactionOf = (id) => state.interactions[id];
+/** Community mode's catalog is sample content; say so wherever a sample work or artist is shown in full. */
+const SampleNote = (kind) => `<p class="sample-note">${Icon('info', { size: 14 })} ${kind === 'artist'
+  ? 'Sample artist: part of Abremi’s starter catalog, not a real person. Their followers and rankings come only from real members.'
+  : 'Sample artwork from Abremi’s starter catalog. Not for sale; its likes, saves and rankings come only from real members.'}</p>`;
 const cardCtx = (w, extra = {}) => ({ artist: artistOf(w), reaction: reactionOf(w.id), ...extra });
 const card = (w, extra) => ArtworkCard(w, cardCtx(w, extra));
 const isMine = (w) => w.artistId === myArtistId();
@@ -151,6 +157,7 @@ function refresh() {
 const VIEWS = {
   home: renderHome, discover: renderDiscover, explore: renderExplore, battle: renderBattle, artists: renderArtists,
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
+  art: renderArtworkPage, collection: renderSharedCollection,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -158,7 +165,7 @@ function route() {
   return VIEWS[name] ? { name, param: decodeURIComponent(rest.join('/')) } : { name: 'home', param: '' };
 }
 const currentView = () => route().name;
-const NAV_SECTION = { artist: 'artists' };
+const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections' };
 
 function renderView() {
   const name = currentView();
@@ -443,7 +450,7 @@ function todaysMasterpiece() {
     const ranks = currentRanks();
     return { artwork: kept, rank: ranks[kept.id], day: today, revealAt: (() => { const d = new Date(); d.setHours(24, 0, 0, 0); return d; })() };
   }
-  const pick = dailyMasterpiece(world.topArtworks().filter((r) => !isMine(r.item)), credOf, new Date());
+  const pick = dailyMasterpiece(world.topArtworks().filter((r) => r.rank != null && !isMine(r.item)), credOf, new Date());
   if (pick) { state.masterpiece = { day: today, id: pick.artwork.id }; saveState(state); }
   return pick;
 }
@@ -487,7 +494,10 @@ function renderHome(root) {
   const mp = todaysMasterpiece();
   if (mp && state.masterpieceSeen !== mp.day) { state.masterpieceSeen = mp.day; saveState(state); }
   const heroArt = mp?.artwork || top[0].item;
-  const feedSource = homeFeed.mode === 'new'
+  const nothingRanked = COMMUNITY && top[0]?.rank == null;
+  const feedSource = homeFeed.mode === 'following'
+    ? catalog().filter((w) => state.follows[w.artistId]).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || world.influence[b.id] - world.influence[a.id])
+    : homeFeed.mode === 'new'
     ? catalog().slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || b.year - a.year || world.influence[b.id] - world.influence[a.id])
     : top.map((r) => r.item);
   const feed = feedSource.filter((w) => !homeFeed.category || w.category === homeFeed.category).slice(0, 8);
@@ -495,7 +505,7 @@ function renderHome(root) {
   const rising = world.artists.filter((a) => !a.isMe && ins.signals[a.id]?.includes('rising'))
     .sort((a, b) => ins.mom[b.id] - ins.mom[a.id]).slice(0, 4);
   if (!battlePair) newBattle();
-  const countries = countryStandings(world.artists, (a) => world.artistScores[a.id], world.artworks, (w) => world.influence[w.id]).slice(0, 5);
+  const countries = countryBoard().slice(0, 5);
   const members = COMMUNITY ? state.community?.members || 0 : 0;
   const proof = members
     ? `${fmt(members)} member${members === 1 ? '' : 's'} shaping the rankings`
@@ -528,11 +538,14 @@ function renderHome(root) {
       </section>` : ''}
 
       <section class="section">
-        ${SectionHeader({ eyebrow: 'Discover', title: homeFeed.mode === 'new' ? 'New discoveries' : 'Trending now', action: `<div class="seg seg-sm" role="tablist">
+        ${SectionHeader({ eyebrow: 'Discover', title: homeFeed.mode === 'following' ? 'From artists you follow' : homeFeed.mode === 'new' ? 'New discoveries' : nothingRanked ? 'Sample works' : 'Trending now', action: `<div class="seg seg-sm" role="tablist">
           <button role="tab" class="${homeFeed.mode === 'trending' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'trending'}" data-act="home-mode" data-v="trending">Trending</button>
-          <button role="tab" class="${homeFeed.mode === 'new' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'new'}" data-act="home-mode" data-v="new">New</button></div>` })}
+          <button role="tab" class="${homeFeed.mode === 'new' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'new'}" data-act="home-mode" data-v="new">New</button>
+          <button role="tab" class="${homeFeed.mode === 'following' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'following'}" data-act="home-mode" data-v="following">Following</button></div>` })}
         ${CategoryFilter(CATEGORIES, homeFeed.category, { act: 'home-cat', allLabel: 'All', pills: true })}
-        ${feed.length ? ArtworkGrid(feed.map((w) => card(w))) : EmptyState({ title: 'Nothing here yet', body: 'Try another medium.' })}
+        ${feed.length ? ArtworkGrid(feed.map((w) => card(w))) : homeFeed.mode === 'following'
+          ? EmptyState({ icon: 'user', title: Object.keys(state.follows).length ? 'Nothing from them here yet' : 'Follow artists to see their work here', body: 'Newest works from the artists you follow appear first.', action: '<a class="btn btn-secondary" href="#artists"><span>Find artists</span></a>' })
+          : EmptyState({ title: 'Nothing here yet', body: 'Try another medium.' })}
         <div class="section-foot"><a class="link-arrow" href="#explore">Explore all works ${Icon('arrow', { size: 16 })}</a></div>
       </section>
 
@@ -617,11 +630,11 @@ function discoverPanelHTML(entry) {
       <div><dt>Ranking</dt><dd>No. ${rankNow} worldwide</dd></div>
       <div><dt>Influence</dt><dd>${fmt(world.influence[w.id])}</dd></div>
       <div><dt>Credibility</dt><dd>${Math.round(c.share * 100)}% critics &amp; collectors</dd></div>
-      <div><dt>Price</dt><dd>${money(w.price)}</dd></div>
+      ${w.sample ? '<div><dt>Status</dt><dd>Sample work</dd></div>' : `<div><dt>Price</dt><dd>${money(w.price)}</dd></div>`}
     </dl>
     <div class="panel-actions">
-      ${PremiumButton('View details', { act: 'artwork', variant: 'secondary', attrs: `data-id="${w.id}"` })}
-      ${PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${w.id}"` })}
+      ${PremiumButton('View details', { act: 'artwork', variant: w.sample ? 'primary' : 'secondary', attrs: `data-id="${w.id}"` })}
+      ${w.sample ? '' : PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${w.id}"` })}
       ${state.user.role === 'critic' ? PremiumButton('Write review', { act: 'review', variant: 'ghost', icon: 'pen', attrs: `data-id="${w.id}"` }) : ''}
     </div>
     <p class="fine">${counts() ? `Your ${role().label.toLowerCase()} vote adds ${role().weight} influence (${role().weight * SAVE_MULTIPLIER} for a Super Like).` : '<button class="link" data-act="sign-in">Sign in</button> so your likes count in the rankings.'} Keys: ← pass, → like, ↑ Super Like, Enter for details.</p>`;
@@ -736,30 +749,36 @@ function artworkSheet(id) {
     <div class="detail-body">
       <p class="eyebrow">${esc(categoryById[w.category].label)} · ${esc(w.style)}</p>
       <h2 class="display-md" id="modal-title">${esc(w.title)}</h2>
+      ${w.sample ? SampleNote('artwork') : ''}
       <div class="panel-artist">
         <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}</b><small>${esc(countryName(a.country))}</small></span></button>
         ${a.isMe ? '' : `<button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${a.id}" aria-pressed="${following}">${following ? 'Following' : 'Follow'}</button>`}
       </div>
+      ${w.description ? `<p class="artwork-description">${esc(w.description)}</p>` : ''}
       <dl class="spec">
         <div><dt>Medium</dt><dd>${esc(w.medium)}</dd></div>
         <div><dt>Year</dt><dd>${w.year}</dd></div>
-        <div><dt>Price</dt><dd>${money(w.price)}</dd></div>
+        ${w.dimensions ? `<div><dt>Size</dt><dd>${esc(w.dimensions)}</dd></div>` : ''}
+        ${w.sample ? '' : `<div><dt>${forSale(w) ? 'Price' : 'Availability'}</dt><dd>${forSale(w) ? (w.availability === 'on_request' ? 'On request' : money(w.price)) : esc(AVAILABILITY[w.availability])}</dd></div>`}
       </dl>
       <div class="detail-actions">
         <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Like">${Icon('heart', { size: 18 })}</button>
         <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="Save to collection">${Icon('bookmark', { size: 18 })}</button>
-        ${PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
+        ${w.sample || !forSale(w) ? '' : PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : w.availability === 'on_request' ? 'Inquire' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
         ${PremiumButton('Add to collection', { act: 'add-to-collection', variant: 'secondary', icon: 'folderPlus', attrs: `data-id="${id}"` })}
         ${state.user.role === 'critic' && !myReview ? PremiumButton('Review', { act: 'review', variant: 'secondary', icon: 'pen', attrs: `data-id="${id}"` }) : ''}
+        ${isMine(w) && COMMUNITY ? PremiumButton('Edit', { act: 'edit-artwork', variant: 'secondary', icon: 'pen', attrs: `data-id="${id}"` }) : ''}
         ${isMine(w) ? PremiumButton('Delete', { act: 'delete-artwork', variant: 'ghost', attrs: `data-id="${id}" data-danger` }) : ''}
+        ${IconButton('share', 'Share this artwork', { act: 'share-artwork', attrs: `data-id="${id}"` })}
       </div>
       ${myReview ? `<blockquote class="quote"><span class="stars-static">${'★'.repeat(myReview.rating)}${'☆'.repeat(5 - myReview.rating)}</span>${esc(myReview.text)}</blockquote>` : ''}
       <div class="stat-row">
-        <div><b>${globalRank}</b><small>Worldwide</small></div>
-        <div><b>${countryRank}</b><small>${esc(countryName(a.country))}</small></div>
-        <div><b>${catRank}</b><small>${esc(categoryById[w.category].label)}</small></div>
-        <div><b>${Math.round(world.eloOf(w))}</b><small>Battle Elo</small></div>
+        <div><b>${globalRank ?? '—'}</b><small>Worldwide</small></div>
+        <div><b>${countryRank ?? '—'}</b><small>${esc(countryName(a.country))}</small></div>
+        <div><b>${catRank ?? '—'}</b><small>${esc(categoryById[w.category].label)}</small></div>
+        <div><b>${!COMMUNITY || state.community?.elo?.[w.id] != null ? Math.round(world.eloOf(w)) : '—'}</b><small>Battle Elo</small></div>
       </div>
+      ${globalRank == null ? '<p class="fine">Not ranked yet: a work is ranked once members like or save it.</p>' : ''}
       <div class="influence">
         <div class="influence-head"><h3>Influence score</h3><span>${fmt(world.influence[id])}</span></div>
         ${rows.map((x) => `<div class="meter-row"><span>${esc(x.label)}</span><div class="meter"><i style="width:${(x.points / max) * 100}%"></i></div><span class="num">${fmt(x.points)}</span></div>
@@ -767,6 +786,19 @@ function artworkSheet(id) {
       </div>
     </div>
   </div>`;
+}
+
+/** Member works can be marked sold or not for sale by their artist; sample works are never for sale. */
+const forSale = (w) => !w.sample && (!w.availability || w.availability === 'available' || w.availability === 'on_request');
+
+/** Every artwork has a shareable page: #art/<id>. */
+function renderArtworkPage(root) {
+  const id = route().param;
+  if (!world.artworkById[id]) {
+    root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artwork not found', body: 'It may have been removed by the artist.', action: '<a class="btn btn-secondary" href="#explore"><span>Explore art</span></a>' })}</div>`;
+    return;
+  }
+  root.innerHTML = `<div class="shell artwork-page"><button class="link-arrow back-link" data-act="back">${Icon('back', { size: 14 })} Back</button>${artworkSheet(id)}</div>`;
 }
 
 /** Artists have their own page (#artist/<id>), so links and search results navigate there. */
@@ -827,23 +859,27 @@ function userCollectionSheet(id) {
   const c = state.collections.find((x) => x.id === id);
   if (!c) return EmptyState({ title: 'Collection not found' });
   const works = c.ids.map((x) => world.artworkById[x]).filter(Boolean);
-  return `<div class="user-collection"><p class="eyebrow">${c.private ? `${Icon('lock', { size: 12 })} Private collection` : 'Collection'} · on this device</p>
+  return `<div class="user-collection"><p class="eyebrow">${c.private ? `${Icon('lock', { size: 12 })} Private collection` : c.server ? 'Shared collection' : 'Collection'} · ${c.server ? 'saved to your account' : 'on this device'}</p>
     <h2 class="display-md" id="modal-title">${esc(c.name)}</h2>
+    ${c.description ? `<p class="muted">${esc(c.description)}</p>` : ''}
     <div class="detail-actions">
-      ${PremiumButton(c.private ? 'Private' : 'Not private', { act: 'collection-private', variant: 'secondary', icon: 'lock', attrs: `data-v="${c.id}" aria-pressed="${c.private}"` })}
+      ${PremiumButton(c.private ? 'Private' : c.server ? 'Shared: anyone with the link' : 'Not private', { act: 'collection-private', variant: 'secondary', icon: 'lock', attrs: `data-v="${c.id}" aria-pressed="${c.private}"` })}
+      ${c.server && !c.private ? PremiumButton('Share link', { act: 'share-collection', variant: 'secondary', icon: 'share', attrs: `data-v="${c.id}"` }) : ''}
+      ${c.server ? PremiumButton('Edit', { act: 'edit-collection', variant: 'ghost', icon: 'pen', attrs: `data-v="${c.id}"` }) : ''}
       ${PremiumButton('Delete collection', { act: 'collection-delete', variant: 'ghost', attrs: `data-v="${c.id}" data-danger` })}
     </div>
     ${works.length ? ArtworkGrid(works.map((w) => card(w)), { className: 'art-grid-tight' }) : EmptyState({ icon: 'folderPlus', title: 'Empty for now', body: 'Open any artwork and choose “Add to collection”.' })}</div>`;
 }
 
 let newCollectionFor = null;
+let portraitChoice = null; // the portrait photo picked in the artist profile form
 function newCollectionSheet() {
   return `<form class="auth" id="new-collection-form"><p class="eyebrow">New collection</p><h2 class="display-md" id="modal-title">Name your collection</h2>
     <div class="chip-row chip-row-wrap">${COLLECTION_PRESETS.map((p) => `<button type="button" class="chip" data-act="collection-preset" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
-    <label class="field"><span>Name</span><input id="collection-name" maxlength="40" autocomplete="off" placeholder="Personal Museum"></label>
+    <label class="field"><span>Name</span><input id="collection-name" maxlength="60" autocomplete="off" placeholder="Personal Museum"></label>
     <label class="check"><input type="checkbox" id="collection-private" checked> Private</label>
     <div class="detail-actions">${PremiumButton('Create collection', { act: 'collection-create' })}</div>
-    <p class="fine">Collections are saved on this device for now.</p></form>`;
+    <p class="fine">${syncedCollections() ? 'Saved to your account. Private collections are visible only to you; shared ones to anyone with the link.' : COMMUNITY ? 'Saved on this device. Sign in to keep your collections with your account.' : 'Collections are saved on this device.'}</p></form>`;
 }
 
 function addToCollectionSheet(artworkId) {
@@ -1090,6 +1126,12 @@ function membersBoardsHTML() {
     <p class="fine explainer"><b>Discovery Score</b> rewards liking work before others do: the more weight (Fan 1 … Collector 9) that arrives after you, and the earlier you were, the higher it climbs. <b>Collectors</b> and <b>critics</b> are ranked by the influence they have added in that role; critics’ reviews count too. Members appear by display name only and can opt out in their profile. ${fmt(d.members || 0)} member${d.members === 1 ? '' : 's'} on the boards.</p>`;
 }
 
+/** Cultural Influence by Country. Community mode lists only countries with real activity. */
+function countryBoard() {
+  const rows = countryStandings(world.artists, (a) => world.artistScores[a.id], world.artworks, (w) => world.influence[w.id]);
+  return COMMUNITY ? rows.filter((r) => r.score > 0) : rows;
+}
+
 function countryRow(row) {
   const c = countryByCode[row.country];
   const crown = row.rank === 1 ? `<span class="crown">${Icon('crown', { size: 14 })}</span>` : '';
@@ -1115,17 +1157,18 @@ function renderCharts(root) {
   hour.setMinutes(0, 0, 0);
   const section = (key, title, list, kind, opts = {}) => {
     const open = charts.expanded === key;
+    list = list.filter((r) => r.rank != null);
     const rows = list.slice(0, open ? 100 : 5);
     return `<section class="board">
       <header class="board-head"><h2>${title}</h2>${list.length > 5 ? `<button class="link-arrow" data-act="chart-expand" data-v="${key}">${open ? 'Show top 5' : 'See all'} ${Icon('arrow', { size: 14 })}</button>` : ''}</header>
-      ${rows.length ? `<ol class="rank-list">${rows.map((r) => rankRow(r, kind, opts.previous || undefined, opts)).join('')}</ol>` : EmptyState({ title: 'Nothing ranked here yet' })}
+      ${rows.length ? `<ol class="rank-list">${rows.map((r) => rankRow(r, kind, opts.previous || undefined, opts)).join('')}</ol>` : EmptyState({ title: 'Nothing ranked here yet', body: COMMUNITY ? 'Rankings come only from real members’ likes, saves, follows and battle votes.' : '' })}
     </section>`;
   };
   const tabs = Object.entries({ global: 'Global', countries: 'Countries', categories: 'Categories', members: 'Members' })
     .map(([k, v]) => `<button role="tab" aria-selected="${charts.tab === k}" class="${charts.tab === k ? 'is-on' : ''}" data-act="chart-tab" data-v="${k}">${v}</button>`).join('');
-  let body = '';
+  let body;
   if (charts.tab === 'global') {
-    const standings = countryStandings(world.artists, (a) => world.artistScores[a.id], world.artworks, (w) => world.influence[w.id]);
+    const standings = countryBoard();
     body = `${section('artworks', 'Top Artworks Worldwide', world.topArtworks(), 'art', { previous })}
       ${section('artists', 'Top Artists Worldwide', world.topArtists(), 'artist', { previous })}
       ${section('battles', 'Art Battle Champions', world.topElo(), 'art', { elo: true })}
@@ -1141,7 +1184,7 @@ function renderCharts(root) {
         ${section('c-artworks', `Top Artworks · ${esc(c.name)}`, world.topArtworks({ country: c.code }), 'art')}
         ${section('c-artists', `Top Artists · ${esc(c.name)}`, world.topArtists({ country: c.code }), 'artist')}`;
     } else {
-      const standings = countryStandings(world.artists, (a) => world.artistScores[a.id], world.artworks, (w) => world.influence[w.id]);
+      const standings = countryBoard();
       const mine = standings.find((r) => r.country === state.user.country);
       body = `<section class="board">
         <header class="board-head"><h2>Cultural Influence by Country</h2></header>
@@ -1214,7 +1257,7 @@ function renderArtistPage(root) {
     root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artist not found', body: 'They may have left Abremi.', action: '<a class="btn btn-secondary" href="#artists"><span>All artists</span></a>' })}</div>`;
     return;
   }
-  const works = world.topArtworks().filter((r) => r.item.artistId === id);
+  const works = world.topArtworks().filter((r) => r.item.artistId === id).map((r) => (r.rank == null ? { ...r, rank: undefined } : r));
   const cover = works[0]?.item;
   const followers = world.followersOf(a);
   const followerTotal = Object.values(followers).reduce((x, y) => x + y, 0);
@@ -1232,17 +1275,20 @@ function renderArtistPage(root) {
         <span class="artist-portrait">${Avatar(a, 'xl')}</span>
         <div class="artist-header-actions">
           ${a.isMe ? '<span class="tag tag-gold">This is you</span>' : `<button class="btn ${following ? 'btn-secondary' : 'btn-primary'}" data-act="follow" data-id="${id}" aria-pressed="${following}"><span>${following ? 'Following' : 'Follow'}</span></button>
-            ${state.user.role === 'collector' ? PremiumButton('Sponsor', { act: 'sponsor', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
-            ${IconButton('mail', `Contact ${a.name}`, { act: 'contact', attrs: `data-id="${id}"` })}`}
+            ${a.sample ? '' : `${state.user.role === 'collector' ? PremiumButton('Sponsor', { act: 'sponsor', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
+            ${IconButton('mail', `Contact ${a.name}`, { act: 'contact', attrs: `data-id="${id}"` })}`}`}
         </div>
         <h1 class="display-md">${esc(a.name)}</h1>
-        <p class="muted">${esc(categoryById[a.category]?.label || 'Contemporary')} artist • ${esc(countryName(a.country))}${a.debutYear ? ` • since ${a.debutYear}` : ''}</p>
+        ${a.sample ? SampleNote('artist') : ''}
+        <p class="muted">${esc(categoryById[a.category]?.label || 'Contemporary')} artist • ${a.city ? `${esc(a.city)}, ` : ''}${esc(countryName(a.country))}${a.debutYear ? ` • since ${a.debutYear}` : ''}</p>
+        ${a.bio ? `<p class="artist-bio">${esc(a.bio)}</p>` : ''}
+        ${a.isMe && a.member ? `<button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Edit your artist profile</button>` : ''}
         <div class="signal-row">${signalChips(id)}${badges.map((b) => `<span class="badge" title="${esc(BADGES[b].desc)}">${BADGES[b].emoji} ${BADGES[b].label}</span>`).join('')}</div>
         <dl class="stat-row artist-stats">
           <div><dt>Followers</dt><dd>${fmt(followerTotal)}</dd></div>
           <div><dt>Works</dt><dd>${works.length}</dd></div>
           <div><dt>Influence</dt><dd>${fmt(world.artistScores[id])}</dd></div>
-          <div><dt>Worldwide</dt><dd>No. ${world.globalArtistRanks[id]}</dd></div>
+          <div><dt>Worldwide</dt><dd>${world.globalArtistRanks[id] ? `No. ${world.globalArtistRanks[id]}` : 'Not ranked'}</dd></div>
         </dl>
       </header>
       <div class="tabs" role="tablist">
@@ -1250,10 +1296,13 @@ function renderArtistPage(root) {
       </div>
       ${artistTab === 'artwork'
         ? (works.length ? ArtworkGrid(works.map((r) => card(r.item, { rank: r.rank, details: true }))) : EmptyState({ title: 'No works yet' }))
-        : `<dl class="spec about-spec">
+        : `${a.statement ? `<section class="artist-statement"><h2 class="eyebrow">Artist statement</h2><p>${esc(a.statement)}</p></section>` : ''}
+          ${a.website || a.instagram ? `<p class="artist-links">${a.website ? `<a href="${esc(a.website)}" target="_blank" rel="noopener noreferrer nofollow">${Icon('globe', { size: 14 })} ${esc(a.website.replace(/^https:\/\//, '').replace(/\/$/, ''))}</a>` : ''}
+            ${a.instagram ? `<a href="https://instagram.com/${encodeURIComponent(a.instagram)}" target="_blank" rel="noopener noreferrer nofollow">@${esc(a.instagram)}</a>` : ''}</p>` : ''}
+          <dl class="spec about-spec">
             <div><dt>Movements</dt><dd>${a.styles.length ? a.styles.map(esc).join(', ') : '—'}</dd></div>
             <div><dt>Medium</dt><dd>${esc(categoryById[a.category]?.label || '—')}</dd></div>
-            <div><dt>Country</dt><dd>${flag(a.country)} ${esc(countryName(a.country))} · No. ${world.countryArtistRanks[id]}</dd></div>
+            <div><dt>Country</dt><dd>${flag(a.country)} ${esc(countryName(a.country))}${world.countryArtistRanks[id] ? ` · No. ${world.countryArtistRanks[id]}` : ''}</dd></div>
             <div><dt>Credibility</dt><dd>${Math.round((cred?.share || 0) * 100)}% of influence from critics &amp; collectors</dd></div>
             <div><dt>Followers by role</dt><dd>${ROLES.map((r) => `${r.label} ${fmt(followers[r.id])}`).join(' · ')}</dd></div>
             ${a.member ? '<div><dt>Profile</dt><dd>Member artist on Abremi</dd></div>' : ''}
@@ -1456,7 +1505,7 @@ async function scanSample() {
 function renderProfile(root) {
   const liked = collectionIds('liked');
   const collected = collectionIds('saved');
-  const top20 = new Set(world.topArtworks().slice(0, BADGE_RULES.trendSetterTopN).map((r) => r.item.id));
+  const top20 = new Set(world.topArtworks().filter((r) => r.rank != null).slice(0, BADGE_RULES.trendSetterTopN).map((r) => r.item.id));
   const trendHits = [...liked, ...collected].filter((id) => top20.has(id)).length;
   const myBadges = userBadges({ role: state.user.role, collectedCount: collected.length + state.purchases.length, reviewCount: state.reviews.length, trendHits });
   const myArtist = world.artistById[myArtistId()];
@@ -1593,7 +1642,7 @@ let uploading = false;
 function studioHTML(myWorks, canAnalyze) {
   const where = COMMUNITY ? 'Published works are visible to everyone and enter the rankings and Art Battles straight away.' : 'Demo mode: your works are saved on this device only.';
   return `<section class="section section-tight" id="studio">
-    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work' })}
+    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work', action: COMMUNITY && me ? `<div class="studio-links"><button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Artist profile</button>${world.artistById[myArtistId()] ? `<a class="link-arrow" href="#artist/${encodeURIComponent(myArtistId())}">Your page ${Icon('arrow', { size: 14 })}</a>` : ''}</div>` : '' })}
     <div class="profile-grid">
       <form id="upload" class="panel upload" novalidate>
         <label class="dropzone dropzone-sm">
@@ -1610,6 +1659,11 @@ function studioHTML(myWorks, canAnalyze) {
           <label class="field"><span>Year</span><input name="year" type="number" inputmode="numeric" min="1900" max="2100" value="${CURRENT_YEAR}"></label>
           <label class="field"><span>Price (USD)</span><input name="price" type="number" inputmode="numeric" min="${PRICE_MIN}" step="10" placeholder="500"></label>
         </div>
+        ${COMMUNITY ? `<div class="field-row">
+          <label class="field"><span>Size (optional)</span><input name="dimensions" maxlength="60" placeholder="60 × 80 cm"></label>
+          <label class="field"><span>Availability</span><select name="availability">${Object.entries(AVAILABILITY).filter(([k]) => k !== 'sold').map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select></label>
+        </div>
+        <label class="field"><span>Description (optional)</span><textarea name="description" rows="3" maxlength="2000" placeholder="The story behind the work."></textarea></label>` : ''}
         <p class="upload-status" id="upload-status" role="status" aria-live="polite"></p>
         <button class="btn btn-primary btn-block" id="upload-submit">${COMMUNITY ? 'Publish to Abremi' : 'Publish work'}</button>
         <p class="fine">${where} Photos are resized and their hidden data (such as location) is removed before upload.</p>
@@ -1661,7 +1715,15 @@ async function onUpload(e) {
     const medium = categoryById[meta.category].medium;
     if (COMMUNITY) {
       setUploadStatus('Uploading…');
-      await cloud.publishArtwork({ ...prepared, ...meta, medium });
+      const published = await cloud.publishArtwork({ ...prepared, ...meta, medium });
+      const extra = {
+        description: String(fd.get('description') || '').trim(),
+        dimensions: String(fd.get('dimensions') || '').trim(),
+        availability: String(fd.get('availability') || 'available'),
+      };
+      if (published?.id && (extra.description || extra.dimensions || extra.availability !== 'available')) {
+        await cloud.updateArtwork(published.id, { ...meta, medium, ...extra }).catch(() => toast('Published, but the description could not be saved. Edit the work to add it.'));
+      }
       await refreshCommunity();
       toast('Published. Your work is live for everyone.', { force: true });
     } else {
@@ -2057,7 +2119,9 @@ async function signedIn(user) {
   closeSheet();
   try {
     const imported = await syncAccount({ importGuest: true });
-    toast(imported ? `Welcome. ${imported} item${imported === 1 ? '' : 's'} from this device added to your account.` : 'Welcome to Abremi. Your votes now count.', { force: true, duration: 3500 });
+    const moved = movedCollections ? ` ${movedCollections} collection${movedCollections === 1 ? '' : 's'} moved to your account.` : '';
+    movedCollections = 0;
+    toast(imported ? `Welcome. ${imported} item${imported === 1 ? '' : 's'} from this device added to your account.${moved}` : `Welcome to Abremi. Your votes now count.${moved}`, { force: true, duration: 3500 });
   } catch {
     toast('Signed in, but your account could not be loaded. Reload to try again.', { force: true });
   }
@@ -2076,6 +2140,8 @@ function signedOut() {
   isAdmin = false;
   adminData = null;
   state.applications = [];
+  state.collections = (state.collections || []).filter((c) => !c.server); // account collections stay with the account
+  sharedCollections.clear();
   Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
   state.user = { ...state.user, role: 'fan', name: 'You' };
   deck = [];
@@ -2104,6 +2170,7 @@ async function syncAccount({ importGuest = false } = {}) {
   state.user = { ...state.user, name: profile.name, country: profile.country, role: profile.role, publicLeaderboards: profile.public_leaderboards !== false };
   memberCache.clear();
   // Critic & Collector applications (older databases without the feature simply return none).
+  await syncCollections();
   const [apps, admin] = await Promise.all([cloud.myApplications().catch(() => []), cloud.isAdmin().catch(() => false)]);
   const before = new Map((state.applications || []).map((a) => [a.id, a.status]));
   state.applications = apps;
@@ -2121,6 +2188,65 @@ async function syncAccount({ importGuest = false } = {}) {
   deck = [];
   await refreshCommunity();
   return imported;
+}
+
+/**
+ * Collections live with the account. Collections made on this device before signing in move to the
+ * account once (works that only exist on this device are left out). Databases without the
+ * collections tables keep collections on the device.
+ */
+async function syncCollections() {
+  let data;
+  try { data = await cloud.myCollections(); } catch { return; }
+  const local = (state.collections || []).filter((c) => !c.server);
+  let moved = 0;
+  for (const c of local) {
+    try {
+      const row = await cloud.createCollection({ name: c.name.slice(0, 60), isPrivate: c.private !== false });
+      for (const id of c.ids.filter((x) => world.artworkById[x])) await cloud.addToCollection(row.id, id).catch(() => {});
+      moved++;
+    } catch { /* keep going: one bad name shouldn't stop the rest */ }
+  }
+  if (moved) data = await cloud.myCollections().catch(() => data);
+  state.collections = collectionsToState(data.collections, data.items);
+  movedCollections = moved; // mentioned in the welcome message
+}
+let movedCollections = 0;
+const syncedCollections = () => COMMUNITY && me && cloud?.createCollection;
+
+// Shared collections (#collection/<id>), fetched on demand.
+const sharedCollections = new Map();
+function renderSharedCollection(root) {
+  const id = route().param;
+  if (COMMUNITY && !cloud) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 6 })}</div>`; return; } // still connecting
+  const own = me && state.account?.id === me.id ? state.collections.find((c) => c.id === id && c.server) : null;
+  const entry = own
+    ? { data: { id, name: own.name, description: own.description, is_private: own.private, owner_name: state.user.name, mine: true, items: own.ids } }
+    : sharedCollections.get(id);
+  if (!entry || (!entry.loading && Date.now() - entry.at > 10_000)) { // the curator may have changed it since
+    sharedCollections.delete(id);
+    sharedCollections.set(id, { loading: true });
+    root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 6 })}</div>`;
+    (cloud?.publicCollection ? cloud.publicCollection(id) : Promise.resolve(null))
+      .then((data) => sharedCollections.set(id, { data, at: Date.now() }))
+      .catch(() => sharedCollections.set(id, { data: null, error: true, at: Date.now() }))
+      .finally(() => { if (route().name === 'collection' && route().param === id) renderView(); });
+    return;
+  }
+  if (entry.loading) return;
+  const c = entry.data;
+  if (!c) {
+    root.innerHTML = `<div class="shell">${EmptyState({ icon: 'lock', title: entry.error ? 'Could not load this collection' : 'This collection is private', body: entry.error ? 'Check your connection and try again.' : 'Only its curator can see it. They may have made it private.', action: '<a class="btn btn-secondary" href="#collections"><span>Collections</span></a>' })}</div>`;
+    return;
+  }
+  const works = (c.items || []).map((x) => world.artworkById[x]).filter(Boolean);
+  root.innerHTML = `<div class="shell shared-collection">
+    <header class="page-head"><p class="eyebrow">${c.is_private ? `${Icon('lock', { size: 12 })} Private collection` : 'Collection'} · curated by ${esc(c.owner_name || 'a member')}</p>
+      <h1 class="display-lg">${esc(c.name)}</h1>${c.description ? `<p class="lede">${esc(c.description)}</p>` : ''}
+      <div class="detail-actions">${!c.is_private ? PremiumButton('Share', { act: 'share-collection', variant: 'secondary', icon: 'share', attrs: `data-v="${esc(c.id)}"` }) : ''}
+        ${c.mine ? PremiumButton('Edit', { act: 'edit-collection', variant: 'ghost', icon: 'pen', attrs: `data-v="${esc(c.id)}"` }) : ''}</div></header>
+    ${works.length ? ArtworkGrid(works.map((w) => card(w))) : EmptyState({ icon: 'folderPlus', title: 'No works here yet' })}
+  </div>`;
 }
 
 async function refreshCommunity() {
@@ -2237,6 +2363,71 @@ const ACTIONS = {
   artist: (el) => { closePopovers(); openArtist(el.dataset.id); },
   back: () => (history.length > 1 ? history.back() : (location.hash = 'artists')),
   'artist-tab': (el) => { artistTab = el.dataset.v; renderView(); },
+  'share-artwork': async (el) => {
+    const w = world.artworkById[el.dataset.id];
+    const url = `${location.origin}${location.pathname}#art/${encodeURIComponent(el.dataset.id)}`;
+    try {
+      if (navigator.share) await navigator.share({ title: `${w?.title || 'Artwork'} on Abremi`, url });
+      else { await navigator.clipboard.writeText(url); toast('Link copied', { force: true }); }
+    } catch { /* share sheet dismissed */ }
+  },
+  'edit-artwork': (el) => {
+    const w = world.artworkById[el.dataset.id];
+    if (w && isMine(w)) openSheet(() => artworkEditForm(w));
+  },
+  'save-artwork': async (el) => {
+    const id = $('#artwork-edit-form')?.dataset.id;
+    const w = world.artworkById[id];
+    if (!w) return;
+    const v = (k) => ($(`#edit-${k}`)?.value || '').trim();
+    const fields = {
+      title: v('title'), category: v('category'), style: v('style'), medium: v('medium'), year: Number(v('year')) || w.year,
+      price: Number(v('price')) || w.price, description: v('description'), dimensions: v('dimensions'), availability: v('availability'),
+    };
+    const fail = (msg) => { const e = $('#edit-error'); e.textContent = msg; e.hidden = false; };
+    const problems = validateUpload({ title: fields.title, category: fields.category, style: fields.style, price: fields.price, year: fields.year, fileType: 'image/webp', fileSize: 1 });
+    if (problems.length) return fail(problems[0]);
+    el.disabled = true;
+    try {
+      await cloud.updateArtwork(id, fields);
+      await refreshCommunity();
+      closeSheet();
+      toast('Saved.', { force: true });
+      renderView();
+    } catch (e) {
+      el.disabled = false;
+      fail(e?.message || 'Could not save. Try again.');
+    }
+  },
+  'edit-artist-profile': () => {
+    if (COMMUNITY && !me) return openSignIn();
+    portraitChoice = null;
+    openSheet(() => artistProfileForm(world.artistById[myArtistId()] || { name: state.user.name }));
+  },
+  'save-artist-profile': async (el) => {
+    const v = (k) => ($(`#profile-${k}`)?.value || '').trim();
+    const fields = { bio: v('bio'), statement: v('statement'), website: v('website'), instagram: v('instagram').replace(/^@/, ''), city: v('city') };
+    const fail = (msg) => { const e = $('#profile-error'); e.textContent = msg; e.hidden = false; };
+    const problem = validateArtistProfile(fields);
+    if (problem) return fail(problem);
+    const current = world.artistById[myArtistId()];
+    el.disabled = true;
+    try {
+      let avatarPath = $('#portrait-remove')?.checked ? null : current?.avatarPath || null;
+      if (portraitChoice) {
+        const prepared = await prepareImage(portraitChoice);
+        avatarPath = await cloud.uploadPortrait(prepared.thumb);
+      }
+      await cloud.updateArtistProfile({ ...fields, avatarPath });
+      await refreshCommunity();
+      closeSheet();
+      toast('Your artist profile is updated.', { force: true });
+      renderView();
+    } catch (e) {
+      el.disabled = false;
+      fail(e?.message || 'Could not save your profile. Try again.');
+    }
+  },
   'share-artist': async (el) => {
     const a = world.artistById[el.dataset.id];
     const url = `${location.origin}${location.pathname}#artist/${encodeURIComponent(el.dataset.id)}`;
@@ -2289,10 +2480,21 @@ const ACTIONS = {
   'add-to-collection': (el) => openSheet(() => addToCollectionSheet(el.dataset.id)),
   'new-collection': (el) => { newCollectionFor = el.dataset.id || null; openSheet(newCollectionSheet); setTimeout(() => $('#collection-name')?.focus(), 50); },
   'collection-preset': (el) => { const i = $('#collection-name'); i.value = el.dataset.v; i.focus(); },
-  'collection-create': () => {
-    const name = ($('#collection-name')?.value || '').trim().slice(0, 40);
+  'collection-create': async (el) => {
+    const name = ($('#collection-name')?.value || '').trim().slice(0, 60);
     if (!name) return toast('Give the collection a name.', { force: true });
     const c = { id: `c${Date.now().toString(36)}`, name, private: $('#collection-private')?.checked !== false, ids: newCollectionFor ? [newCollectionFor] : [], at: Date.now() };
+    if (syncedCollections()) {
+      el.disabled = true;
+      try {
+        const row = await cloud.createCollection({ name, isPrivate: c.private });
+        Object.assign(c, { id: row.id, server: true });
+        if (newCollectionFor) await cloud.addToCollection(row.id, newCollectionFor);
+      } catch (e) {
+        el.disabled = false;
+        return toast(e?.message || 'Could not create the collection.', { force: true });
+      }
+    }
     state.collections.push(c);
     saveState(state);
     toast(`Created “${name}”${newCollectionFor ? ' with this work' : ''}`, { force: true });
@@ -2306,23 +2508,64 @@ const ACTIONS = {
     const c = state.collections.find((x) => x.id === el.dataset.v);
     if (!c) return;
     const id = el.dataset.id;
-    c.ids = c.ids.includes(id) ? c.ids.filter((x) => x !== id) : [id, ...c.ids];
+    const adding = !c.ids.includes(id);
+    c.ids = adding ? [id, ...c.ids] : c.ids.filter((x) => x !== id);
     saveState(state);
+    if (c.server) remote(() => (adding ? cloud.addToCollection(c.id, id) : cloud.removeFromCollection(c.id, id)));
     checkAchievements();
     refresh();
   },
   'open-user-collection': (el) => openSheet(() => userCollectionSheet(el.dataset.v), { wide: true }),
-  'collection-private': (el) => { const c = state.collections.find((x) => x.id === el.dataset.v); if (c) { c.private = !c.private; saveState(state); refresh(); } },
+  'collection-private': (el) => {
+    const c = state.collections.find((x) => x.id === el.dataset.v);
+    if (!c) return;
+    c.private = !c.private;
+    saveState(state);
+    if (c.server) remote(() => cloud.updateCollection(c.id, { isPrivate: c.private }));
+    if (c.server && !c.private) toast('Shared: anyone with the link can see this collection.', { force: true });
+    refresh();
+  },
+  'share-collection': async (el) => {
+    const c = state.collections.find((x) => x.id === el.dataset.v) || sharedCollections.get(el.dataset.v)?.data;
+    const url = `${location.origin}${location.pathname}#collection/${encodeURIComponent(el.dataset.v)}`;
+    try {
+      if (navigator.share) await navigator.share({ title: `${c?.name || 'A collection'} on Abremi`, url });
+      else { await navigator.clipboard.writeText(url); toast('Link copied', { force: true }); }
+    } catch { /* share sheet dismissed */ }
+  },
+  'edit-collection': (el) => {
+    const c = state.collections.find((x) => x.id === el.dataset.v);
+    if (c) openSheet(() => collectionEditForm(c));
+  },
+  'save-collection': (el) => {
+    const c = state.collections.find((x) => x.id === el.dataset.v);
+    const name = ($('#collection-edit-name')?.value || '').trim();
+    if (!c) return;
+    if (!name) return toast('Give the collection a name.', { force: true });
+    c.name = name.slice(0, 60);
+    c.description = ($('#collection-edit-description')?.value || '').trim().slice(0, 500);
+    saveState(state);
+    if (c.server) remote(() => cloud.updateCollection(c.id, { name: c.name, description: c.description }));
+    sharedCollections.delete(c.id);
+    closeSheet();
+    renderView();
+  },
   'collection-delete': (el) => {
     const c = state.collections.find((x) => x.id === el.dataset.v);
     if (!c || !confirm(`Delete the collection “${c.name}”? The works stay on Abremi.`)) return;
     state.collections = state.collections.filter((x) => x !== c);
     saveState(state);
+    if (c.server) remote(() => cloud.deleteCollection(c.id));
     closeSheet();
     renderView();
   },
-  buy: (el) => el.dataset.id && world.artworkById[el.dataset.id] && openSheet(() => buySheet(el.dataset.id)),
-  contact: (el) => openSheet(() => contactSheet(el.dataset.id)),
+  buy: (el) => {
+    const w = world.artworkById[el.dataset.id];
+    if (!w) return;
+    if (w.sample) return toast('Sample works aren’t for sale.');
+    openSheet(() => buySheet(w.id));
+  },
+  contact: (el) => (world.artistById[el.dataset.id]?.sample ? toast('Sample artists can’t be contacted.') : openSheet(() => contactSheet(el.dataset.id))),
   review: (el) => {
     const id = el.dataset.id;
     if (state.reviews.some((r) => r.artworkId === id)) return toast('You have already reviewed this work.');
@@ -2368,6 +2611,7 @@ const ACTIONS = {
     refresh();
   },
   sponsor: (el) => {
+    if (world.artistById[el.dataset.id]?.sample) return toast('Sample artists can’t be sponsored.');
     state.messages.push({ artistId: el.dataset.id, text: '[sponsorship request]', at: Date.now() });
     commit();
     updateNotificationDot();
@@ -2417,14 +2661,14 @@ const ACTIONS = {
       renderView();
       pendingWrites++;
       cloud.updateProfile({ role: next })
-        .then(() => toast(`You’re now a ${role().label}. Your votes count ×${role().weight}.`))
+        .then(() => toast(`You’re now ${/^[AEIOU]/.test(role().label) ? 'an' : 'a'} ${role().label}. Your votes count ×${role().weight}.`))
         .catch((e) => { state.user.role = before; commit(); renderView(); toast(e?.message || 'Could not change your role.'); })
         .finally(() => { pendingWrites--; });
       return;
     }
     state.user.role = next;
     commit();
-    toast(`You’re now a ${role().label}. Your votes count ×${role().weight}.`);
+    toast(`You’re now ${/^[AEIOU]/.test(role().label) ? 'an' : 'a'} ${role().label}. Your votes count ×${role().weight}.`);
     renderView();
   },
   'set-plan': (el) => { state.user.plan = el.dataset.v; commit(); toast(`Switched to ${PLANS.find((p) => p.id === el.dataset.v).name} (demo, no charge)`); renderView(); },
@@ -2485,7 +2729,18 @@ document.addEventListener('click', (e) => {
   fn(el, e);
 });
 
+document.addEventListener('change', (e) => {
+  if (e.target.id !== 'portrait-file') return;
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (!/^image\//.test(file.type)) return toast('Choose a photo.', { force: true });
+  portraitChoice = file;
+  const url = URL.createObjectURL(file);
+  $('#portrait-preview').innerHTML = `<span class="avatar avatar-xl has-photo"><img src="${url}" alt=""></span>`;
+});
 document.addEventListener('input', (e) => {
+  const count = e.target.id ? document.getElementById(`${e.target.id}-count`) : null;
+  if (count?.dataset.max) count.textContent = `${e.target.value.length} / ${count.dataset.max}`;
   if (e.target.id === 'apply-statement') $('#apply-count').textContent = `${e.target.value.trim().length} / 1500`;
 });
 
