@@ -94,8 +94,10 @@ function breakdown(items) {
  * The Studio page. s: studio_analytics() result (or null), reports: my_weekly_reports(),
  * ctx: { thumb(id) → HTML, days }.
  */
-export function studioPage(s, reports, { thumb = (_id) => '', days = 30 } = {}) {
-  const periods = [7, 30, 90].map((d) => `<button role="tab" aria-selected="${d === days}" class="${d === days ? 'is-on' : ''}" data-act="studio-days" data-v="${d}">${d} days</button>`).join('');
+export function studioPage(s, reports, { thumb = (_id) => '', days = 30, maxDays = 90 } = {}) {
+  const periods = [7, 30, 90, 365].map((d) => (d > maxDays
+    ? `<a class="seg-locked" href="#plans" title="A year of analytics comes with Artist Pro and Elite">1 year · Pro</a>`
+    : `<button role="tab" aria-selected="${d === days}" class="${d === days ? 'is-on' : ''}" data-act="studio-days" data-v="${d}">${d === 365 ? '1 year' : `${d} days`}</button>`)).join('');
   const head = `<header class="page-head page-head-row"><div><p class="eyebrow">Artist Studio</p><h1 class="display-lg">Your audience</h1>
     <p class="muted">Only what was actually recorded: impressions, views and visits once per person per day, plus likes, saves and follows. Your own views never count.</p></div></header>
     <div class="seg seg-gold studio-periods" role="tablist">${periods}</div>`;

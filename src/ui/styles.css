@@ -372,7 +372,9 @@ button.tag:hover { color: var(--text); }
 
 .footer { display: flex; gap: 20px; align-items: baseline; flex-wrap: wrap; margin-top: clamp(64px, 9vw, 120px); padding: 32px 0 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 .footer .brand-word { color: var(--text); font-size: 18px; }
-.footer .link { margin-left: auto; color: var(--text-2); font-weight: 400; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-left: auto; }
+.footer-links a, .footer .link { color: var(--text-2); font-weight: 400; }
+.footer-links a:hover, .footer .link:hover { color: var(--text); }
 
 /* ——— Rankings ——— */
 .rank-list { display: grid; }
@@ -1338,3 +1340,29 @@ div.rank-row:hover { background: transparent; }
 .opportunity p { margin: 0; overflow-wrap: anywhere; }
 .opportunity-fee { display: inline-flex; align-items: center; gap: 6px; color: var(--abremi-success); font-weight: 600; font-size: 0.9rem; }
 .opportunity-fee.has-fee { color: var(--abremi-warning, #E0B060); }
+
+/* ——— Phase 6: plans, galleries, beta tools ——— */
+.plans-page .notice { margin: 0 0 18px; }
+.plan-grid-4 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
+.plan-price .plan-tba { margin: 0; font-size: 13px; letter-spacing: .02em; }
+.plan-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 18px; color: var(--text-2); }
+.plan-status .icon { color: var(--gold); }
+.plain-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 8px; color: var(--text-2); }
+.plain-list .icon { color: var(--gold); vertical-align: -3px; }
+.plan-badge { display: inline-block; vertical-align: middle; margin-left: 6px; padding: 2px 10px; border-radius: var(--r-pill); border: 1px solid var(--abremi-border-gold); color: var(--gold); font-family: var(--sans); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+.verified-mark { display: inline-flex; align-items: center; gap: 3px; color: var(--gold); font-size: 12px; }
+.seg-locked { display: flex; flex: 1; align-items: center; justify-content: center; height: 34px; padding: 0 12px; border-radius: var(--r-pill); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.seg-locked:hover { color: var(--gold); }
+.gallery-page .btn { margin-top: 14px; }
+.admin-jump { margin: 0 0 18px; }
+.search-row, .invite-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 0 0 14px; }
+.search-row .field { flex: 1 1 220px; margin: 0; }
+.invite-form .field { flex: 1 1 120px; margin: 0; }
+.grant-list, .error-list { list-style: none; padding: 0; margin: 0 0 16px; }
+.grant-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.grant-row .rank-text { flex: 1 1 200px; min-width: 0; }
+.grant-row select, .grant-row input { min-height: 38px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; max-width: 100%; }
+.invite-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
+.beta-toggle { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin: 0 0 16px; }
+.error-list li { display: grid; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.error-list small { color: var(--muted); }

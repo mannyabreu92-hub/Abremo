@@ -7,11 +7,11 @@
   "scripts": {
     "start": "node scripts/serve.js",
     "test": "node --test tests/*.test.js",
-    "check": "node --check src/ui/app.js && node --check src/ui/components.js && node --check src/ui/art.js && node --check src/ui/store.js && node --check src/ui/cloud.js && node --check src/config.js && node --check sw.js && node --check src/ui/pwa.js && node --check src/ui/images.js && node --check src/ui/views/forms.js && node --check src/ui/views/explainers.js && node --check src/ui/views/arena.js && node --check src/ui/views/studio.js && node --check src/ui/views/radar.js && node --check src/ui/views/careers.js && node --check api/coach.js && npm run lint --silent && npm run typecheck --silent && npm test --silent",
+    "check": "node --check src/ui/app.js && node --check src/ui/components.js && node --check src/ui/art.js && node --check src/ui/store.js && node --check src/ui/cloud.js && node --check src/config.js && node --check sw.js && node --check src/ui/pwa.js && node --check src/ui/images.js && node --check src/ui/views/forms.js && node --check src/ui/views/explainers.js && node --check src/ui/views/arena.js && node --check src/ui/views/studio.js && node --check src/ui/views/radar.js && node --check src/ui/views/careers.js && node --check src/ui/views/membership.js && node --check src/ui/views/admin.js && node --check api/coach.js && node --check api/billing.js && node --check api/stripe-webhook.js && npm run lint --silent && npm run typecheck --silent && npm test --silent",
     "build": "node scripts/write-config.js",
     "gen:sql": "node scripts/gen-seed-sql.js",
     "test:db": "node --test tests/db.test.js",
-    "test:e2e": "node tests/e2e/phase1.e2e.cjs && node tests/e2e/community.e2e.cjs && node tests/e2e/uploads.e2e.cjs && node tests/e2e/culture.e2e.cjs && node tests/e2e/members.e2e.cjs && node tests/e2e/applications.e2e.cjs && node tests/e2e/live.e2e.cjs && node tests/e2e/integrity.e2e.cjs && node tests/e2e/arena.e2e.cjs && node tests/e2e/studio.e2e.cjs && node tests/e2e/radar.e2e.cjs && node tests/e2e/careers.e2e.cjs && node tests/e2e/pwa.e2e.cjs",
+    "test:e2e": "node tests/e2e/phase1.e2e.cjs && node tests/e2e/community.e2e.cjs && node tests/e2e/uploads.e2e.cjs && node tests/e2e/culture.e2e.cjs && node tests/e2e/members.e2e.cjs && node tests/e2e/applications.e2e.cjs && node tests/e2e/live.e2e.cjs && node tests/e2e/integrity.e2e.cjs && node tests/e2e/arena.e2e.cjs && node tests/e2e/studio.e2e.cjs && node tests/e2e/radar.e2e.cjs && node tests/e2e/careers.e2e.cjs && node tests/e2e/membership.e2e.cjs && node tests/e2e/pwa.e2e.cjs",
     "gen:sw": "node scripts/gen-sw.js",
     "gen:icons": "node scripts/gen-icons.cjs",
     "lint": "eslint .",
