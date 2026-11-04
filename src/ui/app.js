@@ -1961,12 +1961,17 @@ async function deleteArtwork(id) {
 function aboutSheet() {
   return `<div class="about">
     <p class="eyebrow">About</p><h2 class="display-md" id="modal-title">Abremi</h2>
-    <p class="lede">The Tinder and TikTok of art, curated like a private gallery.</p>
-    <p>People don't wake up saying “I want to upload art.” They wake up saying <em>“Show me something amazing.”</em> Abremi makes finding art addictive. You swipe through paintings, photography, sculpture, street art, NFTs and AI art, discover emerging artists, and your taste moves the rankings.</p>
-    <h3 class="sub-head">Weighted influence</h3>
-    <p>100 fan likes (100) + 20 artist likes (60) + 10 critic likes (50) + 5 collector likes (45) = <b>255 influence</b>. Collectors and critics shape the rankings, so throwaway accounts barely move them.</p>
-    <h3 class="sub-head">Artwork first</h3>
-    <p>People fall in love with a painting before they fall in love with the painter, so the leading ranking is of works, not names.</p>
+    <p class="lede about-lede">A gallery without walls, where every work is seen on its own merit.</p>
+    <p>Abremi was made for the moment a work of art stops you. Paintings, photography, sculpture, street art and digital work arrive one at a time and are given the whole screen, the way a curator would hang them in a quiet room. What moves you, you keep. What you keep shapes what others discover next.</p>
+    <h3 class="sub-head">Taste with weight</h3>
+    <p>Every appreciation counts, and every voice is weighed by experience: ${ROLES.map((r) => `${esc(r.label)} ×${r.weight}`).join(', ')}. Critics and collectors are verified before their judgement carries more weight, so the rankings reflect considered taste rather than noise.</p>
+    <h3 class="sub-head">The work comes first</h3>
+    <p>We fall in love with a painting before we know who painted it. So the rankings begin with works, not names, and an unknown artist’s first piece stands beside an established name on equal terms.</p>
+    <h3 class="sub-head">Honest by design</h3>
+    <p>${COMMUNITY
+      ? 'Nothing on Abremi can be bought into the rankings. Every number you see comes from real members, how each score is calculated is published, and no one’s own work ever counts in their favour.'
+      : 'This is a preview: the activity you see is simulated on this device. With accounts, every number comes from real members, and nothing can be bought into the rankings.'}</p>
+    <p class="about-sign">Look closely. Keep what moves you. Help the right work find its audience.</p>
   </div>`;
 }
 

@@ -1266,3 +1266,7 @@ div.rank-row:hover { background: transparent; }
 .report { padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--abremi-surface); }
 .report-items { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 6px; }
 .report-items small { color: var(--muted); }
+
+/* ——— About ——— */
+.about .about-lede { font-family: 'Playfair Display', Georgia, serif; font-style: italic; font-size: 1.3rem; line-height: 1.45; color: var(--text); }
+.about .about-sign { margin-top: 10px; padding-top: 16px; border-top: 1px solid var(--abremi-border-gold); font-family: 'Playfair Display', Georgia, serif; font-style: italic; color: var(--gold); }

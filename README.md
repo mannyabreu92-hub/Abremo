@@ -1,6 +1,6 @@
 # Abremi
 
-**The Tinder and TikTok of Art.** Instead of matching people, users match with art.
+**A gallery without walls, where every work is seen on its own merit.** People discover art one work at a time, and their considered taste shapes what others discover next.
 
 Abremi is a mobile-first web app where people swipe through paintings, illustrations, sculpture,
 photography, NFTs, digital art, street art, AI art and mixed media. Every swipe trains your feed and

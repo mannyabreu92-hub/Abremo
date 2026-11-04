@@ -1,7 +1,7 @@
 {
   "name": "abremi",
   "version": "0.1.0",
-  "description": "Abremi \u2014 swipe, discover and rank art. The Tinder and TikTok of art.",
+  "description": "Abremi \u2014 a gallery without walls: discover, collect and rank contemporary art.",
   "private": true,
   "type": "module",
   "scripts": {
