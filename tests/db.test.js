@@ -1191,7 +1191,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
       where n.nspname = 'public' and p.prosecdef and p.prorettype <> 'trigger'::regtype and has_function_privilege('anon', p.oid, 'execute')`).split(',');
     const PUBLIC_FUNCTIONS = ['app_flags', 'arena', 'artist_achievements', 'artist_passport', 'chart_baseline', 'check_invite', 'community_snapshot',
       'competition_detail', 'drop_detail', 'drops_overview', 'gallery_page', 'log_client_error', 'member_leaderboards', 'opportunities_list',
-      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge'];
+      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge', 'artists_accepting_payments'];
     const unexpected = anonCan.filter((f) => !PUBLIC_FUNCTIONS.includes(f));
     assert.deepEqual(unexpected, [], 'privileged functions guests can run that aren’t on the public list');
     // Every moderator function checks is_admin() itself (the app hiding a button is not a permission).
@@ -1418,6 +1418,82 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.ok(Number(as(P[1], 'select admin_publish_index()')) >= 0);
     assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public' and p.proname in ('compute_index', 'index_week', 'artist_index_badge') and p.prosrc ~* '(subscriptions|current_plan|plans\\b|plan_badges)'`), '', 'the Index never reads plans');
+  });
+
+  // ——— 0017: checkout, orders, editions ———
+  await t.test('checkout: off by default; only payable artists; one buyer at a time; only the signed webhook marks it paid, once, for the right amount', () => {
+    const w = psql(`select id from artworks where owner_id = '${E}' and not hidden and (release_at is null or release_at <= now()) and drop_id is null order by id desc limit 1`);
+    psql(`update artworks set availability = 'available', price = 400, edition_size = null where id = '${w}'`);
+    fails(C, `select begin_purchase('${w}')`, /isn’t switched on/);
+    psql('update app_settings set sales_enabled = true');
+    fails(C, `select begin_purchase('${w}')`, /can’t take payments yet/);
+    fails(E, `select set_payout_account('${E}', 'acct_test1', true, true, true)`, /permission denied/);
+    as('service_role', `select set_payout_account('${E}', 'acct_test1', true, true, true)`);
+    assert.ok(JSON.parse(as('anon', 'select artists_accepting_payments()')).includes(`m_${E}`));
+    assert.equal(JSON.parse(as(E, 'select my_payout_status()')).charges_enabled, true);
+    fails(E, `select begin_purchase('${w}')`, /your own work/);
+    fails(C, `select begin_purchase('${seed.artworks[0].id}')`, /not found/);
+    const order = JSON.parse(as(C, `select begin_purchase('${w}')`));
+    assert.deepEqual([order.amount_cents, order.fee_cents], [40000, 8000], '20% commission');
+    fails(B, `select begin_purchase('${w}')`, /already buying/);
+    fails(C, `select order_payout_target('${order.order_id}')`, /permission denied/);
+    assert.equal(as('service_role', `select order_payout_target('${order.order_id}')`), 'acct_test1');
+    as('service_role', `select attach_checkout_session('${order.order_id}', 'cs_test_1')`);
+    fails(C, `select complete_order('cs_test_1', 'pi_1', 40000, null)`, /permission denied/);
+    fails('service_role', `select complete_order('cs_test_1', 'pi_1', 39999, null)`, /Amount mismatch/);
+    assert.equal(as('service_role', `select complete_order('cs_test_1', 'pi_1', 40000, '{"name": "Cy Park", "address": {"city": "Seoul"}}')`), 'paid');
+    assert.equal(as('service_role', `select complete_order('cs_test_1', 'pi_1', 40000, null)`), 'already paid');
+    assert.equal(psql(`select availability from artworks where id = '${w}'`), 'sold');
+    assert.match(as(E, `select title from notifications where kind = 'sale' order by created_at desc limit 1`), /You sold/);
+    const sales = JSON.parse(as(E, 'select my_orders()')).sales;
+    assert.equal(sales[0].shipping.name, 'Cy Park', 'the artist sees where to ship');
+    assert.equal(JSON.parse(as(C, 'select my_orders()')).purchases[0].status, 'paid');
+    noRowsFor(B, `select count(*) from orders where id = '${order.order_id}'`);
+    noRowsFor(C, `with u as (update orders set status = 'delivered' where id = '${order.order_id}' returning 1) select count(*) from u`);
+    assert.equal(JSON.parse(as('anon', `select artist_passport('m_${E}')`)).verified_sales, 1, 'verified on the Passport');
+
+    // Fulfilment and disputes
+    fails(C, `select mark_shipped('${order.order_id}', 'UPS', '1Z999')`, /can’t be marked shipped/);
+    fails(E, `select mark_shipped('${order.order_id}', 'UPS', '')`, /tracking number/);
+    as(E, `select mark_shipped('${order.order_id}', 'UPS', '1Z999AA1')`);
+    fails(E, `select confirm_delivery('${order.order_id}')`, /can’t be marked delivered/);
+    as(C, `select confirm_delivery('${order.order_id}')`);
+    fails(C, `select open_dispute('${order.order_id}', 'bad')`, /at least 10/);
+    as(C, `select open_dispute('${order.order_id}', 'The canvas arrived torn at the corner.')`);
+    fails(B, 'select admin_disputes()', /Admins only|permission denied/);
+    assert.equal(JSON.parse(as(P[1], 'select admin_disputes()'))[0].reason, 'The canvas arrived torn at the corner.');
+    as(P[1], `select resolve_dispute('${order.order_id}', true, 'Refund approved')`);
+    assert.equal(as('service_role', `select refund_order('pi_1')`), 'refunded');
+    assert.equal(JSON.parse(as(C, 'select my_orders()')).purchases[0].status, 'refunded');
+    assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log()`), /order\.refund_approved/);
+  });
+
+  await t.test('editions: artist-made prints, one numbered print per order, sold out at the edition size', () => {
+    const w = psql(`select id from artworks where owner_id = '${E}' and not hidden and (release_at is null or release_at <= now()) and drop_id is null and availability <> 'sold' order by id limit 1`);
+    psql(`update artworks set availability = 'available', price = 50 where id = '${w}'`);
+    fails(C, `select set_edition('${w}', 5)`, /Not your artwork/);
+    fails(E, `select set_edition('${w}', 1)`, /2 to 500/);
+    as(E, `select set_edition('${w}', 2)`);
+    const buy = (who, n) => {
+      const o = JSON.parse(as(who, `select begin_purchase('${w}')`));
+      as('service_role', `select attach_checkout_session('${o.order_id}', 'cs_ed_${n}')`);
+      assert.equal(as('service_role', `select complete_order('cs_ed_${n}', 'pi_ed_${n}', 5000, null)`), 'paid');
+      return o;
+    };
+    buy(C, 1);
+    assert.equal(psql(`select editions_sold || '|' || availability from artworks where id = '${w}'`), '1|available', 'still for sale');
+    buy(B, 2);
+    assert.equal(psql(`select editions_sold || '|' || availability from artworks where id = '${w}'`), '2|sold', 'sold out');
+    assert.equal(psql(`select string_agg(edition_number::text, ',' order by edition_number) from orders where artwork_id = '${w}'`), '1,2');
+    fails(E, `select set_edition('${w}', null)`, /have been sold/);
+    psql('update app_settings set sales_enabled = false');
+  });
+
+  await t.test('0017 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0017_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('orders', 'payout_accounts')`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('orders', 'payout_accounts')`), '2');
   });
 
   await t.test('0016 can be undone, and setup.sql re-applies it', () => {

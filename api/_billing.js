@@ -13,8 +13,12 @@ export function billingConfig(env) {
   const prices = { pro: env.STRIPE_PRICE_PRO, elite: env.STRIPE_PRICE_ELITE, gallery: env.STRIPE_PRICE_GALLERY };
   return {
     enabled: env.BILLING_ENABLED === 'true' && Boolean(env.STRIPE_SECRET_KEY),
+    // Artwork sales (Stripe Connect), switched on separately from subscriptions.
+    salesEnabled: env.SALES_ENABLED === 'true' && Boolean(env.STRIPE_SECRET_KEY),
     secretKey: env.STRIPE_SECRET_KEY || '',
     webhookSecret: env.STRIPE_WEBHOOK_SECRET || '',
+    // Stripe signs events from connected accounts (account.updated) with a separate Connect endpoint secret.
+    connectWebhookSecret: env.STRIPE_CONNECT_WEBHOOK_SECRET || '',
     prices,
     /** @param {string} priceId */
     planForPrice: (priceId) => /** @type {string | null} */ (Object.entries(prices).find(([, id]) => id && id === priceId)?.[0] || null),

@@ -1496,3 +1496,9 @@ div.rank-row:hover { background: transparent; }
 .rank-score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--abremi-gold); font-size: 14px; }
 .index-badge-preview { display: block; margin: 6px 0 14px; max-width: 100%; height: 58px; }
 .index-badge-card textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* Orders */
+.order-card { display: grid; gap: 6px; padding: 16px 18px; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.02); }
+.order-card h3 { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 19px; }
+.order-card p { margin: 0; }
+.payout-card .btn { justify-self: start; }

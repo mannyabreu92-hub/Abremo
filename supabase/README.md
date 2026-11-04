@@ -16,6 +16,8 @@ Abremi runs in two modes:
 | `migrations/0004_role_applications.sql` | Critic & Collector applications, the admin list, and the review functions |
 | `migrations/0006_profiles_artworks_collections.sql` | Audit trail, artist profiles, artwork details (description, size, availability), collections; the shared catalog starts every work at the same battle rating |
 | `migrations/down/0006_down.sql` | Undoes 0006 (drops its tables and columns, with their data, and restores the earlier functions). Not part of `setup.sql` |
+| `migrations/0017_checkout.sql` | Checkout (off until switched on): payout accounts, orders, 20% commission, editions, shipping and disputes, verified sales on the Passport |
+| `migrations/down/0017_down.sql` | Undoes 0017 |
 | `migrations/0016_index.sql` | The Abremi Index: weekly frozen charts (pg_cron every Monday 00:17 UTC), the archive, and artists' badges |
 | `migrations/down/0016_down.sql` | Undoes 0016 |
 | `migrations/0015_discovery_loop.sql` | Offers on purchase inquiries, waitlists, availability and price alerts, drop alerts for treasurers, collector interests |
@@ -118,6 +120,20 @@ Plans work now: moderators grant them from the moderator page (Plans → Grant a
 5. Buy and cancel a plan with Stripe's test cards, and check the plan appears and lapses on Plans.
 
 To switch payments off again at any time: `update app_settings set payments_enabled = false;` (or set `BILLING_ENABLED=false`).
+
+## Selling artworks (checkout)
+
+Built and **switched off**. Buyers pay with Stripe Checkout; artists are paid by **Stripe Connect Express** (Stripe verifies them and pays them directly; Abremi never holds their money) and Abremi keeps a **20% commission**. Artists ship and add tracking; buyers confirm delivery and can report a problem up to 14 days after; moderators decide (refunds are made in the Stripe dashboard and recorded automatically). Editions are prints the artist makes and ships (set the edition size when editing a work). **Taxes are not calculated by Abremi**: agree how sales tax/VAT is handled with your accountant before switching on.
+
+To switch on (test mode first):
+
+1. In Stripe, enable **Connect** (Express accounts) and complete the platform profile.
+2. Add a webhook endpoint `https://<your site>/api/stripe-webhook` for `checkout.session.completed` and `charge.refunded`, and a second endpoint (same URL, "Events on Connected accounts") for `account.updated`.
+3. In Vercel (Production): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (first endpoint), `STRIPE_CONNECT_WEBHOOK_SECRET` (second endpoint), `SUPABASE_SERVICE_ROLE_KEY`, `SITE_URL`, and `SALES_ENABLED=true`. Redeploy.
+4. In the Supabase SQL editor: `update app_settings set sales_enabled = true;`
+5. As an artist: Orders → Set up payouts (Stripe's test onboarding). As another member: buy with a test card (`4242 4242 4242 4242`), then ship, confirm delivery and try a refund.
+
+To switch off at any time: `update app_settings set sales_enabled = false;`
 
 ## Beta testing
 
