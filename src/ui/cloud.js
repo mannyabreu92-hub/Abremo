@@ -49,6 +49,11 @@ export async function createSupabaseCloud(url, key) {
       user = null;
     },
 
+    /** Top Collectors, Critics and Discoverers (display names and scores only). */
+    async leaderboards(country = null) {
+      return check(await sb.rpc('member_leaderboards', { p_country: country, p_limit: 50 }));
+    },
+
     async snapshot() {
       return check(await sb.rpc('community_snapshot'));
     },

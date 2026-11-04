@@ -5,6 +5,9 @@
 window.__abremiCloud = async () => {
   const { buildSeedWorld } = await import('/src/core/seed.js');
   const { battleResult, expectedScore } = await import('/src/core/elo.js');
+  const { memberBoards } = await import('/src/core/leaderboards.js');
+  let clock = Date.now();
+  const tick = () => ++clock;
   const seed = buildSeedWorld();
   const baseElo = Object.fromEntries(seed.artworks.map((w) => [w.id, w.elo]));
   const KEY = 'mockcloud';
@@ -16,7 +19,8 @@ window.__abremiCloud = async () => {
   let listener = () => {};
   const wait = () => new Promise((r) => setTimeout(r, 30));
   const needUser = () => { if (!user) throw new Error('Sign in first'); };
-  const profileOf = (db, id) => (db.profiles[id] ||= { id, name: id.split('@')[0].replace(/^u-/, ''), country: 'US', role: 'fan' });
+  // Same neutral default name as the database: never part of the email address.
+  const profileOf = (db, id) => (db.profiles[id] ||= { id, name: `Member ${[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(16).toUpperCase().slice(0, 4).padEnd(4, '0')}`, country: 'US', role: 'fan', public_leaderboards: true });
   window.__mockdb = { load, save };
 
   return {
@@ -48,6 +52,15 @@ window.__abremiCloud = async () => {
         uploads: db.uploads.slice().reverse(),
       };
     },
+    async leaderboards(country = null) {
+      await wait();
+      const db = load();
+      return memberBoards({
+        profiles: Object.values(db.profiles).map((p) => ({ id: p.id, name: p.name, country: p.country, role: p.role, public: p.public_leaderboards !== false })),
+        reactions: db.reactions.map((r) => ({ user: r.user_id, artwork: r.artwork_id, kind: r.kind, role: r.role, at: r.at || 0 })),
+        reviews: db.reviews.map((r) => ({ user: r.user_id, rating: r.rating })),
+      }, { me: user?.id || null, country });
+    },
     async profile() { needUser(); const db = load(); const p = profileOf(db, user.id); save(db); return p; },
     async mine() {
       await wait();
@@ -63,7 +76,7 @@ window.__abremiCloud = async () => {
       needUser(); await wait();
       const db = load();
       db.reactions = db.reactions.filter((r) => !(r.user_id === user.id && r.artwork_id === artwork_id));
-      if (kind) db.reactions.push({ user_id: user.id, artwork_id, kind, role: profileOf(db, user.id).role });
+      if (kind) db.reactions.push({ user_id: user.id, artwork_id, kind, role: profileOf(db, user.id).role, at: tick() });
       save(db);
     },
     async setFollow(artist_id, on) {
@@ -132,7 +145,7 @@ window.__abremiCloud = async () => {
       needUser(); await wait();
       const db = load();
       const role = profileOf(db, user.id).role;
-      for (const r of reactions) if (!db.reactions.some((x) => x.user_id === user.id && x.artwork_id === r.artwork_id)) db.reactions.push({ ...r, user_id: user.id, role });
+      for (const r of reactions) if (!db.reactions.some((x) => x.user_id === user.id && x.artwork_id === r.artwork_id)) db.reactions.push({ ...r, user_id: user.id, role, at: tick() });
       for (const f of follows) if (!db.follows.some((x) => x.user_id === user.id && x.artist_id === f.artist_id)) db.follows.push({ ...f, user_id: user.id, role });
       save(db);
     },

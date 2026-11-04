@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { battleResult, expectedScore } from '../src/core/elo.js';
 import { buildSeedWorld } from '../src/core/seed.js';
 import { seedSQL, setupSQL } from '../scripts/gen-seed-sql.js';
+import { memberBoards } from '../src/core/leaderboards.js';
 
 const flags = process.env.ABREMI_PG?.split(/\s+/).filter(Boolean);
 const skip = !flags && 'set ABREMI_PG to run database tests';
@@ -78,8 +79,11 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.equal(psql('select count(*) from artworks'), String(seed.artworks.length));
   });
 
-  await t.test('signing up creates a fan profile named after the email', () => {
-    assert.equal(as(A, 'select name || \'|\' || role from profiles'), 'ana|fan');
+  await t.test('signing up creates a fan profile with a neutral name (never part of the email)', () => {
+    const [name, role] = as(A, 'select name || \'|\' || role from profiles').split('|');
+    assert.match(name, /^Member [0-9A-F]{4}$/);
+    assert.ok(!name.toLowerCase().includes('ana'));
+    assert.equal(role, 'fan');
   });
 
   await t.test('people only see their own profile', () => {
@@ -98,7 +102,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
 
   await t.test('nobody can edit someone else\'s profile', () => {
     as(A, `update profiles set name = 'Hacked' where id = '${B}'`);
-    assert.equal(as(B, 'select name from profiles'), 'ben');
+    assert.match(as(B, 'select name from profiles'), /^Member [0-9A-F]{4}$/);
   });
 
   await t.test('reactions are stamped with the server-side role, never the client\'s', () => {
@@ -201,7 +205,8 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.match(id, /^u_[0-9a-f]{32}$/);
     assert.equal(artist, `m_${E}`);
     uploadId = id;
-    assert.equal(psql(`select name || '|' || country || '|' || owner_id from artists where id = 'm_${E}'`), `eve|US|${E}`);
+    const eveName = psql(`select name from profiles where id = '${E}'`);
+    assert.equal(psql(`select name || '|' || country || '|' || owner_id from artists where id = 'm_${E}'`), `${eveName}|US|${E}`);
     fails(E, `insert into artworks (id, artist_id, title, base_elo) values ('u_fake', 'm_${E}', 'Fake', 3000)`, /row-level security|permission denied/);
   });
 
@@ -211,7 +216,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     const snap = JSON.parse(as('anon', 'select community_snapshot()::text'));
     const up = snap.uploads.find((u) => u.id === uploadId);
     assert.deepEqual([up.artist_id, up.category, up.style, up.price, up.width, up.height, up.image_path], [`m_${E}`, 'oil', 'Abstract', 450, 1200, 1600, `${E}/a.webp`]);
-    assert.ok(snap.artists.some((a) => a.id === `m_${E}` && a.name === 'eve'));
+    assert.ok(snap.artists.some((a) => a.id === `m_${E}` && /^Member [0-9A-F]{4}$/.test(a.name)));
     assert.ok(snap.reactions.some((r) => r.a === uploadId && r.k === 'like' && r.n === 1));
     psql(`update battle_votes set created_at = now() - interval '1 hour'`);
     const loserBefore = Number(psql(`select coalesce((select rating from artwork_ratings where artwork_id = '${w2.id}'), ${w2.elo})`));
@@ -254,6 +259,69 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     put(E, `${E}/z.webp`);
     put(E, `${E}/z-thumb.webp`);
     assert.throws(() => publish(E, { image: `${E}/z.webp`, thumb: `${E}/z-thumb.webp` }), (e) => /Daily limit reached/.test(String(e.stderr)));
+  });
+
+  // ——— Member leaderboards ———
+  const L = Array.from({ length: 6 }, (_, i) => `00000000-0000-0000-0000-0000000001${String(i).padStart(2, '0')}`);
+  const reference = (me) => {
+    const profiles = JSON.parse(psql(`select json_agg(json_build_object('id', id, 'name', name, 'country', country, 'role', role, 'public', public_leaderboards)) from profiles`));
+    const reactions = JSON.parse(psql(`select coalesce(json_agg(json_build_object('user', user_id, 'artwork', artwork_id, 'kind', kind, 'role', role, 'at', (extract(epoch from created_at) * 1000000)::bigint)), '[]') from reactions`));
+    const reviews = JSON.parse(psql(`select coalesce(json_agg(json_build_object('user', user_id, 'rating', rating)), '[]') from reviews`));
+    return memberBoards({ profiles, reactions, reviews }, { me });
+  };
+  const boards = (who, args = '') => JSON.parse(as(who, `select member_leaderboards(${args})::text`));
+
+  await t.test('leaderboards: collectors, critics and discoverers, identical to the JavaScript reference', () => {
+    psql(`insert into auth.users (id, email) values ${L.map((id, i) => `('${id}', 'lb${i}@example.com')`).join(', ')}`);
+    as('service_role', `update profiles set role = 'collector', country = 'DO' where id = '${L[0]}'`);
+    as('service_role', `update profiles set role = 'critic', country = 'FR' where id = '${L[1]}'`);
+    const works = seed.artworks.slice(100, 106).map((w) => w.id);
+    // L[2] finds three works first; the others arrive later, so L[2] is the early discoverer.
+    const like = (who, w, kind = 'like') => as(who, `insert into reactions (artwork_id, kind) values ('${w}', '${kind}') on conflict do nothing`);
+    for (const w of works.slice(0, 3)) like(L[2], w);
+    for (const who of [L[0], L[1], L[3], L[4], L[5]]) for (const w of works.slice(0, 4)) like(who, w, who === L[0] ? 'super' : 'like');
+    like(L[3], works[5]);
+    as(L[1], `insert into reviews (artwork_id, rating, body) values ('${works[0]}', 5, 'Remarkable'), ('${works[1]}', 3, '')`);
+    // Make the order explicit: L[2] first, then everyone else a minute apart.
+    psql(`update reactions set created_at = now() - interval '1 day' where user_id = '${L[2]}'`);
+    L.forEach((id, i) => { if (i !== 2) psql(`update reactions set created_at = now() - interval '${60 - i} minutes' where user_id = '${id}'`); });
+
+    const anon = boards('anon');
+    assert.deepEqual(anon, reference(null));
+    assert.deepEqual(boards(L[2]), reference(L[2]));
+    assert.equal(anon.collectors[0].score, 4 * 2 * 9);
+    assert.equal(anon.critics[0].score, 4 * 5 + 2 * 5 + 2 * 3);
+    assert.equal(anon.critics[0].detail, 2);
+    assert.equal(anon.discoverers[0].me, false);
+    const top = anon.discoverers[0];
+    assert.equal(top.name, psql(`select name from profiles where id = '${L[2]}'`), 'the earliest discoverer leads');
+    assert.ok(top.score > 0 && top.score <= 100);
+    assert.equal(boards(L[2]).me.discoverers.rank, 1);
+  });
+
+  await t.test('leaderboards never expose ids or emails, and respect opting out', () => {
+    const text = as('anon', 'select member_leaderboards()::text');
+    assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-/.test(text), 'no user ids');
+    assert.ok(!text.includes('example.com'), 'no emails');
+    as(L[2], `update profiles set public_leaderboards = false where id = '${L[2]}'`);
+    const hidden = boards('anon');
+    assert.ok(!hidden.discoverers.some((r) => r.name === psql(`select name from profiles where id = '${L[2]}'`)));
+    assert.deepEqual(hidden, reference(null));
+    const self = boards(L[2]);
+    assert.equal(self.me.discoverers.rank, 1, 'you still see your own standing');
+    assert.ok(self.discoverers.some((r) => r.me), 'and yourself on the board, privately');
+    assert.deepEqual(self, reference(L[2]));
+    as(L[3], `update profiles set public_leaderboards = true where id = '${L[2]}'`); // someone else can't opt you back in
+    assert.equal(psql(`select public_leaderboards from profiles where id = '${L[2]}'`), 'f');
+  });
+
+  await t.test('leaderboards filter by country and cap the list size', () => {
+    const dominican = boards('anon', `'DO'`);
+    assert.equal(dominican.collectors.length, 1);
+    assert.equal(dominican.critics.length, 0);
+    assert.ok(dominican.discoverers.every((r) => r.country === 'DO'));
+    assert.equal(boards('anon', `null, 1`).discoverers.length, 1);
+    assert.ok(boards('anon', `null, 100000`).discoverers.length <= 100);
   });
 
   await t.test('ensure_profile heals a missing profile', () => {

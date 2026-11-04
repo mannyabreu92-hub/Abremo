@@ -1099,3 +1099,23 @@ button.tag:hover { color: var(--text); }
 @media (min-width: 761px) {
   .influence-chip { bottom: 28px; }
 }
+
+/* ——— Member leaderboards ——— */
+.standing { margin-top: 18px; padding: 18px 20px; border-radius: var(--r-lg); border: 1px solid var(--abremi-border-gold);
+  background: linear-gradient(135deg, rgba(214,173,104,.08), rgba(18,19,21,.6) 55%); }
+.standing .eyebrow { color: var(--abremi-gold); margin-bottom: 12px; }
+.standing-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.standing-item { display: grid; gap: 2px; align-content: start; padding: 12px 14px; border-radius: var(--r-md); border: 1px solid var(--line); background: rgba(8,9,10,.35); }
+.standing-item small { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.standing-item b { font-family: var(--serif); font-weight: 400; font-size: 26px; color: var(--abremi-gold-light); }
+.standing-item span { font-size: 13px; color: var(--text-2); }
+.standing-item .muted { font-size: 12.5px; line-height: 1.45; }
+.rank-list li.is-me .rank-row { background: var(--abremi-gold-muted); box-shadow: inset 0 0 0 1px var(--abremi-border-gold); }
+.rank-list li.is-me .rank-text b em { color: var(--abremi-gold); }
+div.rank-row { cursor: default; }
+div.rank-row:hover { background: transparent; }
+.account-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+@media (max-width: 760px) {
+  .standing-grid { grid-template-columns: 1fr; }
+  .seg-gold button { padding: 0 6px; font-size: 12.5px; }
+}
