@@ -39,7 +39,27 @@ const P = {
   share: '<path d="M12 3.5v11M8 7.5l4-4 4 4M7 10.5H6a1.5 1.5 0 0 0-1.5 1.5v7A1.5 1.5 0 0 0 6 20.5h12a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5h-1"/>',
   plusSquare: '<rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M12 8.5v7M8.5 12h7"/>',
   download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/>',
+  bars: '<path d="M6 20V11M12 20V5M18 20v-6M3.5 20.5h17"/>',
+  crown: '<path d="M4 8l4 4 4-7 4 7 4-4-1.5 10h-13zM5.5 20.5h13"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 3.6 5.6 3.6 8.5s-1 5.9-3.6 8.5c-2.6-2.6-3.6-5.6-3.6-8.5S9.4 6.1 12 3.5z"/>',
+  back: '<path d="M15 5l-7 7 7 7"/>',
+  more: '<circle cx="12" cy="5.5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="18.5" r="1.2"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
+  folderPlus: '<path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2.5h8A1.5 1.5 0 0 1 20.5 10v8a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/><path d="M12 11v6M9 14h6"/>',
 };
+
+/** The ABREMI symbol: a geometric A (solid left stroke, fine right stroke, offset crossbar). Flat, no gradient. */
+export const ABREMI_SYMBOL_PATHS = '<path d="M15.3 3.2 3.6 28.8h6.2L17.9 9.6z"/><path d="M16.4 3.2h2.1l10 25.6h-2.2z"/><path d="M10.6 20.3h13.4l.6 1.7H10z"/>';
+
+export function AbremiSymbol(size = 28, label = '') {
+  const a11y = label ? `role="img" aria-label="${esc(label)}"` : 'aria-hidden="true"';
+  return `<svg class="abremi-symbol" width="${size}" height="${size}" viewBox="0 0 32 32" fill="currentColor" ${a11y}>${ABREMI_SYMBOL_PATHS}</svg>`;
+}
+
+export function AbremiLogo({ size = 26 } = {}) {
+  return `<span class="abremi-logo">${AbremiSymbol(size)}<span class="brand-word">Abremi</span></span>`;
+}
 
 export function Icon(name, { size = 20, label } = {}) {
   const a11y = label ? `role="img" aria-label="${esc(label)}"` : 'aria-hidden="true"';
@@ -85,7 +105,7 @@ export function IconButton(icon, label, { act, attrs = '', className = '' } = {}
  * ctx: { artist, reaction: 'like'|'super'|'pass'|undefined, rank, score, meta }
  */
 export function ArtworkCard(art, ctx = {}) {
-  const { artist, reaction, rank, score, eager } = ctx;
+  const { artist, reaction, rank, score, eager, details } = ctx;
   const cat = categoryById[art.category];
   const liked = reaction === 'like' || reaction === 'super';
   const saved = reaction === 'super';
@@ -102,7 +122,8 @@ export function ArtworkCard(art, ctx = {}) {
       <div class="art-caption-main">
         <h3 class="art-title"><button data-act="artwork" data-id="${art.id}">${esc(art.title)}</button></h3>
         ${artist ? `<button class="art-artist" data-act="artist" data-id="${artist.id}">${esc(artist.name)}</button>` : ''}
-        <p class="art-meta">${esc(cat?.label || '')}${art.year ? `, ${art.year}` : ''}</p>
+        <p class="art-meta">${details ? `${esc(art.medium || cat?.label || '')}${art.year ? ` · ${art.year}` : ''}` : `${esc(cat?.label || '')}${art.year ? `, ${art.year}` : ''}`}</p>
+        ${details && art.price ? `<p class="art-price">${money(art.price)}</p>` : ''}
       </div>
       ${score != null ? `<span class="art-score">${score}</span>` : ''}
     </div>
@@ -141,7 +162,7 @@ export function FeaturedArtwork(art, { artist, label, reaction, influence, actio
 }
 
 // ——— Artists ———
-export function ArtistCard(artist, { cover, following, score, rank }) {
+export function ArtistCard(artist, { cover, following, score, rank, signals = '' }) {
   return `<article class="artist-card">
     <button class="artist-cover" data-act="artist" data-id="${artist.id}" aria-label="Open ${esc(artist.name)}">${cover ? ArtImage(cover) : ''}</button>
     <div class="artist-card-body">
@@ -152,14 +173,15 @@ export function ArtistCard(artist, { cover, following, score, rank }) {
       </div>
       ${artist.isMe ? '<span class="tag">You</span>' : `<button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${artist.id}" aria-pressed="${!!following}">${following ? 'Following' : 'Follow'}</button>`}
     </div>
+    ${signals ? `<div class="signal-row artist-card-signals">${signals}</div>` : ''}
     ${score != null ? `<p class="artist-card-score"><span>Artist score</span><b>${fmt(score)}</b></p>` : ''}
   </article>`;
 }
 
 // ——— Filters, search ———
-export function CategoryFilter(categories, active, { act = 'filter-cat', allLabel = 'All' } = {}) {
-  return `<div class="chip-row" role="tablist" aria-label="Filter by category">
-    <button class="chip${!active ? ' is-on' : ''}" role="tab" aria-selected="${!active}" data-act="${act}" data-v="">${allLabel}</button>
+export function CategoryFilter(categories, active, { act = 'filter-cat', allLabel = 'All', pills = false, noAll = false } = {}) {
+  return `<div class="chip-row${pills ? ' pill-row' : ''}" role="tablist" aria-label="Filter by category">
+    ${noAll ? '' : `<button class="chip${!active ? ' is-on' : ''}" role="tab" aria-selected="${!active}" data-act="${act}" data-v="">${allLabel}</button>`}
     ${categories.map((c) => `<button class="chip${active === c.id ? ' is-on' : ''}" role="tab" aria-selected="${active === c.id}" data-act="${act}" data-v="${c.id}">${esc(c.label)}</button>`).join('')}
   </div>`;
 }

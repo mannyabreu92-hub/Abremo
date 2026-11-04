@@ -18,11 +18,17 @@ export function defaultState() {
     purchases: [], // { artworkId, price, fee, at }
     messages: [], // { artistId, artworkId, text, at }
     elo: {}, // artworkId → rating override
-    battles: { voted: 0, streak: 0 },
+    battles: { voted: 0, streak: 0, history: [] },
     taste: emptyTaste(),
     uploads: [],
     snapshot: null,
     notifSeenAt: 0,
+    discoveries: {}, // artworkId → { at, rankAt, influenceAt, style }: how known a work was when you found it
+    followMeta: {}, // artistId → { at, followersAt }: for Early Believer achievements
+    activity: [], // [{ t, id, pts }]: influence you added, for your weekly trend
+    collections: [], // [{ id, name, private, ids: [], at }]
+    achievementsSeen: [],
+    masterpieceSeen: '',
   };
 }
 
@@ -38,7 +44,9 @@ export function loadState() {
       }
     }
     if (!raw) return defaultState();
-    return { ...defaultState(), ...JSON.parse(raw) };
+    const saved = JSON.parse(raw);
+    const base = defaultState();
+    return { ...base, ...saved, battles: { ...base.battles, ...(saved.battles || {}) } };
   } catch {
     return defaultState();
   }
