@@ -52,7 +52,10 @@ export function createWorld(seed, state) {
     if (!countsCache.has(art.id)) countsCache.set(art.id, mergeCounts(art.counts, state.deltas[art.id]));
     return countsCache.get(art.id);
   };
-  const influence = Object.fromEntries(artworks.map((a) => [a.id, artworkInfluence(countsOf(a))]));
+  // state.scores (community mode): the server's scores are authoritative; it applies the same formulas
+  // to the rows that count (no self-likes, no reactions excluded by moderators).
+  const server = state.scores || null;
+  const influence = Object.fromEntries(artworks.map((a) => [a.id, server ? server.popularity[a.id] || 0 : artworkInfluence(countsOf(a))]));
 
   // Community mode passes everyone's follows as followerDeltas; demo mode counts this device's.
   const followersOf = (artist) => {
@@ -69,7 +72,7 @@ export function createWorld(seed, state) {
   for (const w of artworks) (worksByArtist[w.artistId] ||= []).push(w);
 
   const artistScores = Object.fromEntries(
-    artists.map((a) => [a.id, artistScore((worksByArtist[a.id] || []).reduce((s, w) => s + influence[w.id], 0), followersOf(a))]),
+    artists.map((a) => [a.id, server ? server.reputation[a.id] || 0 : artistScore((worksByArtist[a.id] || []).reduce((s, w) => s + influence[w.id], 0), followersOf(a))]),
   );
 
   const eloOf = (art) => state.elo[art.id] ?? art.elo;
@@ -87,6 +90,9 @@ export function createWorld(seed, state) {
   const earned = (rows, scored = (r) => r.score > 0) => (state.rankedOnly ? rows.map((r) => (scored(r) ? r : { ...r, rank: null })) : rows);
   const topArtworks = (opts) => earned(rank(filterArtworks(opts), (w) => influence[w.id]));
   const topArtists = (opts) => earned(rank(filterArtists(opts), (a) => artistScores[a.id]));
+  // Trending (likes and saves halved every 7 days) and collector interest: server scores only.
+  const topTrending = (opts) => (server ? earned(rank(filterArtworks(opts), (w) => server.trending[w.id] || 0), (r) => r.score >= 0.5) : []);
+  const topCollected = (opts) => (server ? earned(rank(filterArtworks(opts), (w) => server.collector[w.id] || 0)) : []);
   const topElo = (opts) => {
     const battled = (w) => !state.rankedOnly || state.elo[w.id] != null;
     const pool = filterArtworks(opts);
@@ -112,6 +118,6 @@ export function createWorld(seed, state) {
   return {
     artists, artworks, artistById, artworkById, worksByArtist,
     countsOf, influence, artistScores, followersOf, eloOf,
-    topArtworks, topArtists, topElo, globalArtistRanks, countryArtistRanks, badgesOf,
+    topArtworks, topArtists, topElo, topTrending, topCollected, globalArtistRanks, countryArtistRanks, badgesOf,
   };
 }

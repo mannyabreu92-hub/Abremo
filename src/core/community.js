@@ -7,7 +7,7 @@ import { hashString } from './random.js';
 import { START_RATING } from './elo.js';
 
 export function emptyCommunity() {
-  return { deltas: {}, followerDeltas: {}, elo: {}, members: 0, fetchedAt: 0, artists: [], artworks: [] };
+  return { deltas: {}, followerDeltas: {}, elo: {}, battles: {}, scores: null, members: 0, fetchedAt: 0, artists: [], artworks: [] };
 }
 
 const emptyDelta = () => ({ likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } });
@@ -112,7 +112,21 @@ export function snapshotToCommunity(snap, now = Date.now(), { storageBase = '' }
     if (!ROLE_IDS.includes(f.r)) continue;
     (out.followerDeltas[f.a] ||= emptyRoleCounts())[f.r] += f.n || 0;
   }
-  for (const r of snap?.ratings || []) if (Number.isFinite(r.v)) out.elo[r.a] = r.v;
+  for (const r of snap?.ratings || []) {
+    if (Number.isFinite(r.v)) out.elo[r.a] = r.v;
+    if (Number.isFinite(r.n)) out.battles[r.a] = r.n;
+  }
+  // The server's scores (databases from before 0007 send none, and the app computes them as before).
+  if (Array.isArray(snap?.scores)) {
+    out.scores = { popularity: {}, trending: {}, collector: {}, critic: {}, reputation: {} };
+    for (const x of snap.scores) {
+      out.scores.popularity[x.a] = x.p || 0;
+      out.scores.trending[x.a] = Number(x.t) || 0;
+      out.scores.collector[x.a] = x.c || 0;
+      out.scores.critic[x.a] = x.cr || 0;
+    }
+    for (const x of snap.artist_scores || []) out.scores.reputation[x.a] = x.s || 0;
+  }
   out.members = snap?.members || 0;
   out.artworks = uploadsToArtworks(snap?.uploads, storageBase);
   out.artists = membersToArtists(snap?.artists, out.artworks, storageBase);

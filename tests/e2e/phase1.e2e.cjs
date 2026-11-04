@@ -64,7 +64,7 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   assert.match(await page.locator('.artwork-page').textContent(), /Not ranked yet/);
   await page.goto(BASE + '#charts');
   await page.waitForSelector('.board');
-  assert.match(await page.locator('.board').first().textContent(), /Nothing ranked here yet/);
+  assert.match(await page.locator('[data-board=artworks]').textContent(), /Nothing ranked here yet/);
   step('sample works are labelled, not for sale, and unranked until real members act (shareable #art/ page)');
 
   // ——— A guest makes a collection on this device… ———

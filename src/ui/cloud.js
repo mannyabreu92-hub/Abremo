@@ -233,6 +233,22 @@ export async function createSupabaseCloud(url, key) {
     async publicCollection(id) {
       return check(await sb.rpc('public_collection', { p_id: id }));
     },
+    // ——— Phase 2A: achievements and ranking integrity ———
+    async achievementDefinitions() {
+      return check(await sb.from('achievement_definitions').select('code, audience, label, criteria, sort').order('sort'));
+    },
+    async myAchievements() {
+      return user ? check(await sb.rpc('my_achievements')) : [];
+    },
+    async artistAchievements(artistId) {
+      return check(await sb.rpc('artist_achievements', { p_artist_id: artistId }));
+    },
+    async integrityQueue() {
+      return check(await sb.rpc('admin_integrity_queue'));
+    },
+    async resolveFlag(id, exclude, note) {
+      return check(await sb.rpc('resolve_integrity_flag', { p_id: id, p_exclude: exclude, p_note: note || null }));
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },

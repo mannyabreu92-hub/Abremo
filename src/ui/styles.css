@@ -1174,3 +1174,19 @@ div.rank-row:hover { background: transparent; }
 .shared-collection .lede { max-width: 60ch; }
 .artwork-page { padding-top: 18px; padding-bottom: 40px; }
 .artwork-page .back-link { margin-bottom: 12px; }
+
+/* ——— Phase 2A: how rankings work, integrity queue, achievements ——— */
+.how-ranked .how-list { display: grid; gap: 12px; margin: 16px 0; }
+.how-item { padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--abremi-surface); }
+.how-item h3 { font-size: 0.98rem; color: var(--gold); margin: 0 0 6px; font-weight: 600; }
+.how-item p { margin: 0; color: var(--text-2); line-height: 1.55; font-size: 0.92rem; }
+.how-sub { margin: 18px 0 8px; font-size: 1rem; }
+.how-rules { margin: 0 0 12px; padding-left: 18px; color: var(--text-2); line-height: 1.6; font-size: 0.92rem; }
+.how-rules li { margin-bottom: 6px; }
+.link-arrow.how-ranked { margin-top: 8px; }
+.flag-card { padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--abremi-surface); margin-bottom: 12px; }
+.flag-card h3 { margin: 4px 0 6px; font-size: 1rem; }
+.audit-list { list-style: none; padding: 0; margin: 0; font-size: 0.88rem; color: var(--text-2); }
+.audit-list li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.audit-list b { color: var(--text); font-weight: 600; }
+.achievement-criteria { display: block; color: var(--muted); font-size: 0.8rem; margin-top: 4px; line-height: 1.4; }

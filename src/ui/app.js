@@ -19,6 +19,7 @@ import { initPWA } from './pwa.js';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
 import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, sampleCatalog, collectionsToState, AVAILABILITY } from '../core/community.js';
 import { artistProfileForm, validateArtistProfile, artworkEditForm, collectionEditForm } from './views/forms.js';
+import { howRankedSheet } from './views/explainers.js';
 import {
   esc, fmt, money, flag, countryName, initials, Icon, ArtImage, Avatar, PremiumButton, IconButton, AbremiSymbol,
   ArtworkCard, ArtworkGrid, ArtistCard, CategoryFilter, Select, SearchBar,
@@ -47,7 +48,7 @@ function viewState() {
   const c = state.community;
   return {
     ...state,
-    deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas, rankedOnly: true,
+    deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas, rankedOnly: true, scores: c.scores || null,
     memberArtists: c.artists || [], memberArtworks: c.artworks || [], myArtistId: myArtistId(),
     uploads: [], // device-only demo uploads are not part of the shared catalog
   };
@@ -242,16 +243,17 @@ function setReaction(art, next) {
   const before = standingOf(id);
   const pointsBefore = contributionOf(prev, state.interactionRoles?.[id]);
   const prevRole = state.interactionRoles?.[id] || state.user.role;
-  if (prev === 'like' || prev === 'super') {
+  if ((prev === 'like' || prev === 'super') && !(COMMUNITY && isMine(art))) {
     const d = ensureDelta(id);
     const bucket = prev === 'like' ? d.likes : d.saves;
     bucket[prevRole] = Math.max(0, (bucket[prevRole] || 0) - 1);
   }
   state.interactionRoles ||= {};
+  const own = COMMUNITY && isMine(art); // your own likes are kept for you, but never count
   if (next) {
     const r = state.user.role;
-    if (next === 'like') ensureDelta(id).likes[r]++;
-    if (next === 'super') ensureDelta(id).saves[r]++;
+    if (next === 'like' && !own) ensureDelta(id).likes[r]++;
+    if (next === 'super' && !own) ensureDelta(id).saves[r]++;
     state.interactions[id] = next;
     state.interactionRoles[id] = r;
     if (next !== prev && !(prev === 'like' && next === 'super')) state.taste = updateTaste(state.taste, art, next);
@@ -263,7 +265,8 @@ function setReaction(art, next) {
   if ((next === 'like' || next === 'super') && !state.discoveries[id]) {
     state.discoveries[id] = { at: Date.now(), rankAt: before.rank, influenceAt: before.influence, style: art.style };
   }
-  const added = contributionOf(next, state.interactionRoles?.[id]) - pointsBefore;
+  const added = own ? 0 : contributionOf(next, state.interactionRoles?.[id]) - pointsBefore;
+  if (own && next && next !== 'pass' && !prev) toast('Saved for you. Your own likes don’t count toward rankings.');
   if (added && counts()) {
     state.activity.push({ t: Date.now(), id, pts: added });
     if (state.activity.length > 600) state.activity.splice(0, state.activity.length - 600);
@@ -323,7 +326,26 @@ function followersTotal(artistId) {
   return a ? Object.values(world.followersOf(a)).reduce((x, y) => x + y, 0) : 0;
 }
 
+// Community mode: achievements are earned on the server (with evidence and public criteria);
+// demo mode keeps the on-device ones.
+let serverAchievements = { defs: null, earned: [] };
+async function loadAchievements() {
+  if (!cloud?.achievementDefinitions) return;
+  try {
+    const [defs, earned] = await Promise.all([
+      serverAchievements.defs ? null : cloud.achievementDefinitions(),
+      me ? cloud.myAchievements() : [],
+    ]);
+    if (defs) serverAchievements.defs = Object.fromEntries(defs.map((d) => [d.code, { label: d.label, desc: d.criteria, audience: d.audience }]));
+    serverAchievements.earned = earned || [];
+    if (me) checkAchievements();
+  } catch { /* older database without achievements: nothing to show */ }
+}
+/** { code: { label, desc } } for the achievements this mode uses. */
+const achievementCatalog = () => (COMMUNITY ? serverAchievements.defs || {} : ACHIEVEMENTS);
+
 function myAchievements(taste = myTaste()) {
+  if (COMMUNITY) return me ? serverAchievements.earned.map((a) => a.code) : [];
   return earnedAchievements({
     discoveries: myDiscoveries(),
     now: standingsNow(),
@@ -349,7 +371,8 @@ function nextCelebration() {
   const id = celebrationQueue.shift();
   if (!id) { celebrating = false; return; }
   celebrating = true;
-  const a = ACHIEVEMENTS[id];
+  const a = achievementCatalog()[id];
+  if (!a) { nextCelebration(); return; }
   const el = document.createElement('div');
   el.className = 'celebrate';
   el.setAttribute('role', 'status');
@@ -953,6 +976,7 @@ function renderBattle(root) {
 function vote(i) {
   if (battleOutcome || !battlePair) return;
   const winner = battlePair[i], loser = battlePair[1 - i];
+  if (COMMUNITY && me && isMine(winner)) return toast('You can’t vote for your own work. Pick the other one, or skip.', { force: true });
   const wr = world.eloOf(winner), lr = world.eloOf(loser);
   const res = battleResult(wr, lr, state.user.role);
   const crowd = Math.round(expectedScore(wr, lr) * 100);
@@ -1024,7 +1048,7 @@ function baselineRanks() {
   const works = (c.artworks || []).filter((w) => w.createdAt && w.createdAt <= chartBase.at);
   const artistIds = new Set(works.map((w) => w.artistId));
   const then = createWorld(seed, {
-    ...viewState(), deltas: b.deltas, elo: b.elo, followerDeltas: b.followerDeltas,
+    ...viewState(), deltas: b.deltas, elo: b.elo, followerDeltas: b.followerDeltas, scores: b.scores || null,
     memberArtists: (c.artists || []).filter((a) => artistIds.has(a.id)), memberArtworks: works,
   });
   chartBase.ranks = { art: rankMap(then.topArtworks()), artist: rankMap(then.topArtists()) };
@@ -1159,7 +1183,7 @@ function renderCharts(root) {
     const open = charts.expanded === key;
     list = list.filter((r) => r.rank != null);
     const rows = list.slice(0, open ? 100 : 5);
-    return `<section class="board">
+    return `<section class="board" data-board="${key}">
       <header class="board-head"><h2>${title}</h2>${list.length > 5 ? `<button class="link-arrow" data-act="chart-expand" data-v="${key}">${open ? 'Show top 5' : 'See all'} ${Icon('arrow', { size: 14 })}</button>` : ''}</header>
       ${rows.length ? `<ol class="rank-list">${rows.map((r) => rankRow(r, kind, opts.previous || undefined, opts)).join('')}</ol>` : EmptyState({ title: 'Nothing ranked here yet', body: COMMUNITY ? 'Rankings come only from real members’ likes, saves, follows and battle votes.' : '' })}
     </section>`;
@@ -1169,8 +1193,10 @@ function renderCharts(root) {
   let body;
   if (charts.tab === 'global') {
     const standings = countryBoard();
-    body = `${section('artworks', 'Top Artworks Worldwide', world.topArtworks(), 'art', { previous })}
+    body = `${COMMUNITY && state.community?.scores ? section('trending', 'Trending This Week', world.topTrending(), 'art', { trending: true }) : ''}
+      ${section('artworks', COMMUNITY ? 'Top Artworks · All Time' : 'Top Artworks Worldwide', world.topArtworks(), 'art', { previous })}
       ${section('artists', 'Top Artists Worldwide', world.topArtists(), 'artist', { previous })}
+      ${COMMUNITY && state.community?.scores ? section('collected', 'Collectors’ Picks', world.topCollected(), 'art', { collector: true }) : ''}
       ${section('battles', 'Art Battle Champions', world.topElo(), 'art', { elo: true })}
       <section class="board">
         <header class="board-head"><h2>Cultural Influence by Country</h2><button class="link-arrow" data-act="chart-tab" data-v="countries">All countries ${Icon('arrow', { size: 14 })}</button></header>
@@ -1207,6 +1233,7 @@ function renderCharts(root) {
     </header>
     <div class="seg seg-gold" role="tablist">${tabs}</div>
     ${body}
+    ${COMMUNITY ? `<button class="link-arrow how-ranked" data-act="how-ranked">${Icon('info', { size: 14 })} How rankings work</button>` : ''}
     <p class="fine explainer"><b>Score</b> is popularity: every like weighted by who gave it (Fan 1, Artist 3, Critic 5, Collector 9; Super Likes count ×${SAVE_MULTIPLIER}). <b>Credible</b> is the share of that score from critics and collectors. Rankings are organic: nobody can pay to move them.</p>
   </div>`;
 }
@@ -1283,7 +1310,7 @@ function renderArtistPage(root) {
         <p class="muted">${esc(categoryById[a.category]?.label || 'Contemporary')} artist • ${a.city ? `${esc(a.city)}, ` : ''}${esc(countryName(a.country))}${a.debutYear ? ` • since ${a.debutYear}` : ''}</p>
         ${a.bio ? `<p class="artist-bio">${esc(a.bio)}</p>` : ''}
         ${a.isMe && a.member ? `<button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Edit your artist profile</button>` : ''}
-        <div class="signal-row">${signalChips(id)}${badges.map((b) => `<span class="badge" title="${esc(BADGES[b].desc)}">${BADGES[b].emoji} ${BADGES[b].label}</span>`).join('')}</div>
+        <div class="signal-row">${signalChips(id)}${COMMUNITY ? artistAchievementsHTML(id) : badges.map((b) => `<span class="badge" title="${esc(BADGES[b].desc)}">${BADGES[b].emoji} ${BADGES[b].label}</span>`).join('')}</div>
         <dl class="stat-row artist-stats">
           <div><dt>Followers</dt><dd>${fmt(followerTotal)}</dd></div>
           <div><dt>Works</dt><dd>${works.length}</dd></div>
@@ -1309,6 +1336,22 @@ function renderArtistPage(root) {
           </dl>`}
     </div>
   </div>`;
+}
+
+// An artist's achievements, earned on the server (community mode), fetched when their page opens.
+const artistAchievementCache = new Map();
+function artistAchievementsHTML(id) {
+  if (!cloud?.artistAchievements || world.artistById[id]?.sample) return '';
+  const entry = artistAchievementCache.get(id);
+  if (!entry || (!entry.loading && Date.now() - entry.at > 60_000)) {
+    artistAchievementCache.set(id, { loading: true, list: entry?.list || [] });
+    cloud.artistAchievements(id)
+      .then((list) => artistAchievementCache.set(id, { list: list || [], at: Date.now() }))
+      .catch(() => artistAchievementCache.set(id, { list: [], at: Date.now() }))
+      .finally(() => { if (route().name === 'artist' && route().param === id && !sheetRenderer) renderView(); });
+  }
+  return (artistAchievementCache.get(id).list || [])
+    .map((a) => `<span class="badge" title="${esc(a.criteria)}">${AbremiSymbol(12)} ${esc(a.label)}</span>`).join('');
 }
 
 function renderArtists(root) {
@@ -1381,7 +1424,7 @@ function renderCollections(root) {
     </section>
 
     ${earned.length ? `<section class="section section-tight">${SectionHeader({ eyebrow: 'Recognition', title: 'Achievements', action: `<a class="link-arrow" href="#profile">All achievements ${Icon('arrow', { size: 16 })}</a>` })}
-      <div class="achievement-row">${earned.map((id) => `<span class="achievement is-earned" title="${esc(ACHIEVEMENTS[id].desc)}">${AbremiSymbol(16)} ${esc(ACHIEVEMENTS[id].label)}</span>`).join('')}</div></section>` : ''}
+      <div class="achievement-row">${earned.map((id) => `<span class="achievement is-earned" title="${esc(achievementCatalog()[id]?.desc || '')}">${AbremiSymbol(16)} ${esc(achievementCatalog()[id]?.label || id)}</span>`).join('')}</div></section>` : ''}
 
     <section class="section section-tight">
       ${SectionHeader({ eyebrow: 'Following', title: 'Artists you follow' })}
@@ -1550,7 +1593,7 @@ function renderProfile(root) {
       ${SectionHeader({ eyebrow: 'Recognition', title: 'Achievements' })}
       <div class="achievement-grid">${(() => {
         const earned = new Set(myAchievements());
-        return Object.entries(ACHIEVEMENTS).map(([k, a]) => `<div class="achievement-card${earned.has(k) ? ' is-earned' : ''}">
+        return Object.entries(achievementCatalog()).filter(([k, a]) => !COMMUNITY || a.audience === 'member' || state.user.role === 'artist' || earned.has(k)).map(([k, a]) => `<div class="achievement-card${earned.has(k) ? ' is-earned' : ''}">
           <span class="achievement-mark">${earned.has(k) ? AbremiSymbol(18) : Icon('lock', { size: 16 })}</span>
           <b>${esc(a.label)}</b><small>${esc(a.desc)}</small></div>`).join('');
       })()}</div>
@@ -1966,8 +2009,12 @@ async function sendApplication(role) {
 let adminData = null;
 async function loadAdmin() {
   try {
-    const [queue, verified] = await Promise.all([cloud.adminQueue(), cloud.verifiedMembers()]);
-    adminData = { queue, verified, at: Date.now() };
+    const [queue, verified, flags, audit] = await Promise.all([
+      cloud.adminQueue(), cloud.verifiedMembers(),
+      cloud.integrityQueue ? cloud.integrityQueue().catch(() => []) : [],
+      cloud.auditLog ? cloud.auditLog().catch(() => []) : [],
+    ]);
+    adminData = { queue, verified, flags, audit, at: Date.now() };
   } catch (e) {
     adminData = { error: e?.message || 'Could not load applications.' };
   }
@@ -2004,7 +2051,39 @@ function renderAdmin(root) {
         <span class="rank-text"><b>${esc(v.name)} <span class="flag">${flag(v.country)}</span></b><small>${esc(ROLE_GUIDE[v.role]?.label || v.role)} · ${esc(v.email || '')}${v.approved_at ? ` · since ${new Date(v.approved_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}</small></span>
         ${PremiumButton('Remove role', { act: 'admin-revoke', variant: 'ghost', attrs: `data-id="${v.user_id}" data-name="${esc(v.name)}" data-danger` })}</div></li>`).join('')}</ol>` : '<p class="muted">Nobody yet.</p>'}
     </section>
+    ${integrityHTML(adminData.flags || [])}
+    ${auditHTML(adminData.audit || [])}
   </div>`;
+}
+
+/** Integrity flags: bursts of likes from brand-new accounts, for a moderator to confirm or dismiss. */
+function integrityHTML(flags) {
+  const when = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return `<section class="section section-tight" id="integrity">${SectionHeader({ eyebrow: 'Ranking integrity', title: 'Flags to review' })}
+    ${flags.length ? flags.map((f) => `<article class="flag-card">
+      <p class="eyebrow">Burst from new accounts · ${esc(when(f.created_at))}</p>
+      <h3><button class="link" data-act="artwork" data-id="${esc(f.target_id)}">${esc(f.title || f.target_id)}</button></h3>
+      <p class="muted">${Number(f.details?.total) || 0} likes or saves in an hour, ${Number(f.details?.new_accounts) || 0} of them from accounts under 3 days old.</p>
+      <label class="field"><span>Note (recorded in the audit log)</span><input id="flag-note-${esc(f.id)}" maxlength="500"></label>
+      <div class="detail-actions">
+        ${PremiumButton('Exclude those likes', { act: 'flag-resolve', attrs: `data-id="${esc(f.id)}" data-v="exclude" data-danger` })}
+        ${PremiumButton('Looks genuine', { act: 'flag-resolve', variant: 'secondary', attrs: `data-id="${esc(f.id)}" data-v="dismiss"` })}
+      </div></article>`).join('') : '<p class="muted">Nothing to review. Abremi checks for bursts from new accounts every 10 minutes.</p>'}
+    <p class="fine">Excluding never deletes anything: the likes stop counting toward rankings, and the decision is recorded.</p>
+  </section>`;
+}
+
+const AUDIT_LABELS = {
+  'role_application.approved': 'approved a role application', 'role_application.declined': 'declined a role application',
+  'role.revoked': 'removed a verified role', 'artwork.deleted': 'deleted an artwork',
+  'integrity_flag.confirmed': 'excluded a burst of likes', 'integrity_flag.dismissed': 'dismissed an integrity flag',
+};
+function auditHTML(rows) {
+  if (!rows.length) return '';
+  return `<section class="section section-tight">${SectionHeader({ eyebrow: 'Audit trail', title: 'Recent sensitive actions' })}
+    <ul class="audit-list">${rows.slice(0, 30).map((r) => `<li><b>${esc(r.actor_email || 'Someone')}</b> ${esc(AUDIT_LABELS[r.action] || r.action)}
+      <small>· ${esc(new Date(r.created_at).toLocaleString())}${r.details?.note ? ` · “${esc(r.details.note)}”` : ''}${r.details?.title ? ` · ${esc(r.details.title)}` : ''}</small></li>`).join('')}</ul>
+  </section>`;
 }
 
 // ——— Install as an app ———
@@ -2142,6 +2221,7 @@ function signedOut() {
   state.applications = [];
   state.collections = (state.collections || []).filter((c) => !c.server); // account collections stay with the account
   sharedCollections.clear();
+  serverAchievements.earned = [];
   Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
   state.user = { ...state.user, role: 'fan', name: 'You' };
   deck = [];
@@ -2171,6 +2251,7 @@ async function syncAccount({ importGuest = false } = {}) {
   memberCache.clear();
   // Critic & Collector applications (older databases without the feature simply return none).
   await syncCollections();
+  await loadAchievements();
   const [apps, admin] = await Promise.all([cloud.myApplications().catch(() => []), cloud.isAdmin().catch(() => false)]);
   const before = new Map((state.applications || []).map((a) => [a.id, a.status]));
   state.applications = apps;
@@ -2294,7 +2375,7 @@ async function connectCommunity() {
     console.warn('Abremi community unavailable', e);
     toast('Community rankings are offline. Showing the last ones saved.', { duration: 4000 });
   }
-  await loadChartBaseline();
+  await Promise.all([loadChartBaseline(), me ? null : loadAchievements()]);
   if (!sheetRenderer) renderView();
   else refresh();
   setInterval(quietRefresh, 90_000);
@@ -2312,7 +2393,7 @@ async function connectCommunity() {
 function quietRefresh() {
   if (document.hidden || !cloud) return;
   const waiting = me && state.applications?.some((a) => a.status === 'pending');
-  Promise.all([waiting ? syncAccount() : refreshCommunity(), loadChartBaseline()])
+  Promise.all([waiting ? syncAccount() : refreshCommunity(), loadChartBaseline(), waiting ? null : loadAchievements()])
     .then(() => {
       // A decided application changes the member's role, so every view (and the nav badge) must redraw.
       if (waiting) commit();
@@ -2363,6 +2444,7 @@ const ACTIONS = {
   artist: (el) => { closePopovers(); openArtist(el.dataset.id); },
   back: () => (history.length > 1 ? history.back() : (location.hash = 'artists')),
   'artist-tab': (el) => { artistTab = el.dataset.v; renderView(); },
+  'how-ranked': () => openSheet(howRankedSheet),
   'share-artwork': async (el) => {
     const w = world.artworkById[el.dataset.id];
     const url = `${location.origin}${location.pathname}#art/${encodeURIComponent(el.dataset.id)}`;
@@ -2471,6 +2553,16 @@ const ACTIONS = {
       memberCache.clear();
       await loadAdmin();
     } catch (e) { toast(e?.message || 'Could not remove the role.', { force: true }); }
+  },
+  'flag-resolve': async (el) => {
+    const exclude = el.dataset.v === 'exclude';
+    if (exclude && !confirm('Exclude these likes from the rankings? They are kept, and the decision is recorded.')) return;
+    try {
+      const n = await cloud.resolveFlag(el.dataset.id, exclude, $(`#flag-note-${el.dataset.id}`)?.value || null);
+      toast(exclude ? `${n} like${n === 1 ? '' : 's'} excluded from the rankings.` : 'Flag dismissed.', { force: true });
+      await loadAdmin();
+      refreshCommunity().then(() => renderView()).catch(() => {});
+    } catch (e) { toast(e?.message || 'Could not update the flag.', { force: true }); }
   },
   'members-scope': (el) => { charts.memberCountry = el.dataset.v; renderView(); },
   'members-retry': () => { memberCache.delete(charts.memberCountry || 'world'); renderView(); },
