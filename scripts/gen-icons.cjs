@@ -7,18 +7,20 @@ const OUT = path.join(__dirname, '..', 'icons');
 const BASE = process.argv[2] || 'http://localhost:5173/';
 const FONT = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,500&display=block';
 
-// mode: 'rounded' (transparent corners), 'full' (edge to edge, for iOS), 'maskable' (glyph inside Android's safe zone)
+// The ABREMI symbol (same paths as AbremiSymbol in src/ui/components.js): flat champagne gold, no gradient.
+const SYMBOL = '<path d="M15.3 3.2 3.6 28.8h6.2L17.9 9.6z"/><path d="M16.4 3.2h2.1l10 25.6h-2.2z"/><path d="M10.6 20.3h13.4l.6 1.7H10z"/>';
+
+// mode: 'rounded' (transparent corners), 'full' (edge to edge, for iOS), 'maskable' (symbol inside Android's safe zone)
 function iconHTML(mode) {
   const radius = mode === 'rounded' ? '22.5%' : '0';
-  const glyph = mode === 'maskable' ? 46 : 58; // % of the icon height
-  const ring = mode === 'rounded' ? 'box-shadow: inset 0 0 0 calc(var(--s) * .012) rgba(200,169,107,.45);' : '';
-  return `<!doctype html><html><head><link rel="stylesheet" href="${FONT}"><style>
+  const size = mode === 'maskable' ? 46 : 58; // % of the icon
+  const ring = mode === 'rounded' ? 'box-shadow: inset 0 0 0 calc(var(--s) * .012) rgba(214,173,104,.45);' : '';
+  return `<!doctype html><html><head><style>
     html,body{margin:0;background:transparent}
-    .i{--s:100vmin;width:100vmin;height:100vmin;border-radius:${radius};overflow:hidden;position:relative;${ring}
-      background:radial-gradient(ellipse at 30% 18%,rgba(200,169,107,.26),transparent 55%),radial-gradient(ellipse at 85% 90%,rgba(100,110,150,.18),transparent 50%),#08090B}
-    .g{position:absolute;inset:0;display:grid;place-items:center;font-family:'Playfair Display',serif;font-style:italic;font-weight:500;
-      font-size:calc(var(--s) * ${glyph / 100});line-height:1;color:#C8A96B;padding-right:calc(var(--s) * .02)}
-  </style></head><body><div class="i"><span class="g">A</span></div></body></html>`;
+    .i{--s:100vmin;width:100vmin;height:100vmin;border-radius:${radius};overflow:hidden;position:relative;display:grid;place-items:center;${ring}
+      background:radial-gradient(ellipse at 30% 18%,rgba(214,173,104,.22),transparent 55%),radial-gradient(ellipse at 85% 90%,rgba(103,84,58,.2),transparent 50%),#08090A}
+    svg{width:${size}%;height:${size}%;color:#D6AD68}
+  </style></head><body><div class="i"><svg viewBox="0 0 32 32" fill="currentColor">${SYMBOL}</svg></div></body></html>`;
 }
 
 (async () => {
@@ -32,8 +34,7 @@ function iconHTML(mode) {
   ];
   for (const [file, size, mode] of icons) {
     const page = await browser.newPage({ viewport: { width: size, height: size }, deviceScaleFactor: 1 });
-    await page.setContent(iconHTML(mode), { waitUntil: 'networkidle' });
-    await page.evaluate(() => document.fonts.ready);
+    await page.setContent(iconHTML(mode));
     await page.screenshot({ path: path.join(OUT, file), omitBackground: mode === 'rounded' });
     await page.close();
     console.log('wrote', file);

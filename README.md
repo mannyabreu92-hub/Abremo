@@ -15,7 +15,7 @@ npm start         # http://localhost:5173  (zero dependencies, Node 18+)
 npm run check     # syntax check of the UI modules + unit tests
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
 npm run test:db   # Supabase migration + security rules on a real Postgres (set ABREMI_PG)
-npm run test:e2e  # sign-in/sync, artist uploads and offline/install/update flows in a browser (needs Playwright and npm start)
+npm run test:e2e  # sign-in/sync, artist uploads, the culture engine and offline/install/update flows in a browser
 ```
 
 ### Accounts and the shared database
@@ -83,6 +83,25 @@ Free to upload, swipe and see basic rankings. **Pro $7.99/mo**: analytics, who l
 **Studio $19.99/mo**: promotion tools and a portfolio website. Marketplace commission slides from **10% → 5%**
 as the price rises (`src/core/marketplace.js`).
 
+## The culture engine
+Every number comes from real activity: likes, Super Likes, follows, reviews and battle votes. None of it is invented.
+
+- **Taste Score (0–100):** how early your eye is. It combines three things: how often you find work outside the top quarter of the rankings (*hidden gems*), how far the works you found have climbed since (*foresight*), and how many movements you explore (*range*). It unlocks after five discoveries. Tiers: Emerging Eye, Cultural Scout, Trend Hunter, Elite Cultural Scout, Global Tastemaker. `src/core/taste.js`
+- **Cultural Influence:** the weight you've added to the rankings (Fan 1, Artist 3, Critic 5, Collector 9; a Super Like counts double). Each like shows "+N Influence added", and how many places the work climbed.
+- **Credibility:** shown next to popularity in the rankings. It's the share of a work's score that comes from critics and collectors. Rankings are organic, and nobody can pay to move them.
+- **Signals:**
+  - 🔥 *Rising Artist*: climbing 10 or more places in an hour, or a recent debut with exceptional influence for the size of their following
+  - ↗ *Trending Globally*: in the global top 100 and moving up
+  - ⭐ *Collector Attention*: 25% or more of their influence comes from collectors
+  
+  `src/core/insights.js`
+- **Daily Masterpiece:** one work a day, picked from the 60 most influential works and weighted towards those critics and collectors rate highly. It never repeats on consecutive days, and a countdown shows the time until the next reveal at local midnight.
+- **Achievements:**
+  - First Discovery, Hidden Gem Finder, Trend Hunter, Cultural Scout, Master Curator, Global Tastemaker
+  - **Early Believer**, at 1K / 10K / 100K: you followed an artist before they reached that many followers, and they got there
+- **Cultural Influence by Country:** each country's artists' combined score, with its leading artist and work.
+- **Collections:** Super Likes, Liked and Acquired, plus named collections you create (Personal Museum, Hidden Gems, Masterpieces and more), which can be private. They're stored on the device for now.
+
 ## Architecture
 
 ```
@@ -108,6 +127,8 @@ src/ui/               browser layer
 src/config.js         Supabase URL + anon key, written at build time (empty = demo mode)
 src/core/community.js server totals ↔ app state mapping, member uploads, guest → account import
 src/core/media.js     upload rules (sizes, limits, validation) shared with the database
+src/core/taste.js     Taste Score, personal influence, weekly activity, achievements
+src/core/insights.js  credibility, artist signals, momentum, country standings, Daily Masterpiece
 src/ui/images.js      on-device image pipeline: rotate, resize, re-encode (strips metadata), thumbnail
 supabase/             migration, generated seed, one-file setup, setup guide
 scripts/write-config.js  build step: env vars → src/config.js (refuses secret keys)

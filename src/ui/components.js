@@ -207,7 +207,7 @@ export function ArtBattleCard(art, { artist, index, elo, result }) {
       <div><h3 class="art-title">${esc(art.title)}</h3><button class="art-artist" data-act="artist" data-id="${artist.id}">${esc(artist.name)}</button></div>
       <span class="elo">${Math.round(elo)}</span>
     </div>
-    <button class="btn btn-secondary btn-block vote-btn" data-act="vote" data-i="${index}" ${result ? 'disabled' : ''}>Choose this work</button>
+    <button class="btn btn-secondary btn-block vote-btn" data-act="vote" data-i="${index}" ${result ? 'disabled' : ''}>${index === 0 ? `${Icon('back', { size: 16 })}<span>Vote Left</span>` : `<span>Vote Right</span>${Icon('arrow', { size: 16 })}`}</button>
   </article>`;
 }
 

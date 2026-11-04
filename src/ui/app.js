@@ -189,7 +189,11 @@ function navigate() {
     renderView();
     window.scrollTo(0, 0);
   };
-  if (document.startViewTransition && !reducedMotion.matches) document.startViewTransition(swap);
+  if (document.startViewTransition && !reducedMotion.matches) {
+    // A transition can be skipped (e.g. the phone rotates mid-way); the new page still renders.
+    const t = document.startViewTransition(swap);
+    for (const p of [t.ready, t.finished, t.updateCallbackDone]) p?.catch(() => {});
+  }
   else {
     swap();
     const v = $('#view');
@@ -255,7 +259,7 @@ function setReaction(art, next) {
     if (state.activity.length > 600) state.activity.splice(0, state.activity.length - 600);
   }
   commit();
-  if (added > 0 && counts()) influenceFeedback(added, before, standingOf(id));
+  if (added > 0 && counts()) influenceFeedback(added, before, standingOf(id), next === 'super');
   checkAchievements();
   if (COMMUNITY) { // every artwork in community mode (catalog or member upload) exists on the server
     if (me) remote(() => cloud.setReaction(id, next || null));
@@ -280,11 +284,11 @@ function standingOf(id) {
 }
 
 /** "+3 Influence added", plus the work's climb when your vote moved it. */
-function influenceFeedback(points, before, after) {
+function influenceFeedback(points, before, after, superLike = false) {
   const chip = document.createElement('div');
   chip.className = 'influence-chip';
   const climbed = before.rank - after.rank;
-  chip.innerHTML = `<b>+${points}</b> Influence added${climbed > 0 ? `<span>↑ ${climbed} to No. ${after.rank}</span>` : ''}`;
+  chip.innerHTML = `${superLike ? '★ Super Like · ' : ''}<b>+${points}</b> Influence added${climbed > 0 ? `<span>↑ ${climbed} to No. ${after.rank}</span>` : ''}`;
   document.body.append(chip);
   setTimeout(() => chip.remove(), 2200);
 }
@@ -623,7 +627,8 @@ function discoverPanelHTML(entry) {
 function renderDiscover(root) {
   fillDeck();
   const top = deck[0];
-  const cats = CATEGORIES.map((c) => ({ id: c.id, label: DISCOVER_LABELS[c.id] || c.label }));
+  const order = ['oil', 'photography', 'digital', 'sculpture', 'street', 'mixed', 'illustration', 'ai', 'nft'];
+  const cats = order.map((id) => ({ id, label: DISCOVER_LABELS[id] || categoryById[id].label }));
   root.innerHTML = `<div class="shell discover">
     <h1 class="sr-only">Discover</h1>
     ${CategoryFilter(cats, discover.category, { act: 'discover-cat', allLabel: 'All', pills: true })}
@@ -706,7 +711,7 @@ function decide(action) {
 
 function applySwipe(art, action) {
   setReaction(art, action);
-  if (action === 'super') toast(`Saved “${art.title}” to your collection`);
+  if (action === 'super' && !counts()) toast(`Saved “${art.title}” to your collection`);
 }
 
 // ——— Artwork & artist modals ———
@@ -1002,7 +1007,7 @@ function renderCharts(root) {
     const rows = list.slice(0, open ? 100 : 5);
     return `<section class="board">
       <header class="board-head"><h2>${title}</h2>${list.length > 5 ? `<button class="link-arrow" data-act="chart-expand" data-v="${key}">${open ? 'Show top 5' : 'See all'} ${Icon('arrow', { size: 14 })}</button>` : ''}</header>
-      ${rows.length ? `<ol class="rank-list">${rows.map((r) => rankRow(r, kind, opts.previous, opts)).join('')}</ol>` : EmptyState({ title: 'Nothing ranked here yet' })}
+      ${rows.length ? `<ol class="rank-list">${rows.map((r) => rankRow(r, kind, opts.previous || undefined, opts)).join('')}</ol>` : EmptyState({ title: 'Nothing ranked here yet' })}
     </section>`;
   };
   const tabs = Object.entries({ global: 'Global', countries: 'Countries', categories: 'Categories' })
