@@ -81,7 +81,7 @@ const step = (name) => console.log(`✓ ${name}`);
   const tileOf = async (label) => (await studio.locator('.stat-tile', { hasText: label }).textContent()).replace(/\s+/g, ' ');
   assert.match(await tileOf('Artwork views'), /Artwork views 2 new 1 members · 1 guests/);
   assert.match(await tileOf('Profile visits'), /Profile visits 1 /);
-  assert.match(await tileOf('Likes'), /Likes 1 /);
+  assert.match(await tileOf('Admirations'), /Admirations 1 /);
   assert.match(await tileOf('New followers'), /New followers 1 /);
   assert.equal(await studio.locator('.chart').count(), 3);
   assert.ok(await studio.locator('.chart .bar rect title').count() > 0, 'every bar has a hover title');

@@ -30,7 +30,7 @@ export const GUIDE_COPY = {
   following: 'Following',
   search: 'Search',
   prefsTitle: 'Personalize your suggestions',
-  prefsUse: 'Use my follows, likes and saves to tailor suggestions',
+  prefsUse: 'Use my follows, admirations and treasures to tailor suggestions',
   prefsInterests: 'What do you enjoy? (optional)',
   prefsInterestsHint: 'For example: quiet landscapes, street art from Lisbon, black-and-white photography.',
   prefsPrivacy: 'Only you see your suggestions. Conversations aren’t saved: they’re gone when you close or reload Abremi.',

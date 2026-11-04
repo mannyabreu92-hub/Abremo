@@ -337,8 +337,8 @@ export async function createSupabaseCloud(url, key) {
     async drop(id) {
       return check(await sb.rpc('drop_detail', { p_id: id }));
     },
-    async createDrop({ title, description, releaseAt, artworkIds }) {
-      return check(await sb.rpc('create_drop', { p_title: title, p_description: description || '', p_release_at: releaseAt, p_artworks: artworkIds, p_teaser: artworkIds[0] }));
+    async createDrop({ title, description, releaseAt, artworkIds, palette = null }) {
+      return check(await sb.rpc('create_drop', { p_title: title, p_description: description || '', p_release_at: releaseAt, p_artworks: artworkIds, p_teaser: artworkIds[0], p_teaser_palette: palette }));
     },
     async cancelDrop(id, note) {
       check(await sb.rpc('cancel_drop', { p_id: id, p_note: note || null }));
@@ -410,6 +410,10 @@ export async function createSupabaseCloud(url, key) {
     },
     async myPlan() {
       return user ? check(await sb.rpc('my_plan')) : null;
+    },
+    /** Shows or hides your Pro or Elite badge on your artist page. */
+    async setPlanBadge(show) {
+      check(await sb.rpc('set_plan_badge', { p_show: show }));
     },
     async planBadges() {
       return check(await sb.rpc('plan_badges')) || {};

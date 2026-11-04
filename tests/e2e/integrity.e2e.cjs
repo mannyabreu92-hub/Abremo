@@ -43,7 +43,7 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   await ana.goto(BASE + `#art/${work}`);
   await ana.waitForSelector('.artwork-page [data-act=react][data-v=like]');
   await ana.click('.artwork-page [data-act=react][data-v=like]');
-  await toastSays(ana, /own likes don’t count/);
+  await toastSays(ana, /own admirations don’t count/);
   await ana.waitForTimeout(300);
   const snap = await ana.evaluate(async () => (await window.__abremiCloud()).snapshot());
   assert.equal((snap.scores.find((x) => x.a === work) || { p: 0 }).p, 0, 'a self-like adds nothing');

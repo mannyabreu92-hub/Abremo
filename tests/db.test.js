@@ -896,7 +896,8 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     const d = JSON.parse(as('anon', `select drop_detail('${drop}')`));
     assert.equal(d.phase, 'upcoming');
     assert.deepEqual(d.works, [], 'works stay secret');
-    assert.ok(d.teaser_thumb, 'a teaser');
+    assert.equal(d.teaser_thumb, null, 'no teaser image for the public before release (0014)');
+    assert.ok(JSON.parse(as(E, `select drop_detail('${drop}')`)).teaser_thumb, 'the artist sees it');
     assert.deepEqual(JSON.parse(as(E, `select drop_detail('${drop}')`)).works, [dropWork]);
     as(A, `select subscribe_drop('${drop}', true)`);
     fails(A, `select cancel_drop('${drop}')`, /Only the artist or a moderator/);
@@ -1289,6 +1290,43 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public' and p.proname in ('assistant_catalog', 'assistant_page_context') and p.prosrc ~* '(subscriptions|current_plan|plans\\b|plan_badges)'`), '', 'suggestions are chosen without plans');
     fails(B, 'select assistant_catalog()', /permission denied/);
+  });
+
+  // ——— 0014: drop teasers and plan badges ———
+  await t.test('drop teasers: before release only a colour palette is public, never the image; the artist still sees it', () => {
+    const drop = psql(`select id from drops where owner_id = '${E}' and released_at is null and cancelled_at is null and release_at > now() limit 1`);
+    assert.ok(drop, 'the fixture has an upcoming drop');
+    const palette = '#112233,#445566,#778899,#aabbcc,#ddeeff,#102030,#405060,#708090,#a0b0c0';
+    psql(`update drops set teaser_palette = '${palette}' where id = '${drop}'`);
+    for (const who of ['anon', B]) {
+      const o = JSON.parse(as(who, 'select drops_overview()')).find((d) => d.id === drop);
+      assert.equal(o.teaser_thumb, null, 'no teaser image before release');
+      assert.equal(o.teaser_palette, palette);
+      assert.equal(JSON.parse(as(who, `select drop_detail('${drop}')`)).teaser_thumb, null);
+    }
+    assert.ok(JSON.parse(as(E, `select drop_detail('${drop}')`)).teaser_thumb, 'the artist sees their own teaser');
+    assert.throws(() => psql(`update drops set teaser_palette = 'url(javascript:alert(1))' where id = '${drop}'`), /check constraint/);
+    const released = psql(`select id from drops where released_at is not null limit 1`);
+    if (released) assert.ok(JSON.parse(as('anon', `select drop_detail('${released}')`)).teaser_thumb, 'shown once released');
+  });
+
+  await t.test('plan badges: shown by default, and artists can hide theirs', () => {
+    as(P[1], `select admin_grant_plan('${E}', 'pro', current_date + 30)`);
+    assert.equal(JSON.parse(as('anon', 'select plan_badges()'))[`m_${E}`], 'Pro');
+    as(E, 'select set_plan_badge(false)');
+    assert.equal(JSON.parse(as('anon', 'select plan_badges()'))[`m_${E}`], undefined);
+    assert.equal(JSON.parse(as(E, 'select my_plan()')).show_badge, false);
+    fails('anon', 'select set_plan_badge(false)', /permission denied|Sign in/);
+    as(E, 'select set_plan_badge(true)');
+    assert.equal(JSON.parse(as('anon', 'select plan_badges()'))[`m_${E}`], 'Pro');
+    as(P[1], `select admin_revoke_plan('${E}')`);
+  });
+
+  await t.test('0014 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0014_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.columns where (table_name, column_name) in (('drops', 'teaser_palette'), ('profiles', 'show_plan_badge'))`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.columns where (table_name, column_name) in (('drops', 'teaser_palette'), ('profiles', 'show_plan_badge'))`), '2');
   });
 
   await t.test('0013 can be undone, and setup.sql re-applies it', () => {
