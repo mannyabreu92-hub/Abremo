@@ -20,6 +20,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
 import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, sampleCatalog, collectionsToState, AVAILABILITY } from '../core/community.js';
 import { artistProfileForm, validateArtistProfile, artworkEditForm, collectionEditForm } from './views/forms.js';
 import { howRankedSheet } from './views/explainers.js';
+import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, createCompetitionForm, competitionCard } from './views/arena.js';
 import {
   esc, fmt, money, flag, countryName, initials, Icon, ArtImage, Avatar, PremiumButton, IconButton, AbremiSymbol,
   ArtworkCard, ArtworkGrid, ArtistCard, CategoryFilter, Select, SearchBar,
@@ -158,7 +159,7 @@ function refresh() {
 const VIEWS = {
   home: renderHome, discover: renderDiscover, explore: renderExplore, battle: renderBattle, artists: renderArtists,
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
-  art: renderArtworkPage, collection: renderSharedCollection,
+  art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -166,7 +167,7 @@ function route() {
   return VIEWS[name] ? { name, param: decodeURIComponent(rest.join('/')) } : { name: 'home', param: '' };
 }
 const currentView = () => route().name;
-const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections' };
+const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections', competition: 'battle' };
 
 function renderView() {
   const name = currentView();
@@ -946,13 +947,38 @@ function battleArenaHTML(compact = false) {
   return BattleArena(cards, { compact });
 }
 
+// ——— Artist Arena: Battles, Competitions and History ———
+const arena = { tab: 'battles', list: null, at: 0, details: new Map(), adminKind: 'weekly' };
+async function loadArena(force = false) {
+  if (!cloud?.arena || (!force && Date.now() - arena.at < 15_000)) return;
+  arena.at = Date.now();
+  try { arena.list = await cloud.arena(); } catch { arena.list ||= []; }
+  // A competition that moved on (entries → voting → results) is fetched again when opened.
+  for (const c of arena.list) if (arena.details.get(c.id)?.data && arena.details.get(c.id).data.phase !== c.phase) arena.details.delete(c.id);
+  // Only the Arena tab redraws here; the moderator page redraws when its own data loads (so a
+  // background refresh never wipes a form someone is filling in).
+  if (currentView() === 'battle' && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
+}
+const coverThumb = (id) => (world.artworkById[id] ? ArtImage(world.artworkById[id]) : '');
+
 function renderBattle(root) {
+  if (arena.tab !== 'battles') {
+    if (COMMUNITY && !arena.list) loadArena(true);
+    root.innerHTML = `<div class="shell battle arena-view">
+      <header class="battle-head"><h1 class="display-md">${Icon('trophy', { size: 26 })} Artist Arena</h1>
+        <p class="lede">${arena.tab === 'history' ? 'Past competitions and their winners.' : 'Daily, weekly and themed competitions. One entry per artist, one vote per member.'}</p></header>
+      ${arenaTabs(arena.tab)}
+      ${arena.tab === 'history' ? historyHTML(arena.list, { cover: coverThumb }) : competitionsHTML(arena.list, { cover: coverThumb, signedIn: Boolean(me), demo: !COMMUNITY })}
+    </div>`;
+    return;
+  }
   if (!battlePair) newBattle();
   const history = (state.battles.history || []).slice(0, 6).filter((h) => world.artworkById[h.w] && world.artworkById[h.l]);
   root.innerHTML = `<div class="shell battle">
     <header class="battle-head">
       <h1 class="display-md">${Icon('trophy', { size: 26 })} Art Battle</h1>
       <p class="lede">Vote for your favourite masterpiece.</p>
+      ${arenaTabs('battles')}
       <dl class="inline-stats">
         <div><dt>Your votes</dt><dd>${state.battles.voted}</dd></div>
         <div><dt>Crowd streak</dt><dd>${state.battles.streak}</dd></div>
@@ -971,6 +997,42 @@ function renderBattle(root) {
       }).join('')}</ol>
     </section>` : ''}
   </div>`;
+}
+
+/** #competition/<id>: the brief, entries, voting or results, and the rules. */
+function renderCompetition(root) {
+  const id = route().param;
+  if (!COMMUNITY) { root.innerHTML = `<div class="shell">${competitionsHTML([], { demo: true })}</div>`; return; }
+  const entry = arena.details.get(id);
+  if (!cloud || !entry || (!entry.loading && Date.now() - entry.at > 15_000)) {
+    if (cloud) {
+      arena.details.set(id, { loading: true, data: entry?.data });
+      cloud.competition(id)
+        .then((data) => arena.details.set(id, { data, at: Date.now() }))
+        .catch(() => arena.details.set(id, { data: entry?.data || null, error: true, at: Date.now() }))
+        .finally(() => { if (route().name === 'competition' && route().param === id && !sheetRenderer) renderView(); });
+    }
+    if (!entry?.data) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 4 })}</div>`; return; }
+  }
+  const d = (arena.details.get(id) || entry).data;
+  if (!d) {
+    root.innerHTML = `<div class="shell">${EmptyState({ icon: 'trophy', title: 'Competition not found', action: '<a class="btn btn-secondary" href="#battle"><span>Arena</span></a>' })}</div>`;
+    return;
+  }
+  root.innerHTML = competitionPage(d, {
+    card: (w) => card(w), artwork: (aid) => world.artworkById[aid], signedIn: Boolean(me),
+    canEnter: eligibleWorks(d).length > 0, now: Date.now(),
+  });
+}
+/** Your published works that fit a competition (the server checks again). */
+function eligibleWorks(d) {
+  const mine = (world.worksByArtist[myArtistId()] || []).filter((w) => w.member);
+  return d.kind === 'category' ? mine.filter((w) => w.category === d.category) : mine;
+}
+async function refreshCompetition(id) {
+  arena.details.delete(id);
+  arena.at = 0;
+  renderView();
 }
 
 function vote(i) {
@@ -1878,8 +1940,17 @@ function searchResultsHTML(q) {
 }
 
 // ——— Notifications (derived from your own activity; nothing invented) ———
+let serverNotifications = [];
+async function loadNotifications() {
+  if (!cloud?.notifications || !me) return;
+  try {
+    serverNotifications = await cloud.notifications();
+    updateNotificationDot();
+    if (!$('#notifications').hidden) renderNotifications(); // arrived while the list is open
+  } catch { /* older database */ }
+}
 function notifications() {
-  const items = [];
+  const items = serverNotifications.map((n) => ({ at: Date.parse(n.created_at) || 0, text: esc(n.title), act: 'open-link', id: n.link || '' }));
   for (const a of state.applications || []) {
     if (a.status !== 'approved' && a.status !== 'declined') continue;
     const label = a.role === 'critic' ? 'Critic' : 'Collector';
@@ -1927,6 +1998,7 @@ function togglePopover(id, btn) {
     renderNotifications();
     state.notifSeenAt = Date.now();
     saveState(state);
+    if (serverNotifications.some((n) => !n.read_at)) cloud?.markNotificationsRead?.().catch(() => {});
     $('#notif-dot').hidden = true;
   }
   pop.hidden = false;
@@ -2013,6 +2085,7 @@ async function loadAdmin() {
       cloud.adminQueue(), cloud.verifiedMembers(),
       cloud.integrityQueue ? cloud.integrityQueue().catch(() => []) : [],
       cloud.auditLog ? cloud.auditLog().catch(() => []) : [],
+      loadArena(true),
     ]);
     adminData = { queue, verified, flags, audit, at: Date.now() };
   } catch (e) {
@@ -2050,6 +2123,10 @@ function renderAdmin(root) {
       ${verified.length ? `<ol class="rank-list">${verified.map((v) => `<li><div class="rank-row">${Avatar({ name: v.name, palette: hashString(v.name) % PALETTES.length }, 'md')}
         <span class="rank-text"><b>${esc(v.name)} <span class="flag">${flag(v.country)}</span></b><small>${esc(ROLE_GUIDE[v.role]?.label || v.role)} · ${esc(v.email || '')}${v.approved_at ? ` · since ${new Date(v.approved_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}</small></span>
         ${PremiumButton('Remove role', { act: 'admin-revoke', variant: 'ghost', attrs: `data-id="${v.user_id}" data-name="${esc(v.name)}" data-danger` })}</div></li>`).join('')}</ol>` : '<p class="muted">Nobody yet.</p>'}
+    </section>
+    <section class="section section-tight" id="admin-competitions">${SectionHeader({ eyebrow: 'Artist Arena', title: 'Create a competition' })}
+      ${createCompetitionForm(arena.adminKind)}
+      ${(arena.list || []).filter((c) => ['upcoming', 'entries', 'voting'].includes(c.phase)).length ? `<h3 class="sub-head">Running now</h3><div class="competition-list">${(arena.list || []).filter((c) => ['upcoming', 'entries', 'voting'].includes(c.phase)).map((c) => `<div class="admin-competition">${competitionCard(c, { cover: coverThumb })}${PremiumButton('Cancel', { act: 'cancel-competition', variant: 'ghost', attrs: `data-v="${c.id}" data-danger` })}</div>`).join('')}</div>` : ''}
     </section>
     ${integrityHTML(adminData.flags || [])}
     ${auditHTML(adminData.audit || [])}
@@ -2222,6 +2299,7 @@ function signedOut() {
   state.collections = (state.collections || []).filter((c) => !c.server); // account collections stay with the account
   sharedCollections.clear();
   serverAchievements.earned = [];
+  serverNotifications = [];
   Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
   state.user = { ...state.user, role: 'fan', name: 'You' };
   deck = [];
@@ -2251,7 +2329,7 @@ async function syncAccount({ importGuest = false } = {}) {
   memberCache.clear();
   // Critic & Collector applications (older databases without the feature simply return none).
   await syncCollections();
-  await loadAchievements();
+  await Promise.all([loadAchievements(), loadNotifications()]);
   const [apps, admin] = await Promise.all([cloud.myApplications().catch(() => []), cloud.isAdmin().catch(() => false)]);
   const before = new Map((state.applications || []).map((a) => [a.id, a.status]));
   state.applications = apps;
@@ -2393,7 +2471,7 @@ async function connectCommunity() {
 function quietRefresh() {
   if (document.hidden || !cloud) return;
   const waiting = me && state.applications?.some((a) => a.status === 'pending');
-  Promise.all([waiting ? syncAccount() : refreshCommunity(), loadChartBaseline(), waiting ? null : loadAchievements()])
+  Promise.all([waiting ? syncAccount() : refreshCommunity(), loadChartBaseline(), waiting ? null : loadAchievements(), waiting ? null : loadNotifications(), loadArena()])
     .then(() => {
       // A decided application changes the member's role, so every view (and the nav badge) must redraw.
       if (waiting) commit();
@@ -2445,6 +2523,59 @@ const ACTIONS = {
   back: () => (history.length > 1 ? history.back() : (location.hash = 'artists')),
   'artist-tab': (el) => { artistTab = el.dataset.v; renderView(); },
   'how-ranked': () => openSheet(howRankedSheet),
+  'open-link': (el) => { closePopovers(); if (el.dataset.id) location.hash = el.dataset.id; },
+  'arena-tab': (el) => {
+    arena.tab = el.dataset.v;
+    if (arena.tab !== 'battles') loadArena(true);
+    if (currentView() === 'battle') renderView(); else location.hash = 'battle';
+  },
+  'enter-competition': (el) => {
+    const d = arena.details.get(el.dataset.v)?.data;
+    if (!d) return;
+    openSheet(() => enterSheet(d, eligibleWorks(d).map((w) => ({ id: w.id, title: w.title, html: `<span class="rank-thumb">${ArtImage(w)}</span>` }))));
+  },
+  'enter-with': async (el) => {
+    el.disabled = true;
+    try {
+      await cloud.enterCompetition(el.dataset.v, el.dataset.id);
+      closeSheet();
+      toast('You’re in. Voting opens on schedule.', { force: true });
+      loadAchievements();
+      refreshCompetition(el.dataset.v);
+    } catch (e) { el.disabled = false; toast(e?.message || 'Could not enter.', { force: true }); }
+  },
+  'withdraw-entry': async (el) => {
+    if (!confirm('Withdraw your entry?')) return;
+    try { await cloud.withdrawEntry(el.dataset.v); toast('Entry withdrawn.', { force: true }); refreshCompetition(el.dataset.v); }
+    catch (e) { toast(e?.message || 'Could not withdraw.', { force: true }); }
+  },
+  'vote-entry': async (el) => {
+    const id = route().param;
+    if (!me) return openSignIn();
+    el.disabled = true;
+    try { await cloud.voteCompetition(id, el.dataset.v); toast('Vote saved. You can change it until voting closes.', { force: true }); refreshCompetition(id); }
+    catch (e) { el.disabled = false; toast(e?.message || 'Could not save your vote.', { force: true }); }
+  },
+  'create-competition': async (el) => {
+    const v = (k) => ($(`#comp-${k}`)?.value || '').trim();
+    const iso = (k) => (v(k) ? new Date(v(k)).toISOString() : '');
+    const fail = (msg) => { const e = $('#comp-error'); e.textContent = msg; e.hidden = false; };
+    if (v('title').length < 3) return fail('Give it a title.');
+    if (!(iso('open') && iso('voting') && iso('close')) || !(iso('open') < iso('voting') && iso('voting') < iso('close'))) return fail('Entries must open before voting, and voting must open before it closes.');
+    el.disabled = true;
+    try {
+      await cloud.createCompetition({ kind: v('kind'), title: v('title'), brief: v('brief'), rules: v('rules'), category: v('category'), country: v('country'),
+        entriesOpenAt: iso('open'), votingOpensAt: iso('voting'), votingClosesAt: iso('close') });
+      toast('Competition created.', { force: true });
+      await loadArena(true);
+      renderView();
+    } catch (e) { el.disabled = false; fail(e?.message || 'Could not create the competition.'); }
+  },
+  'cancel-competition': async (el) => {
+    if (!confirm('Cancel this competition? Entrants keep their works; the competition ends without results.')) return;
+    try { await cloud.cancelCompetition(el.dataset.v, null); toast('Competition cancelled.', { force: true }); await loadArena(true); renderView(); }
+    catch (e) { toast(e?.message || 'Could not cancel.', { force: true }); }
+  },
   'share-artwork': async (el) => {
     const w = world.artworkById[el.dataset.id];
     const url = `${location.origin}${location.pathname}#art/${encodeURIComponent(el.dataset.id)}`;
@@ -2822,6 +2953,7 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  if (e.target.id === 'comp-kind') { arena.adminKind = e.target.value; renderView(); return; }
   if (e.target.id !== 'portrait-file') return;
   const file = e.target.files?.[0];
   if (!file) return;

@@ -18,7 +18,7 @@ npm run lint      # ESLint
 npm run typecheck # TypeScript checks the JavaScript through JSDoc (app.js joins as it is split into src/ui/views/)
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
 npm run test:db   # Supabase migration + security rules on a real Postgres (set ABREMI_PG)
-npm run test:e2e  # Phase 2A (ranking integrity, achievements), Phase 1 (profiles, artwork details, collections, sample catalog), sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
+npm run test:e2e  # Phase 2B (Arena competitions), Phase 2A (ranking integrity, achievements), Phase 1 (profiles, artwork details, collections, sample catalog), sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
 ```
 
 ### Accounts and the shared database
@@ -35,6 +35,7 @@ Add a Supabase database and it switches to **community mode**:
 - **Artwork details:** description, size and availability (available, price on request, sold, not for sale; "sold" is reported by the artist, not verified). Artists edit their works after publishing. Every work has a shareable page: `#art/<id>`.
 - **Collections with your account:** private by default; share one and anyone with the link (`#collection/<id>`) can see it. Collections made as a guest move to the account on sign-in, and signing out removes them from the device.
 - **Fair rankings (Phase 2A):** the server calculates five separate scores (artwork popularity, artist reputation, critic credibility, collector interest, battle performance) and publishes how ("How rankings work" on Rankings). Rankings show All Time, **Trending This Week** (each like halves in value every 7 days) and **Collectors' Picks**. Your own likes, saves, reviews, follows and battle votes never count; there are hourly rate limits; bursts of likes from brand-new accounts go to moderators, who can exclude them (recorded, never deleted).
+- **Artist Arena and Creative Challenges (Phase 2B):** Arena → Competitions. Moderators create daily, weekly, medium, country, emerging-artist and themed competitions from templates. Artists enter one of their own works; every eligible member (account 3+ days old, 5+ likes) has one vote, equal for every role, changeable until close and never for their own entry. Vote totals stay hidden until the server closes the competition on schedule, publishes places (ties share), awards First Entry, Podium Finish and Competition Winner, and notifies entrants and the winners' followers. History lists past results.
 - **Achievements:** earned on the server, each with a published rule and a record of why it was earned. Artist achievements show on artist pages; member achievements stay private.
 - **Following feed:** Home → Following shows the newest work from artists you follow.
 - **Security headers:** a strict Content-Security-Policy (scripts from this site only; supabase-js is served from `src/vendor/`), plus frame, referrer, permissions and HSTS headers, set in `vercel.json` and applied by `npm start` too.
