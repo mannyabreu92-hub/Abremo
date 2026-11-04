@@ -67,11 +67,13 @@ const mock = readFileSync(path.join(__dirname, 'mock-cloud.js'), 'utf8');
   await page.waitForSelector('.account-card');
   assert.match(await page.locator('.account-card').textContent(), /ana@example.com/);
   await page.click('[data-act=set-role][data-v=critic]');
-  assert.match(await toastText(), /needs verification/);
+  await page.waitForSelector('#sheet.open #apply-form');
+  assert.equal((await db()).profiles['u-ana@example.com'].role, 'fan', 'Critic is not self-service');
+  await page.keyboard.press('Escape');
   await page.click('[data-act=set-role][data-v=artist]');
   await page.waitForTimeout(200);
   assert.equal((await db()).profiles['u-ana@example.com'].role, 'artist');
-  step('Fan/Artist are self-service; Critic needs verification');
+  step('Fan/Artist are self-service; Critic opens an application');
 
   await page.goto(BASE + '#discover');
   await page.waitForSelector('.swipe-card.is-top');

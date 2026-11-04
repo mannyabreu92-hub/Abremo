@@ -52,6 +52,74 @@ window.__abremiCloud = async () => {
         uploads: db.uploads.slice().reverse(),
       };
     },
+    // ——— Critic & Collector applications (same rules as supabase/migrations/0004_role_applications.sql) ———
+    async applyForRole(role, statement, links = []) {
+      needUser(); await wait();
+      const db = load();
+      db.applications ||= [];
+      const p = profileOf(db, user.id);
+      if (!['critic', 'collector'].includes(role)) throw new Error('You can apply to be a Critic or a Collector');
+      if (p.role === role) throw new Error('You already have this role');
+      if (db.applications.some((a) => a.user_id === user.id && a.role === role && a.status === 'pending')) throw new Error('You already have a pending application for this role');
+      if (db.applications.filter((a) => a.user_id === user.id).length >= 3) throw new Error('You can send three applications every 30 days');
+      if (statement.trim().length < 40) throw new Error('new row violates check constraint');
+      if (links.some((l) => !/^https:\/\/\S+$/.test(l))) throw new Error('Links must start with https://');
+      const app = { id: crypto.randomUUID(), user_id: user.id, role, statement: statement.trim(), links, status: 'pending', decision_note: null, created_at: new Date().toISOString(), decided_at: null };
+      db.applications.push(app);
+      save(db);
+      return app;
+    },
+    async withdrawApplication(id) {
+      needUser(); await wait();
+      const db = load();
+      const a = (db.applications || []).find((x) => x.id === id && x.user_id === user.id && x.status === 'pending');
+      if (!a) throw new Error('No pending application to withdraw');
+      a.status = 'withdrawn';
+      save(db);
+    },
+    async myApplications() {
+      await wait();
+      if (!user) return [];
+      return (load().applications || []).filter((a) => a.user_id === user.id).slice().reverse();
+    },
+    async isAdmin() { return Boolean(user && (load().admins || []).includes(user.id)); },
+    async adminQueue() {
+      await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      return (db.applications || []).filter((a) => a.status === 'pending').map((a) => {
+        const p = profileOf(db, a.user_id);
+        const mine = db.reactions.filter((r) => r.user_id === a.user_id);
+        return { ...a, applicant_name: p.name, applicant_country: p.country, applicant_role: p.role, email: a.user_id.replace(/^u-/, ''), member_since: new Date().toISOString(),
+          likes: mine.filter((r) => r.kind === 'like').length, saves: mine.filter((r) => r.kind === 'super').length, reviews: db.reviews.filter((r) => r.user_id === a.user_id).length,
+          influence_added: mine.length, follows: 0, previous_declines: (db.applications || []).filter((d) => d.user_id === a.user_id && d.status === 'declined').length };
+      });
+    },
+    async decideApplication(id, approve, note) {
+      await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      const a = (db.applications || []).find((x) => x.id === id && x.status === 'pending');
+      if (!a) throw new Error('That application is no longer pending');
+      Object.assign(a, { status: approve ? 'approved' : 'declined', decision_note: note || null, decided_at: new Date().toISOString() });
+      if (approve) profileOf(db, a.user_id).role = a.role;
+      save(db);
+      return a;
+    },
+    async verifiedMembers() {
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      return Object.values(db.profiles).filter((p) => p.role === 'critic' || p.role === 'collector')
+        .map((p) => ({ user_id: p.id, name: p.name, country: p.country, role: p.role, email: p.id.replace(/^u-/, ''), approved_at: null }));
+    },
+    async revokeRole(userId) {
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      const p = db.profiles[userId];
+      if (!p || !['critic', 'collector'].includes(p.role)) throw new Error('That member has no verified role');
+      p.role = 'fan';
+      save(db);
+    },
     async leaderboards(country = null) {
       await wait();
       const db = load();

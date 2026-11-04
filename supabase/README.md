@@ -13,6 +13,7 @@ Abremi runs in two modes:
 | `migrations/0001_community.sql` | Tables, Row Level Security, role stamping, battle voting, community totals |
 | `migrations/0002_artist_uploads.sql` | Member artists, uploaded artworks, the `artworks` image bucket and its access rules, publish/delete |
 | `migrations/0003_member_leaderboards.sql` | Member leaderboards (`member_leaderboards()`), the leaderboard opt-out, neutral default names |
+| `migrations/0004_role_applications.sql` | Critic & Collector applications, the admin list, and the review functions |
 | `seed.sql` | The catalog (artists, artworks, starting battle ratings), generated from `src/core/seed.js` |
 | `setup.sql` | Both of the above in one file, to paste into the SQL editor. Safe to run more than once |
 | `test/auth_stub.sql` | A stand-in for Supabase's `auth` schema, used only by the local database tests |
@@ -24,7 +25,11 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
 1. **Create the database.** In the Vercel dashboard, open the project and go to **Storage → Create Database → Supabase**, then connect it to the project. Vercel adds `SUPABASE_URL` and `SUPABASE_ANON_KEY` (or their `NEXT_PUBLIC_` variants) to the environment. You can also add those two variables yourself from an existing Supabase project.
 2. **Create the tables.** In Supabase, open **SQL Editor**, paste all of `setup.sql`, and **Run**.
 3. **Allow sign-in links back to the site.** In Supabase, go to **Authentication → URL Configuration**. Set **Site URL** to `https://abremi.vercel.app` and add `https://abremi.vercel.app/**` under **Redirect URLs**.
-4. **Build with the keys.** Set the Vercel project's **Build Command** to `node scripts/write-config.js`, then redeploy. The build log should say `Abremi: community mode`.
+4. **Make yourself a moderator** (after signing in to the site once), so you can review Critic and Collector applications at `#admin`:
+   ```sql
+   insert into public.admins (user_id) select id from auth.users where email = 'you@example.com';
+   ```
+5. **Build with the keys.** Set the Vercel project's **Build Command** to `node scripts/write-config.js`, then redeploy. The build log should say `Abremi: community mode`.
 
 `scripts/write-config.js` publishes only the public URL and the anon (publishable) key. It refuses to publish a `service_role` or `sb_secret_` key.
 
@@ -32,10 +37,11 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
 
 - Row Level Security is on for every table. People read and write only their own reactions, follows and profile.
 - The role on each vote (fan ×1, artist ×3, critic ×5, collector ×9) is stamped by the database from the voter's profile. A client cannot claim a heavier role.
-- Anyone can choose Fan or Artist. **Critic** and **Collector** can only be granted by an admin, from the SQL editor or with the service role:
-  ```sql
-  update profiles set role = 'critic' where id = (select id from auth.users where email = 'name@example.com');
-  ```
+- Anyone can choose Fan or Artist. **Critic** and **Collector** are applied for and granted by a moderator:
+  - Members apply with `apply_for_role()`: a statement (40–1,500 characters) and up to five `https://` links. One pending application per role, three applications per 30 days. Applying grants nothing.
+  - Moderators are the members listed in `public.admins`. Nobody can read or change that table through the API; add moderators in the SQL editor (see step 4 above).
+  - `admin_role_queue()`, `decide_role_application()`, `admin_verified_members()` and `revoke_role()` refuse anyone who isn't a moderator. The queue shows the applicant's email and their activity totals (likes, saves, reviews, influence added), never anyone else's private data.
+  - Members can read only their own applications, and can't write to the table directly. Revoking a role sets the member back to Fan; votes already cast keep the weight they had.
 - Battle ratings change only through `cast_battle_vote()`. It applies the same maths as `src/core/elo.js`, allows one vote per second, and allows the same pair once per 10 minutes.
 - `community_snapshot()` exposes totals only (counts per artwork and role). It never shows who voted. It also lists member artists and their published works.
 - **Uploads:**

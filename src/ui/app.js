@@ -35,6 +35,7 @@ let cloud = null; // backend adapter, once connected
 let me = null; // signed-in account { id, email }
 let pendingWrites = 0;
 let pwa = null; // install + offline support, set up after the first render's helpers exist
+let isAdmin = false; // can review Critic & Collector applications (checked by the server)
 const auth = { stage: 'email', email: '', busy: false, error: '' };
 if (COMMUNITY) state.community ||= emptyCommunity();
 
@@ -149,7 +150,7 @@ function refresh() {
 // ——— Router ———
 const VIEWS = {
   home: renderHome, discover: renderDiscover, explore: renderExplore, battle: renderBattle, artists: renderArtists,
-  collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage,
+  collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -178,6 +179,8 @@ function renderView() {
   updateNotificationDot();
   const menuInstall = $('#menu-install');
   if (menuInstall) menuInstall.hidden = !pwa?.status().available;
+  const menuAdmin = $('#menu-admin');
+  if (menuAdmin) menuAdmin.hidden = !(COMMUNITY && me && isAdmin);
   VIEWS[name]($('#view'));
 }
 
@@ -1467,7 +1470,7 @@ function renderProfile(root) {
         <h3 class="sub-head">Role</h3>
         <div class="role-grid">${ROLES.map((r) => `<button class="role-card${r.id === state.user.role ? ' is-on' : ''}" data-act="set-role" data-v="${r.id}" aria-pressed="${r.id === state.user.role}">
           <span class="role-top"><b>${r.label}</b><span class="role-weight">×${r.weight}</span></span><small>${esc(r.blurb)}</small>
-          ${COMMUNITY && (r.id === 'critic' || r.id === 'collector') && r.id !== state.user.role ? '<span class="role-lock">Verification required</span>' : ''}</button>`).join('')}</div>
+          ${COMMUNITY && (r.id === 'critic' || r.id === 'collector') && r.id !== state.user.role ? roleStatusLabel(r.id) : ''}</button>`).join('')}</div>
         <p class="fine">${COMMUNITY ? 'Fan and Artist are open to everyone. Critic and Collector carry more weight, so they are granted after verification.' : 'Demo: switch roles freely. In production, Critic and Collector status requires verification.'}</p>
       </section>
 
@@ -1730,6 +1733,11 @@ function searchResultsHTML(q) {
 // ——— Notifications (derived from your own activity; nothing invented) ———
 function notifications() {
   const items = [];
+  for (const a of state.applications || []) {
+    if (a.status !== 'approved' && a.status !== 'declined') continue;
+    const label = a.role === 'critic' ? 'Critic' : 'Collector';
+    items.push({ at: Date.parse(a.decided_at) || 0, text: a.status === 'approved' ? `Your <b>${label}</b> application was approved` : `Your <b>${label}</b> application was declined${a.decision_note ? `: ${esc(a.decision_note)}` : ''}`, act: 'goto-profile', id: a.role });
+  }
   // Today's Daily Masterpiece, revealed at local midnight.
   const mp = todaysMasterpiece()?.artwork;
   if (mp) {
@@ -1782,6 +1790,117 @@ function togglePopover(id, btn) {
 function closePopovers() {
   $$('.popover').forEach((p) => { p.classList.remove('open'); p.hidden = true; });
   $$('[aria-haspopup]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+}
+
+// ——— Critic & Collector applications ———
+const ROLE_GUIDE = {
+  critic: {
+    label: 'Critic',
+    lookFor: ['Published criticism, reviews or essays about art', 'Curatorial, editorial or teaching experience', 'A portfolio or byline we can check'],
+    prompt: 'Where has your writing about art appeared? What do you cover, and for how long?',
+  },
+  collector: {
+    label: 'Collector',
+    lookFor: ['A collection you have built over time', 'Acquisitions from galleries, fairs, auctions or artists', 'Anything that lets us verify it: a collection site, press or gallery references'],
+    prompt: 'What do you collect, and how did you build your collection?',
+  },
+};
+
+const latestApplication = (role) => (state.applications || []).find((a) => a.role === role);
+
+function roleStatusLabel(role) {
+  const app = latestApplication(role);
+  if (app?.status === 'pending') return '<span class="role-lock is-pending">Application pending</span>';
+  if (app?.status === 'declined') return '<span class="role-lock is-declined">Declined · apply again</span>';
+  return '<span class="role-lock">Apply for verification</span>';
+}
+
+function applySheet(role) {
+  const g = ROLE_GUIDE[role];
+  const app = latestApplication(role);
+  if (app?.status === 'pending') {
+    return `<div class="auth"><p class="eyebrow">${g.label} application</p><h2 class="display-md" id="modal-title">Under review</h2>
+      <p class="muted">Sent ${new Date(app.created_at).toLocaleDateString([], { month: 'long', day: 'numeric' })}. You will see the decision here and in your notifications.</p>
+      <div class="detail-actions">${PremiumButton('Withdraw application', { act: 'withdraw-application', variant: 'ghost', attrs: `data-id="${app.id}"` })}</div></div>`;
+  }
+  return `<form class="auth apply-form" id="apply-form" novalidate>
+    <p class="eyebrow">Apply for verification</p>
+    <h2 class="display-md" id="modal-title">Become a ${g.label}</h2>
+    <p class="muted">${g.label}s’ votes count ×${ROLE_WEIGHTS[role]}, so every application is reviewed by a person.</p>
+    ${app?.status === 'declined' ? `<p class="apply-declined"><b>Your last application was declined.</b>${app.decision_note ? ` ${esc(app.decision_note)}` : ''}</p>` : ''}
+    <div class="apply-guide"><small>What we look for</small><ul>${g.lookFor.map((x) => `<li>${Icon('check', { size: 14 })}${esc(x)}</li>`).join('')}</ul></div>
+    <label class="field"><span>${esc(g.prompt)}</span><textarea id="apply-statement" rows="6" maxlength="1500" placeholder="40 characters or more"></textarea><small class="char-count" id="apply-count">0 / 1500</small></label>
+    <label class="field"><span>Links (optional, one per line, up to 5)</span><textarea id="apply-links" rows="3" placeholder="https://"></textarea></label>
+    <label class="check"><input type="checkbox" id="apply-honest"> Everything here is accurate, and I won’t use the role to manipulate rankings.</label>
+    <p class="form-error" id="apply-error" role="alert" hidden></p>
+    <div class="detail-actions">${PremiumButton('Send application', { act: 'apply-role', attrs: `data-v="${role}"` })}</div>
+    <p class="fine">Reviewers see your application, your display name, email and your activity on Abremi. You can apply three times every 30 days.</p>
+  </form>`;
+}
+
+async function sendApplication(role) {
+  const statement = ($('#apply-statement')?.value || '').trim();
+  const links = ($('#apply-links')?.value || '').split(/\s+/).map((l) => l.trim()).filter(Boolean);
+  const error = (msg) => { const e = $('#apply-error'); e.textContent = msg; e.hidden = false; };
+  if (statement.length < 40) return error('Tell us a little more: at least 40 characters.');
+  if (links.length > 5) return error('Add at most five links.');
+  if (links.some((l) => !/^https:\/\/\S{4,}$/.test(l))) return error('Links must start with https://');
+  if (!$('#apply-honest')?.checked) return error('Please confirm that everything is accurate.');
+  try {
+    await cloud.applyForRole(role, statement, links);
+    state.applications = await cloud.myApplications();
+    commit();
+    closeSheet();
+    toast(`Application sent. We’ll review it and let you know here.`, { force: true, duration: 4000 });
+    renderView();
+  } catch (e) {
+    error(e?.message || 'Could not send your application. Try again.');
+  }
+}
+
+// ——— Admin: review applications (only reachable when the server says you are an admin) ———
+let adminData = null;
+async function loadAdmin() {
+  try {
+    const [queue, verified] = await Promise.all([cloud.adminQueue(), cloud.verifiedMembers()]);
+    adminData = { queue, verified, at: Date.now() };
+  } catch (e) {
+    adminData = { error: e?.message || 'Could not load applications.' };
+  }
+  if (currentView() === 'admin') renderView();
+}
+
+function renderAdmin(root) {
+  if (!COMMUNITY || !me || !isAdmin) {
+    root.innerHTML = `<div class="shell">${EmptyState({ icon: 'lock', title: 'Moderators only', body: 'This page is for Abremi moderators.', action: '<a class="btn btn-secondary" href="#home"><span>Back home</span></a>' })}</div>`;
+    return;
+  }
+  if (!adminData) { setTimeout(loadAdmin, 0); root.innerHTML = `<div class="shell"><header class="page-head"><h1 class="display-lg">Applications</h1></header>${LoadingSkeleton({ cards: 3, variant: 'list' })}</div>`; return; }
+  if (adminData.error) { root.innerHTML = `<div class="shell">${EmptyState({ title: 'Could not load applications', body: adminData.error, action: PremiumButton('Try again', { act: 'admin-reload', variant: 'secondary' }) })}</div>`; return; }
+  const { queue, verified } = adminData;
+  const stat = (n, label) => `<div><dt>${label}</dt><dd>${fmt(n)}</dd></div>`;
+  root.innerHTML = `<div class="shell admin">
+    <header class="page-head page-head-row"><div><p class="eyebrow">Moderation</p><h1 class="display-lg">Applications</h1>
+      <p class="muted">${queue.length} pending · ${verified.length} verified members</p></div>
+      ${PremiumButton('Refresh', { act: 'admin-reload', variant: 'secondary' })}</header>
+    ${queue.length ? queue.map((a) => `<article class="app-card">
+      <header><div><p class="eyebrow">${esc(ROLE_GUIDE[a.role].label)} · ${new Date(a.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</p>
+        <h2 class="display-sm">${esc(a.applicant_name)} <span class="flag">${flag(a.applicant_country)}</span></h2>
+        <p class="muted">${esc(a.email || '')} · currently ${esc(a.applicant_role)} · member since ${new Date(a.member_since).toLocaleDateString([], { month: 'short', year: 'numeric' })}${a.previous_declines ? ` · ${a.previous_declines} earlier decline${a.previous_declines === 1 ? '' : 's'}` : ''}</p></div></header>
+      <blockquote class="quote app-statement">${esc(a.statement)}</blockquote>
+      ${a.links?.length ? `<ul class="app-links">${a.links.map((l) => /^https:\/\//.test(l) ? `<li><a href="${esc(l)}" target="_blank" rel="noopener noreferrer nofollow">${esc(l)}</a></li>` : '').join('')}</ul>` : '<p class="muted">No links provided.</p>'}
+      <dl class="stat-row app-stats">${stat(a.influence_added, 'Influence added')}${stat(a.likes, 'Likes')}${stat(a.saves, 'Super Likes')}${stat(a.reviews, 'Reviews')}</dl>
+      <label class="field"><span>Note to the applicant (optional)</span><textarea id="note-${a.id}" rows="2" maxlength="500"></textarea></label>
+      <div class="detail-actions">
+        ${PremiumButton(`Approve as ${ROLE_GUIDE[a.role].label}`, { act: 'admin-decide', attrs: `data-id="${a.id}" data-v="approve"` })}
+        ${PremiumButton('Decline', { act: 'admin-decide', variant: 'secondary', attrs: `data-id="${a.id}" data-v="decline"` })}
+      </div></article>`).join('') : EmptyState({ icon: 'check', title: 'All caught up', body: 'No applications are waiting.' })}
+    <section class="section section-tight">${SectionHeader({ eyebrow: 'Verified', title: 'Critics & collectors' })}
+      ${verified.length ? `<ol class="rank-list">${verified.map((v) => `<li><div class="rank-row">${Avatar({ name: v.name, palette: hashString(v.name) % PALETTES.length }, 'md')}
+        <span class="rank-text"><b>${esc(v.name)} <span class="flag">${flag(v.country)}</span></b><small>${esc(ROLE_GUIDE[v.role]?.label || v.role)} · ${esc(v.email || '')}${v.approved_at ? ` · since ${new Date(v.approved_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}</small></span>
+        ${PremiumButton('Remove role', { act: 'admin-revoke', variant: 'ghost', attrs: `data-id="${v.user_id}" data-name="${esc(v.name)}" data-danger` })}</div></li>`).join('')}</ol>` : '<p class="muted">Nobody yet.</p>'}
+    </section>
+  </div>`;
 }
 
 // ——— Install as an app ———
@@ -1912,6 +2031,9 @@ async function signOut() {
 function signedOut() {
   me = null;
   memberCache.clear(); // leaderboards fetched while signed in include your private standing
+  isAdmin = false;
+  adminData = null;
+  state.applications = [];
   Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
   state.user = { ...state.user, role: 'fan', name: 'You' };
   deck = [];
@@ -1936,8 +2058,23 @@ async function syncAccount({ importGuest = false } = {}) {
     }
   }
   Object.assign(state, mineToState(mine));
+  const roleBefore = state.account?.id === me.id ? state.user.role : null;
   state.user = { ...state.user, name: profile.name, country: profile.country, role: profile.role, publicLeaderboards: profile.public_leaderboards !== false };
   memberCache.clear();
+  // Critic & Collector applications (older databases without the feature simply return none).
+  const [apps, admin] = await Promise.all([cloud.myApplications().catch(() => []), cloud.isAdmin().catch(() => false)]);
+  const before = new Map((state.applications || []).map((a) => [a.id, a.status]));
+  state.applications = apps;
+  isAdmin = admin;
+  const decided = apps.find((a) => before.get(a.id) === 'pending' && (a.status === 'approved' || a.status === 'declined'));
+  if (decided) {
+    const label = decided.role === 'critic' ? 'Critic' : 'Collector';
+    toast(decided.status === 'approved'
+      ? `Your ${label} application was approved. Your votes now count ×${ROLE_WEIGHTS[decided.role]}.`
+      : `Your ${label} application was declined${decided.decision_note ? `: ${decided.decision_note}` : '.'}`, { force: true, duration: 6000 });
+  } else if (roleBefore && roleBefore !== profile.role && (roleBefore === 'critic' || roleBefore === 'collector')) {
+    toast(`Your ${roleBefore === 'critic' ? 'Critic' : 'Collector'} status was removed by a moderator.`, { force: true, duration: 6000 });
+  }
   state.account = { id: me.id, email: me.email };
   deck = [];
   await refreshCommunity();
@@ -1993,9 +2130,12 @@ async function connectCommunity() {
   else refresh();
   const quietRefresh = () => {
     if (document.hidden || !cloud) return;
-    refreshCommunity()
+    const waiting = me && state.applications?.some((a) => a.status === 'pending');
+    (waiting ? syncAccount() : refreshCommunity())
       .then(() => {
-        const passive = ['home', 'charts', 'explore', 'artists', 'collections'].includes(currentView());
+        // A decided application changes the member's role, so every view (and the nav badge) must redraw.
+        if (waiting) commit();
+        const passive = waiting || ['home', 'charts', 'explore', 'artists', 'collections'].includes(currentView());
         if (passive && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
       })
       .catch(() => {});
@@ -2021,6 +2161,7 @@ function accountCardHTML() {
     <p class="muted">Synced with the community${members ? ` · ${fmt(members)} member${members === 1 ? '' : 's'}` : ''}</p></div>
     <div class="account-actions">
       <label class="check"><input type="checkbox" id="public-leaderboards" ${state.user.publicLeaderboards !== false ? 'checked' : ''}> Appear on member leaderboards</label>
+      ${isAdmin ? '<a class="btn btn-secondary" href="#admin"><span>Review applications</span></a>' : ''}
       ${PremiumButton('Sign out', { act: 'sign-out', variant: 'secondary' })}
     </div>
   </section>`;
@@ -2043,6 +2184,41 @@ const ACTIONS = {
     } catch { /* share sheet dismissed */ }
   },
   'discover-cat': (el) => { discover.category = el.dataset.v; deck = []; renderView(); },
+  'apply-role': (el) => sendApplication(el.dataset.v),
+  'goto-profile': () => { closePopovers(); location.hash = 'profile'; },
+  'withdraw-application': async (el) => {
+    if (!confirm('Withdraw your application?')) return;
+    try {
+      await cloud.withdrawApplication(el.dataset.id);
+      state.applications = await cloud.myApplications();
+      commit();
+      closeSheet();
+      toast('Application withdrawn', { force: true });
+      renderView();
+    } catch (e) { toast(e?.message || 'Could not withdraw it.', { force: true }); }
+  },
+  'admin-reload': () => { adminData = null; renderView(); },
+  'admin-decide': async (el) => {
+    const approve = el.dataset.v === 'approve';
+    const note = ($(`#note-${el.dataset.id}`)?.value || '').trim().slice(0, 500);
+    if (!approve && !note && !confirm('Decline without a note? A short reason helps the applicant.')) return;
+    el.disabled = true;
+    try {
+      await cloud.decideApplication(el.dataset.id, approve, note);
+      toast(approve ? 'Approved: their new role is active' : 'Declined', { force: true });
+      memberCache.clear();
+      await loadAdmin();
+    } catch (e) { el.disabled = false; toast(e?.message || 'Could not save the decision.', { force: true }); }
+  },
+  'admin-revoke': async (el) => {
+    if (!confirm(`Remove ${el.dataset.name}'s verified role? Their past votes keep the weight they had.`)) return;
+    try {
+      await cloud.revokeRole(el.dataset.id, null);
+      toast('Role removed', { force: true });
+      memberCache.clear();
+      await loadAdmin();
+    } catch (e) { toast(e?.message || 'Could not remove the role.', { force: true }); }
+  },
   'members-scope': (el) => { charts.memberCountry = el.dataset.v; renderView(); },
   'members-retry': () => { memberCache.delete(charts.memberCountry || 'world'); renderView(); },
   'chart-expand': (el) => { charts.expanded = charts.expanded === el.dataset.v ? '' : el.dataset.v; renderView(); },
@@ -2172,9 +2348,7 @@ const ACTIONS = {
     if (next === state.user.role) return;
     if (COMMUNITY) {
       if (!me) return openSignIn();
-      if (next === 'critic' || next === 'collector') {
-        return toast(`${next === 'critic' ? 'Critic' : 'Collector'} status needs verification, so your votes stay trustworthy. Applications open soon.`, { duration: 4000 });
-      }
+      if (next === 'critic' || next === 'collector') return openSheet(() => applySheet(next));
       const before = state.user.role;
       state.user.role = next;
       commit();
@@ -2247,6 +2421,10 @@ document.addEventListener('click', (e) => {
   if (!fn) return;
   e.preventDefault();
   fn(el, e);
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'apply-statement') $('#apply-count').textContent = `${e.target.value.trim().length} / 1500`;
 });
 
 document.addEventListener('keydown', (e) => {

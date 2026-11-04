@@ -1119,3 +1119,24 @@ div.rank-row:hover { background: transparent; }
   .standing-grid { grid-template-columns: 1fr; }
   .seg-gold button { padding: 0 6px; font-size: 12.5px; }
 }
+
+/* ——— Critic & Collector applications ——— */
+.role-lock { color: var(--abremi-gold); }
+.role-lock.is-pending { color: var(--abremi-info); }
+.role-lock.is-declined { color: var(--abremi-danger); }
+.apply-guide { padding: 14px 16px; border-radius: var(--r-md); border: 1px solid var(--line); background: rgba(8,9,10,.35); }
+.apply-guide small { display: block; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.apply-guide ul { display: grid; gap: 6px; font-size: 13.5px; color: var(--text-2); }
+.apply-guide li { display: flex; gap: 8px; align-items: flex-start; }
+.apply-guide .icon { color: var(--abremi-gold); margin-top: 3px; }
+.apply-declined { font-size: 13.5px; color: var(--text-2); padding: 12px 14px; border-radius: var(--r-md); border: 1px solid rgba(217,120,120,.3); background: rgba(217,120,120,.06); }
+.apply-declined b { color: var(--abremi-danger); font-weight: 500; }
+.char-count { justify-self: end; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.app-card { display: grid; gap: 14px; padding: clamp(18px, 2.4vw, 26px); margin-bottom: 16px; border-radius: var(--r-lg); border: 1px solid var(--line); background: rgba(18,19,21,.7); }
+.app-card .eyebrow { color: var(--abremi-gold); }
+.app-statement { font-size: 15px; white-space: pre-wrap; }
+.app-links { display: grid; gap: 4px; font-size: 13.5px; }
+.app-links a { color: var(--abremi-info); text-decoration: underline; text-underline-offset: 3px; word-break: break-all; }
+.app-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.app-stats > div { display: flex; flex-direction: column-reverse; }
+@media (max-width: 760px) { .app-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
