@@ -95,7 +95,7 @@ export function opportunityCard(o, { signedIn = false, artist = false } = {}) {
   return `<article class="opportunity">
     <p class="eyebrow">${esc(OPPORTUNITY_KINDS[o.kind] || o.kind)} · ${left <= 0 ? 'Closes today' : `Closes in ${left} day${left === 1 ? '' : 's'}`}</p>
     <h3>${esc(o.title)}</h3>
-    <p class="muted">${esc(o.organizer)} · ${esc(o.location)} · deadline ${esc(date(o.deadline))}</p>
+    <p class="muted">${o.gallery_id ? `<a href="#gallery/${esc(o.gallery_id)}">${esc(o.organizer)}</a> <span class="verified-mark" title="Verified gallery">${Icon('check', { size: 12 })} Verified gallery</span>` : esc(o.organizer)} · ${esc(o.location)} · deadline ${esc(date(o.deadline))}</p>
     <p class="opportunity-fee ${Number(o.fee) > 0 ? 'has-fee' : ''}">${Number(o.fee) > 0 ? `${Icon('info', { size: 14 })} Application fee: ${esc(o.fee_currency)} ${esc(Number(o.fee).toFixed(2).replace(/\.00$/, ''))}` : 'Free to apply'}</p>
     ${o.eligibility ? `<p><b>Who can apply:</b> ${esc(o.eligibility)}</p>` : ''}
     ${o.description ? `<p class="muted">${esc(o.description)}</p>` : ''}

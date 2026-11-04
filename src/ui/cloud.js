@@ -48,9 +48,13 @@ export async function createSupabaseCloud(url, key) {
       });
     },
 
-    async sendLink(email) {
+    /** Sends the sign-in email. New accounts may need an invite code (checked by the database). */
+    async sendLink(email, invite = '') {
       const emailRedirectTo = `${location.origin}${location.pathname}`;
-      check(await sb.auth.signInWithOtp({ email, options: { emailRedirectTo, shouldCreateUser: true } }));
+      const options = { emailRedirectTo, shouldCreateUser: true, ...(invite ? { data: { invite: invite.trim().toUpperCase() } } : {}) };
+      const { error } = await sb.auth.signInWithOtp({ email, options });
+      if (error && /database error|invite/i.test(error.message || '')) throw new Error('Abremi is invite-only right now. Enter a valid invite code to join.');
+      check({ data: null, error });
     },
 
     async verifyCode(email, token) {
@@ -399,6 +403,88 @@ export async function createSupabaseCloud(url, key) {
     },
     async reviewOpportunity(id, approve, note) {
       check(await sb.rpc('review_opportunity', { p_id: id, p_approve: approve, p_note: note || null }));
+    },
+    // ——— Phase 6: plans, galleries, beta (rules in supabase/migrations/0012) ———
+    async appFlags() {
+      return check(await sb.rpc('app_flags'));
+    },
+    async myPlan() {
+      return user ? check(await sb.rpc('my_plan')) : null;
+    },
+    async planBadges() {
+      return check(await sb.rpc('plan_badges')) || {};
+    },
+    /** Starts checkout or opens the billing portal (server function api/billing.js). Returns { url }. */
+    async billing(action, plan = null) {
+      const { data } = await sb.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in first');
+      const res = await fetch('api/billing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action, plan }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error || 'Payments are unavailable right now.');
+      return out;
+    },
+    async myGallery() {
+      return user ? check(await sb.rpc('my_gallery')) : null;
+    },
+    async applyGallery({ name, city, country, website, bio }) {
+      return check(await sb.rpc('apply_gallery', { p_name: name, p_city: city, p_country: country, p_website: website, p_bio: bio || '' }));
+    },
+    async galleryPage(id) {
+      return check(await sb.rpc('gallery_page', { p_id: id }));
+    },
+    async galleryQueue() {
+      return check(await sb.rpc('admin_gallery_queue'));
+    },
+    async reviewGallery(id, verify, note) {
+      check(await sb.rpc('review_gallery', { p_id: id, p_verify: verify, p_note: note || null }));
+    },
+    async findMembers(query) {
+      return check(await sb.rpc('admin_find_members', { p_query: query }));
+    },
+    async grantPlan(userId, plan, until, note) {
+      check(await sb.rpc('admin_grant_plan', { p_user: userId, p_plan: plan, p_until: until, p_note: note || null }));
+    },
+    async revokePlan(userId, note) {
+      check(await sb.rpc('admin_revoke_plan', { p_user: userId, p_note: note || null }));
+    },
+    async planHolders() {
+      return check(await sb.rpc('admin_plan_holders'));
+    },
+    async checkInvite(code) {
+      return check(await sb.rpc('check_invite', { p_code: code }));
+    },
+    async createInvite(maxUses, days, note) {
+      return check(await sb.rpc('admin_create_invite', { p_max_uses: maxUses, p_days: days, p_note: note || null }));
+    },
+    async invites() {
+      return check(await sb.rpc('admin_invites'));
+    },
+    async revokeInvite(code) {
+      check(await sb.rpc('admin_revoke_invite', { p_code: code }));
+    },
+    async setInviteRequired(on) {
+      check(await sb.rpc('admin_set_invite_required', { p_on: on }));
+    },
+    async submitFeedback(kind, message, page) {
+      return check(await sb.rpc('submit_feedback', { p_kind: kind, p_message: message, p_page: page || null, p_user_agent: navigator.userAgent.slice(0, 300) }));
+    },
+    async feedbackQueue(status = 'open') {
+      return check(await sb.rpc('admin_feedback', { p_status: status }));
+    },
+    async resolveFeedback(id, note) {
+      check(await sb.rpc('resolve_feedback', { p_id: id, p_note: note || null }));
+    },
+    /** Reports an app error: message, where, which page and release. No personal data. */
+    async logError({ message, source, page, release }) {
+      await sb.rpc('log_client_error', { p_message: message, p_source: source || null, p_page: page || null, p_release: release || null, p_user_agent: navigator.userAgent.slice(0, 300) });
+    },
+    async clientErrors(days = 7) {
+      return check(await sb.rpc('admin_client_errors', { p_days: days }));
     },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { assetList, contentVersion, swSource } from '../scripts/gen-sw.js';
+import { assetList, contentVersion, swSource, indexSource, moduleGraph } from '../scripts/gen-sw.js';
 
 const file = (p) => readFileSync(new URL(`../${p}`, import.meta.url));
 const manifest = JSON.parse(file('manifest.webmanifest'));
@@ -22,6 +22,14 @@ function jpegSize(p) {
   }
   throw new Error(`no JPEG size in ${p}`);
 }
+
+test('index.html preloads every module the app imports (run `npm run gen:sw` if this fails)', () => {
+  assert.equal(file('index.html').toString('utf8'), indexSource());
+  const graph = moduleGraph();
+  for (const f of ['src/ui/components.js', 'src/ui/views/membership.js', 'src/core/plans.js', 'src/config.js']) assert.ok(graph.includes(f), f);
+  assert.equal(graph.includes('src/ui/app.js'), false, 'the entry loads itself');
+  assert.equal(graph.includes('src/vendor/supabase.js'), false, 'the sign-in library loads only when needed');
+});
 
 test('sw.js is stamped with the current files (run `npm run gen:sw` if this fails)', () => {
   assert.equal(file('sw.js').toString('utf8'), swSource(contentVersion()));

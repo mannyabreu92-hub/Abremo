@@ -6,6 +6,7 @@ window.__abremiCloud = async () => {
   const { buildSeedWorld } = await import('/src/core/seed.js');
   const { battleResult, expectedScore } = await import('/src/core/elo.js');
   const { memberBoards } = await import('/src/core/leaderboards.js');
+  const { PLANS } = await import('/src/core/plans.js');
   let clock = Date.now();
   const tick = () => ++clock;
   const seed = buildSeedWorld();
@@ -21,6 +22,14 @@ window.__abremiCloud = async () => {
   let listener = () => {};
   const wait = () => new Promise((r) => setTimeout(r, 30));
   const needUser = () => { if (!user) throw new Error('Sign in first'); };
+  const needAdmin = (db) => { if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only'); };
+  // Plans (0012): the plan in force, from the server-side subscription only.
+  const planOf = (db, uid) => {
+    const s = (db.subs || {})[uid];
+    const live = s && ['active', 'trialing', 'past_due'].includes(s.status) && (!s.ends_at || Date.parse(s.ends_at) > Date.now());
+    return PLANS.find((p) => p.code === (live ? s.plan : 'free'));
+  };
+  const validInvite = (db, code) => (db.invites || []).find((i) => i.code === String(code || '').trim().toUpperCase() && !i.revoked && i.uses < i.max_uses);
   // Same neutral default name as the database: never part of the email address.
   const profileOf = (db, id) => (db.profiles[id] ||= { id, created_at: new Date().toISOString(), name: `Member ${[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(16).toUpperCase().slice(0, 4).padEnd(4, '0')}`, country: 'US', role: 'fan', public_leaderboards: true });
   window.__mockdb = { load, save };
@@ -112,13 +121,26 @@ window.__abremiCloud = async () => {
     kind: 'mock',
     async init() { await wait(); return user; },
     onAuth(cb) { listener = cb; },
-    async sendLink(email) { await wait(); window.__lastEmail = email; },
+    async sendLink(email, invite = '') {
+      await wait();
+      const db = load();
+      const isNew = !db.profiles[`u-${email}`];
+      if (isNew && db.settings?.invite_required && !validInvite(db, invite)) throw new Error('Abremi is invite-only right now. Enter a valid invite code to join.');
+      window.__lastEmail = email;
+      window.__lastInvite = invite;
+    },
     async verifyCode(email, code) {
       await wait();
       if (code !== '123456') throw new Error('Token has expired or is invalid');
       user = { id: `u-${email}`, email };
       localStorage.setItem(SESSION, JSON.stringify(user));
-      const db = load(); profileOf(db, user.id); save(db);
+      const db = load();
+      if (!db.profiles[user.id] && db.settings?.invite_required) {
+        const inv = validInvite(db, window.__lastInvite);
+        if (!inv) { user = null; localStorage.removeItem(SESSION); throw new Error('Abremi is invite-only right now. Enter a valid invite code to join.'); }
+        inv.uses++;
+      }
+      profileOf(db, user.id); save(db);
       setTimeout(() => listener(user, 'SIGNED_IN'), 0);
       return user;
     },
@@ -596,7 +618,8 @@ window.__abremiCloud = async () => {
       const db = load();
       const artist = `m_${user.id}`;
       if (!db.artists[artist]) return null;
-      days = [7, 30, 90].includes(days) ? days : 30;
+      days = [7, 30, 90, 365].includes(days) ? days : 30;
+      if (days > planOf(db, user.id).analytics_days) throw new Error('A year of analytics comes with Artist Pro and Elite');
       const DAY = 864e5, end = new Date(new Date().toISOString().slice(0, 10)).getTime() + DAY;
       const from = end - days * DAY, prev = from - days * DAY;
       const evs = (db.events || []).filter((e) => e.artist === artist);
@@ -626,7 +649,7 @@ window.__abremiCloud = async () => {
       for (const [c, n] of Object.entries(byCountry)) grouped[n >= 3 ? c : 'Other'] = (grouped[n >= 3 ? c : 'Other'] || 0) + n;
       const roles = {};
       for (const x of [...reacts.filter((r) => (r.at || 0) >= from), ...fol.filter((f) => (f.at || 0) >= from)]) roles[x.role] = (roles[x.role] || 0) + 1;
-      return { artist, days, current: summary(from, end), previous: summary(prev, from), followers_total: fol.length, daily, works, roles,
+      return { artist, days, max_days: planOf(db, user.id).analytics_days, current: summary(from, end), previous: summary(prev, from), followers_total: fol.length, daily, works, roles,
         countries: Object.entries(grouped).map(([country, n]) => ({ country, people: n })).sort((a, b) => b.people - a.people) };
     },
     async weeklyReports() {
@@ -764,7 +787,8 @@ window.__abremiCloud = async () => {
       const works = db.uploads.filter((u) => artworkIds.includes(u.id) && u.owner === user.id);
       if (works.length !== artworkIds.length) throw new Error('A drop can include only your own works that aren’t in another upcoming drop');
       db.drops ||= [];
-      if (db.drops.filter((d) => d.owner === user.id && !d.released && !d.cancelled).length >= 3) throw new Error('You can have 3 upcoming drops at a time');
+      const maxUpcoming = planOf(db, user.id).max_upcoming_drops;
+      if (db.drops.filter((d) => d.owner === user.id && !d.released && !d.cancelled).length >= maxUpcoming) throw new Error(`Your plan allows ${maxUpcoming} upcoming drop${maxUpcoming === 1 ? '' : 's'} at a time`);
       const d = { id: crypto.randomUUID(), owner: user.id, artist_id: `m_${user.id}`, title: title.trim(), description, release_at: new Date(t).toISOString(), teaser: artworkIds[0] };
       db.drops.push(d);
       for (const w of works) Object.assign(w, { drop_id: d.id, release_at: d.release_at });
@@ -799,14 +823,15 @@ window.__abremiCloud = async () => {
     async coachUsage() {
       const db = load();
       const month = new Date().toISOString().slice(0, 7);
-      return { used: (db.coach || []).filter((c) => c.user === user?.id && c.ok && c.month === month).length, limit: 20 };
+      const plan = planOf(db, user?.id);
+      return { used: (db.coach || []).filter((c) => c.user === user?.id && c.ok && c.month === month).length, limit: plan.coach_monthly, plan: plan.name };
     },
     async coach(tool, { artworkId = null, opportunityId = null } = {}) {
       needUser(); await wait();
       const db = load();
       if (!db.artists[`m_${user.id}`]) throw new Error('The Coach is for artists: publish a work first');
       const usage = await this.coachUsage();
-      if (usage.used >= 20) throw new Error('You’ve used this month’s 20 Coach requests. They reset on the 1st.');
+      if (usage.used >= usage.limit) throw new Error(`You’ve used this month’s ${usage.limit} Coach requests. They reset on the 1st.`);
       const w = artworkId ? db.uploads.find((u) => u.id === artworkId && u.owner === user.id) : null;
       if (['description', 'social'].includes(tool) && !w) throw new Error('Choose one of your own works');
       const o = opportunityId ? (db.opportunities || []).find((x) => x.id === opportunityId && x.status === 'approved') : null;
@@ -853,7 +878,8 @@ window.__abremiCloud = async () => {
     async exhibitionQueue() {
       const db = load();
       if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
-      return (db.exhibitions || []).filter((e) => e.status === 'pending').map((e) => ({ ...e, artist: profileOf(db, e.owner).name }));
+      return (db.exhibitions || []).filter((e) => e.status === 'pending').map((e) => ({ ...e, artist: profileOf(db, e.owner).name, priority: planOf(db, e.owner).priority_review }))
+        .sort((a, b) => Number(b.priority) - Number(a.priority));
     },
     async reviewExhibition(id, verify, note) {
       await wait();
@@ -870,17 +896,20 @@ window.__abremiCloud = async () => {
       const db = load();
       const today = new Date().toISOString().slice(0, 10);
       return (db.opportunities || []).filter((o) => o.status === 'approved' && o.deadline >= today).sort((a, b) => a.deadline.localeCompare(b.deadline))
-        .map((o) => ({ ...o, saved: (db.savedOpps || []).some((x) => x.opp === o.id && x.user === user?.id) }));
+        .map((o) => ({ ...o, gallery_id: (db.galleries || []).some((g) => g.id === o.gallery_id && g.status === 'verified') ? o.gallery_id : null, saved: (db.savedOpps || []).some((x) => x.opp === o.id && x.user === user?.id) }));
     },
     async suggestOpportunity(o) {
       needUser(); await wait();
       const db = load();
       const admin = (db.admins || []).includes(user.id);
-      if (!admin && Date.parse(profileOf(db, user.id).created_at) > Date.now() - 3 * 86400e3) throw new Error('New accounts can suggest opportunities after 3 days');
+      const gal = (db.galleries || []).find((g) => g.owner === user.id && g.status === 'verified');
+      const direct = admin || Boolean(gal && planOf(db, user.id).direct_opportunities);
+      if (!admin && !gal && Date.parse(profileOf(db, user.id).created_at) > Date.now() - 3 * 86400e3) throw new Error('New accounts can suggest opportunities after 3 days');
       if (!/^https:\/\/[^\s<>"]+$/.test(o.link || '')) throw new Error('violates check constraint "opportunities_link_check"');
       if (o.deadline < new Date().toISOString().slice(0, 10)) throw new Error('The deadline has passed');
       const row = { id: crypto.randomUUID(), kind: o.kind, title: o.title, organizer: o.organizer, location: o.location, deadline: o.deadline, eligibility: o.eligibility || '',
-        description: o.description || '', fee: Number(o.fee) || 0, fee_currency: o.currency || 'USD', link: o.link, status: admin ? 'approved' : 'pending', submitted_by: user.id };
+        description: o.description || '', fee: Number(o.fee) || 0, fee_currency: o.currency || 'USD', link: o.link, status: direct ? 'approved' : 'pending', submitted_by: user.id,
+        ...(gal ? { organizer: gal.name, gallery_id: gal.id } : {}) };
       (db.opportunities ||= []).push(row);
       save(db);
       return row.id;
@@ -905,6 +934,147 @@ window.__abremiCloud = async () => {
       if (!o) throw new Error('That listing is no longer pending');
       o.status = approve ? 'approved' : 'rejected';
       save(db);
+    },
+    // ——— Phase 6 (same rules as 0012) ———
+    async appFlags() {
+      const db = load();
+      return { invite_required: Boolean(db.settings?.invite_required), payments_enabled: false };
+    },
+    async myPlan() {
+      if (!user) return null;
+      const db = load();
+      const plan = planOf(db, user.id);
+      const s = (db.subs || {})[user.id];
+      return { plan, status: plan.code === 'free' ? null : s.status, source: plan.code === 'free' ? null : s.source, ends_at: plan.code === 'free' ? null : s.ends_at, manage: false };
+    },
+    async planBadges() {
+      const db = load();
+      return Object.fromEntries(Object.keys(db.subs || {}).map((uid) => [`m_${uid}`, planOf(db, uid).badge]).filter(([a, b]) => b && db.artists[a]));
+    },
+    async billing() { await wait(); throw new Error('Payments aren’t switched on yet.'); },
+    async myGallery() {
+      return user ? (load().galleries || []).find((g) => g.owner === user.id) || null : null;
+    },
+    async applyGallery({ name, city, country, website, bio }) {
+      needUser(); await wait();
+      const db = load();
+      if (Date.parse(profileOf(db, user.id).created_at) > Date.now() - 3 * 86400e3) throw new Error('New accounts can apply for a gallery account after 3 days');
+      if (!/^https:\/\/[^\s<>"]+$/.test(website || '')) throw new Error('violates check constraint "galleries_website_check"');
+      db.galleries ||= [];
+      let g = db.galleries.find((x) => x.owner === user.id);
+      if (!g) { g = { id: crypto.randomUUID(), owner: user.id, status: 'pending', created_at: new Date().toISOString() }; db.galleries.push(g); }
+      const keep = g.status === 'verified' && g.name === name.trim();
+      Object.assign(g, { name: name.trim(), city: city.trim(), country: country.trim().toUpperCase(), website: website.trim(), bio: (bio || '').trim(), status: keep ? 'verified' : 'pending' });
+      save(db);
+      return g.id;
+    },
+    async galleryPage(id) {
+      await wait();
+      const db = load();
+      const g = (db.galleries || []).find((x) => x.id === id && x.status === 'verified');
+      if (!g) return null;
+      const today = new Date().toISOString().slice(0, 10);
+      return { ...g, opportunities: (db.opportunities || []).filter((o) => o.gallery_id === g.id && o.status === 'approved' && o.deadline >= today) };
+    },
+    async galleryQueue() {
+      const db = load(); needAdmin(db);
+      return (db.galleries || []).filter((g) => g.status === 'pending').map((g) => ({ ...g, member: profileOf(db, g.owner).name }));
+    },
+    async reviewGallery(id, verify, note) {
+      await wait();
+      const db = load(); needAdmin(db);
+      const g = (db.galleries || []).find((x) => x.id === id && x.status === 'pending');
+      if (!g) throw new Error('That gallery is no longer pending');
+      Object.assign(g, { status: verify ? 'verified' : 'rejected', review_note: note || null });
+      (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: g.owner, kind: 'gallery_review', title: verify ? `${g.name} is now a verified gallery on Abremi` : `${g.name} couldn’t be verified`, link: verify ? `gallery/${g.id}` : 'profile', created_at: new Date().toISOString(), read_at: null });
+      save(db);
+    },
+    async findMembers(q) {
+      const db = load(); needAdmin(db);
+      q = String(q || '').trim().toLowerCase();
+      if (q.length < 2) return [];
+      return Object.values(db.profiles).filter((p) => p.name.toLowerCase().includes(q) || (db.artists[`m_${p.id}`]?.name || '').toLowerCase().includes(q))
+        .map((p) => ({ id: p.id, name: p.name, country: p.country, role: p.role, artist_id: db.artists[`m_${p.id}`] ? `m_${p.id}` : null, plan: planOf(db, p.id).code,
+          verified_gallery: (db.galleries || []).some((g) => g.owner === p.id && g.status === 'verified') }));
+    },
+    async grantPlan(uid, plan, until, note) {
+      await wait();
+      const db = load(); needAdmin(db);
+      if (!['pro', 'elite', 'gallery'].includes(plan)) throw new Error('Choose Pro, Elite or Gallery');
+      const today = new Date().toISOString().slice(0, 10);
+      if (!until || until <= today || Date.parse(until) > Date.now() + 366 * 864e5) throw new Error('A grant ends between tomorrow and a year from now');
+      if (plan === 'gallery' && !(db.galleries || []).some((g) => g.owner === uid && g.status === 'verified')) throw new Error('The Gallery plan is for verified galleries');
+      (db.subs ||= {})[uid] = { plan, status: 'active', source: 'grant', ends_at: new Date(Date.parse(until) + 864e5).toISOString(), note: note || null };
+      const name = PLANS.find((p) => p.code === plan).name;
+      (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: uid, kind: 'plan_granted', title: `You have ${name} until ${new Date(until).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}`, link: 'plans', created_at: new Date().toISOString(), read_at: null });
+      save(db);
+    },
+    async revokePlan(uid) {
+      const db = load(); needAdmin(db);
+      if ((db.subs || {})[uid]?.source !== 'grant') throw new Error('No granted plan to remove');
+      delete db.subs[uid];
+      save(db);
+    },
+    async planHolders() {
+      const db = load(); needAdmin(db);
+      return Object.entries(db.subs || {}).filter(([, s]) => Date.parse(s.ends_at) > Date.now())
+        .map(([uid, s]) => ({ user_id: uid, name: profileOf(db, uid).name, plan: s.plan, status: s.status, source: s.source, ends_at: s.ends_at, note: s.note }));
+    },
+    async checkInvite(code) { return Boolean(validInvite(load(), code)); },
+    async createInvite(maxUses, days, note) {
+      const db = load(); needAdmin(db);
+      const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+      const code = Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => A[b % 31]).join('');
+      (db.invites ||= []).unshift({ code, max_uses: maxUses, uses: 0, expires_at: days ? new Date(Date.now() + days * 864e5).toISOString() : null, note: note || null, revoked: false, created_at: new Date().toISOString() });
+      save(db);
+      return code;
+    },
+    async invites() {
+      const db = load(); needAdmin(db);
+      return { invite_required: Boolean(db.settings?.invite_required), codes: db.invites || [] };
+    },
+    async revokeInvite(code) {
+      const db = load(); needAdmin(db);
+      const i = (db.invites || []).find((x) => x.code === code);
+      if (i) i.revoked = true;
+      save(db);
+    },
+    async setInviteRequired(on) {
+      const db = load(); needAdmin(db);
+      (db.settings ||= {}).invite_required = on;
+      save(db);
+    },
+    async submitFeedback(kind, message, page) {
+      needUser(); await wait();
+      if (String(message).trim().length < 5) throw new Error('violates check constraint "feedback_message_check"');
+      const db = load();
+      (db.feedback ||= []).push({ id: crypto.randomUUID(), user: user.id, kind, message: message.trim(), page, status: 'open', created_at: new Date().toISOString() });
+      save(db);
+    },
+    async feedbackQueue(status = 'open') {
+      const db = load(); needAdmin(db);
+      return (db.feedback || []).filter((f) => f.status === status).map((f) => ({ ...f, member: profileOf(db, f.user).name })).reverse();
+    },
+    async resolveFeedback(id, note) {
+      const db = load(); needAdmin(db);
+      const f = (db.feedback || []).find((x) => x.id === id && x.status === 'open');
+      if (!f) throw new Error('That note is already resolved');
+      Object.assign(f, { status: 'resolved', note: note || null });
+      save(db);
+    },
+    async logError({ message, source, page, release }) {
+      const db = load();
+      (db.clientErrors ||= []).push({ message: String(message).slice(0, 500), source, page: String(page || '').replace(/[?].*$/, ''), release, at: new Date().toISOString() });
+      save(db);
+    },
+    async clientErrors() {
+      const db = load(); needAdmin(db);
+      const groups = {};
+      for (const e of db.clientErrors || []) {
+        const g = (groups[`${e.message}|${e.source}`] ||= { message: e.message, source: e.source, count: 0, last_seen: e.at, pages: [] });
+        g.count++; g.last_seen = e.at; if (e.page && !g.pages.includes(e.page)) g.pages.push(e.page);
+      }
+      return Object.values(groups);
     },
     async auditLog() {
       const db = load();

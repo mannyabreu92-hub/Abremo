@@ -16,6 +16,8 @@ Abremi runs in two modes:
 | `migrations/0004_role_applications.sql` | Critic & Collector applications, the admin list, and the review functions |
 | `migrations/0006_profiles_artworks_collections.sql` | Audit trail, artist profiles, artwork details (description, size, availability), collections; the shared catalog starts every work at the same battle rating |
 | `migrations/down/0006_down.sql` | Undoes 0006 (drops its tables and columns, with their data, and restores the earlier functions). Not part of `setup.sql` |
+| `migrations/0012_plans_galleries_beta.sql` | Plans and entitlements (payments off), gallery accounts, invite codes, feedback, the app error log (pruned daily by pg_cron), billing hooks for the service role |
+| `migrations/down/0012_down.sql` | Undoes 0012 and restores the earlier Coach, analytics, drops and opportunities functions (run it before `down/0011_down.sql` if undoing both) |
 | `migrations/0011_coach_passport_opportunities.sql` | Artist Passport (verified exhibitions), Opportunities (listings, suggestions, saves, deadline reminders by pg_cron daily) and the Career Coach's limits and context |
 | `migrations/down/0011_down.sql` | Undoes 0011 (run it before `down/0010_down.sql` if undoing both) |
 | `migrations/0010_radar_drops.sql` | Collector Radar (inquiries, messages, blocks, reports) and Drops (scheduled releases, hidden until release; pg_cron every 5 minutes) |
@@ -67,6 +69,9 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
 - **Passport (0011):** `exhibitions` rows are public only once a moderator verifies them; artists see their own pending and rejected rows. Writes go through `submit_exhibition()` (artists only, https source link, 10 pending at most) and `delete_exhibition()`; `review_exhibition()` is moderator-only, audited, and notifies the artist. `artist_passport()` returns only verified exhibitions, finished competition placings, earned achievements and milestones from existing records.
 - **Opportunities (0011):** only approved, open listings are readable. `suggest_opportunity()` publishes directly for moderators (audited) and queues a member's suggestion (accounts 3+ days old, 5 a day). Saves are private; `send_deadline_reminders()` notifies each saver once, 3 days before the deadline.
 - **Career Coach (0011):** the server function calls `begin_coach_request()` with the artist's own session token, so the database decides who may use it (artists only), enforces 20 requests a month per artist and 400 a day overall, and returns only that artist's own data (and a chosen work only if it is theirs). Failed requests don't count. `coach_requests` keeps the tool, time and outcome, never the draft.
+- **Plans (0012):** `subscriptions` has no member writes. `current_plan()` reads it on the server, and every plan-dependent limit (Coach, analytics range, upcoming drops, review order, direct listings) calls it. `admin_grant_plan()` is moderator-only, needs an end date within a year, is audited and never overwrites a paid plan. `apply_billing_event()` is executable only by the service role, applies each event once, and refuses everything while `app_settings.payments_enabled` is false. No ranking function reads plans (tested).
+- **Galleries (0012):** only verified galleries are public; `apply_gallery()` needs an account 3+ days old; `review_gallery()` is moderator-only, audited and notifies the applicant. Renaming a verified gallery sends it back for review.
+- **Beta (0012):** invite codes are readable only through moderator functions; `check_invite()` reveals only yes or no. While `app_settings.invite_required` is on, the `abremi_guard_invite` trigger on `auth.users` refuses new accounts without a valid code. `feedback` rows are readable by their author and moderators; `client_errors` has no API access and stores no account, email or IP.
 - **Live updates** never broadcast who did what. A trigger bumps a single public counter (`community_pulse`, at most once a second) whenever totals change; apps subscribed through Supabase Realtime then refetch `community_snapshot()`. It's the only table in the `supabase_realtime` publication.
 - **Hourly charts** (`community_history`) keep the same public totals as `community_snapshot()`, without the upload list, for 8 days. `chart_baseline()` returns the latest earlier chart from the past 24 hours, or nothing, in which case the app shows no movement. pg_cron keeps a chart at the top of every hour; without pg_cron, the first visit in each hour keeps it.
 - Battle ratings change only through `cast_battle_vote()`. It applies the same maths as `src/core/elo.js`, allows one vote per second, and allows the same pair once per 10 minutes.
@@ -85,7 +90,25 @@ The Coach runs in a Vercel server function (`api/coach.js`) that calls Claude. T
 1. Create an API key at console.anthropic.com and set a monthly spend limit there (Settings → Limits).
 2. In Vercel: Project → Settings → Environment Variables, add `ANTHROPIC_API_KEY` for Production (and Preview if you want it there), then redeploy.
 
-Never paste the key into the app, the repository or a chat. Without the key, the Coach says it isn't set up yet and nothing else is affected. Requests use the API's server-side fallback: if the main model declines a request, the API retries on its fallback model. To turn that off, remove `betas` and `fallbacks` from `buildRequest()` in `api/coach.js`.
+Never paste the key into the app, the repository or a chat. Without the key, the Coach says it isn't set up yet and nothing else is affected. Monthly Coach requests depend on the plan: 20 on Artist Free, 60 on Pro, 150 on Elite (100 on Gallery). Requests use the API's server-side fallback: if the main model declines a request, the API retries on its fallback model. To turn that off, remove `betas` and `fallbacks` from `buildRequest()` in `api/coach.js`.
+
+## Plans and payments
+
+Plans work now: moderators grant them from the moderator page (Plans → Grant a plan) for a fixed period. **Payments are switched off** and stay off until the product requirements, payment provider, taxes and refund policy have been reviewed. When you're ready, in this order:
+
+1. In Stripe, create a product with a monthly price for each of Pro, Elite and Gallery (test mode first).
+2. Add a webhook endpoint `https://<your site>/api/stripe-webhook` for `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`.
+3. In Vercel → Settings → Environment Variables (Production only), add `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_ELITE`, `STRIPE_PRICE_GALLERY`, `SUPABASE_SERVICE_ROLE_KEY` (Supabase → Settings → API; server only, never in the app), `SITE_URL`, and `BILLING_ENABLED=true`. Add `STRIPE_AUTOMATIC_TAX=true` once Stripe Tax is set up. Redeploy.
+4. In the Supabase SQL editor: `update app_settings set payments_enabled = true;`
+5. Buy and cancel a plan with Stripe's test cards, and check the plan appears and lapses on Plans.
+
+To switch payments off again at any time: `update app_settings set payments_enabled = false;` (or set `BILLING_ENABLED=false`).
+
+## Beta testing
+
+- **Invite-only sign-up:** Moderator page → Beta → *Require invite codes*, then *Create invite code* (choose how many uses and for how long). Share the code; new members type it when they sign in. Existing members are unaffected. *Open sign-ups* switches it off.
+- **Feedback:** members use *Send feedback* (phone menu, Profile, or the footer). It appears under Beta on the moderator page until resolved.
+- **App errors:** the browser reports errors it hits (at most 5 per visit), grouped on the moderator page by message, for the last 7 days.
 
 ## Email
 

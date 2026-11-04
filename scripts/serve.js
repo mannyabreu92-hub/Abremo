@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 // The same response headers as production (vercel.json), including the Content-Security-Policy,
@@ -23,8 +24,12 @@ createServer(async (req, res) => {
   const file = normalize(join(root, path === '/' ? 'index.html' : path));
   if (!file.startsWith(root)) { res.writeHead(403).end(); return; }
   try {
-    const body = await readFile(file);
-    res.writeHead(200, { ...headersFor(path), 'content-type': types[extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
+    let body = await readFile(file);
+    const type = types[extname(file)] || 'application/octet-stream';
+    // Compress text like Vercel does, so local measurements match the live site.
+    const gzip = /^(text\/|application\/(json|manifest)|image\/svg)/.test(type) && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+    if (gzip) body = gzipSync(body);
+    res.writeHead(200, { ...headersFor(path), 'content-type': type, 'cache-control': 'no-store', ...(gzip ? { 'content-encoding': 'gzip', vary: 'Accept-Encoding' } : {}) });
     res.end(body);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found');
