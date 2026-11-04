@@ -15,7 +15,7 @@ npm start         # http://localhost:5173  (zero dependencies, Node 18+)
 npm run check     # syntax check of the UI modules + unit tests
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
 npm run test:db   # Supabase migration + security rules on a real Postgres (set ABREMI_PG)
-npm run test:e2e  # sign-in/sync and offline/install/update flows in a browser (needs Playwright and npm start)
+npm run test:e2e  # sign-in/sync, artist uploads and offline/install/update flows in a browser (needs Playwright and npm start)
 ```
 
 ### Accounts and the shared database
@@ -25,6 +25,7 @@ Add a Supabase database and it switches to **community mode**:
 - **Shared rankings:** everyone's likes, saves, follows, reviews and battle votes add up into the same rankings.
 - **Security:** row-level security, vote roles stamped by the server, and Critic/Collector granted by an admin only.
 - **Guests:** they can still swipe, and what they liked is added to their account when they sign in.
+- **Artist uploads:** members with the Artist role publish photos of their work from Profile → Studio. Photos are resized on the phone (a 1600px image plus a 480px thumbnail) and stripped of location data. Published works join the feed, rankings and Art Battles for everyone, and images are cached for offline viewing.
 
 Setup takes four steps: see [`supabase/README.md`](supabase/README.md).
 
@@ -105,7 +106,9 @@ src/ui/               browser layer
   store.js            localStorage persistence (user actions stored as deltas)
   cloud.js            Supabase adapter: auth, reactions, follows, reviews, battle votes
 src/config.js         Supabase URL + anon key, written at build time (empty = demo mode)
-src/core/community.js server totals ↔ app state mapping, guest → account import
+src/core/community.js server totals ↔ app state mapping, member uploads, guest → account import
+src/core/media.js     upload rules (sizes, limits, validation) shared with the database
+src/ui/images.js      on-device image pipeline: rotate, resize, re-encode (strips metadata), thumbnail
 supabase/             migration, generated seed, one-file setup, setup guide
 scripts/write-config.js  build step: env vars → src/config.js (refuses secret keys)
 scripts/gen-seed-sql.js  catalog → supabase/seed.sql and setup.sql

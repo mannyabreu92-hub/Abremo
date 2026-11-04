@@ -11,6 +11,8 @@ import { mulberry32 } from '../core/random.js';
 import { artSVG } from './art.js';
 import { loadState, saveState, resetState } from './store.js';
 import { createSupabaseCloud } from './cloud.js';
+import { prepareImage, blobToDataURL } from './images.js';
+import { validateUpload, PRICE_MIN } from '../core/media.js';
 import { initPWA } from './pwa.js';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
 import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions } from '../core/community.js';
@@ -38,7 +40,16 @@ if (COMMUNITY) state.community ||= emptyCommunity();
 function viewState() {
   if (!COMMUNITY) return state;
   const c = state.community;
-  return { ...state, deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas };
+  return {
+    ...state,
+    deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas,
+    memberArtists: c.artists || [], memberArtworks: c.artworks || [], myArtistId: myArtistId(),
+    uploads: [], // device-only demo uploads are not part of the shared catalog
+  };
+}
+/** The viewer's own artist id: their member artist in community mode, the local 'me' in demo mode. */
+function myArtistId() {
+  return COMMUNITY ? (me ? `m_${me.id}` : null) : 'me';
 }
 /** Signed-in members and demo users move the rankings; guests in community mode do not. */
 const counts = () => !COMMUNITY || Boolean(me);
@@ -72,7 +83,8 @@ const artistOf = (art) => world.artistById[art.artistId];
 const reactionOf = (id) => state.interactions[id];
 const cardCtx = (w, extra = {}) => ({ artist: artistOf(w), reaction: reactionOf(w.id), ...extra });
 const card = (w, extra) => ArtworkCard(w, cardCtx(w, extra));
-const catalog = () => world.artworks.filter((a) => a.artistId !== 'me');
+const isMine = (w) => w.artistId === myArtistId();
+const catalog = () => world.artworks.filter((a) => !isMine(a));
 const coverOf = (artistId) => (world.worksByArtist[artistId] || []).slice().sort((a, b) => world.influence[b.id] - world.influence[a.id])[0];
 
 function toast(msg, { action, act, duration = 2400, force = false } = {}) {
@@ -224,7 +236,7 @@ function setReaction(art, next) {
     delete state.interactionRoles[id];
   }
   commit();
-  if (COMMUNITY && !art.image) {
+  if (COMMUNITY) { // every artwork in community mode (catalog or member upload) exists on the server
     if (me) remote(() => cloud.setReaction(id, next || null));
     else if (next === 'like' || next === 'super') nudgeSignIn('likes');
   }
@@ -268,7 +280,7 @@ function renderHome(root) {
   const top = world.topArtworks();
   const [first, second, third] = top.map((r) => r.item);
   const feedSource = homeFeed.mode === 'new'
-    ? catalog().slice().sort((a, b) => b.year - a.year || world.influence[b.id] - world.influence[a.id])
+    ? catalog().slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || b.year - a.year || world.influence[b.id] - world.influence[a.id])
     : top.map((r) => r.item);
   const feed = feedSource.filter((w) => !homeFeed.category || w.category === homeFeed.category).slice(0, 8);
   const artists = world.topArtists().map((r) => r.item).filter((a) => !a.isMe).slice(0, 4);
@@ -507,6 +519,7 @@ function artworkSheet(id) {
         <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="Save to collection">${Icon('bookmark', { size: 18 })}</button>
         ${PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
         ${state.user.role === 'critic' && !myReview ? PremiumButton('Review', { act: 'review', variant: 'secondary', icon: 'pen', attrs: `data-id="${id}"` }) : ''}
+        ${isMine(w) ? PremiumButton('Delete', { act: 'delete-artwork', variant: 'ghost', attrs: `data-id="${id}" data-danger` }) : ''}
       </div>
       ${myReview ? `<blockquote class="quote"><span class="stars-static">${'★'.repeat(myReview.rating)}${'☆'.repeat(5 - myReview.rating)}</span>${esc(myReview.text)}</blockquote>` : ''}
       <div class="stat-row">
@@ -779,7 +792,7 @@ function renderCharts(root) {
 // ——— Explore ———
 const SORTS = {
   trending: { label: 'Trending', fn: (a, b) => world.influence[b.id] - world.influence[a.id] },
-  new: { label: 'Newest', fn: (a, b) => b.year - a.year || world.influence[b.id] - world.influence[a.id] },
+  new: { label: 'Newest', fn: (a, b) => (b.createdAt || 0) - (a.createdAt || 0) || b.year - a.year || world.influence[b.id] - world.influence[a.id] },
   battle: { label: 'Battle rating', fn: (a, b) => world.eloOf(b) - world.eloOf(a) },
   priceHigh: { label: 'Price: high to low', fn: (a, b) => b.price - a.price },
   priceLow: { label: 'Price: low to high', fn: (a, b) => a.price - b.price },
@@ -832,7 +845,7 @@ function renderArtists(root) {
 function renderCollections(root) {
   const mine = ['saved', 'liked', 'purchased'].map((k) => ({ k, ids: collectionIds(k) }));
   const titles = { saved: 'Saved works', liked: 'Liked', purchased: 'Purchased' };
-  const top = world.topArtworks().map((r) => r.item).filter((w) => w.artistId !== 'me');
+  const top = world.topArtworks().map((r) => r.item).filter((w) => !isMine(w));
   const editions = STYLES.map((s) => ({ s, works: top.filter((w) => w.style === s) })).filter((x) => x.works.length >= 4);
   const countries = COUNTRIES.map((c) => ({ c, works: top.filter((w) => artistOf(w).country === c.code) }));
   root.innerHTML = `<div class="shell collections">
@@ -939,12 +952,12 @@ function renderProfile(root) {
   const top20 = new Set(world.topArtworks().slice(0, BADGE_RULES.trendSetterTopN).map((r) => r.item.id));
   const trendHits = [...liked, ...collected].filter((id) => top20.has(id)).length;
   const myBadges = userBadges({ role: state.user.role, collectedCount: collected.length + state.purchases.length, reviewCount: state.reviews.length, trendHits });
-  const me = world.artistById.me;
-  const allBadges = [...myBadges, ...(me ? world.badgesOf(me) : [])];
+  const myArtist = world.artistById[myArtistId()];
+  const allBadges = [...myBadges, ...(myArtist ? world.badgesOf(myArtist) : [])];
   const tasteTop = topStyles(state.taste, 5);
   const tasteTotal = tasteTop.reduce((s, k) => s + state.taste.styles[k], 0) || 1;
   const followed = Object.keys(state.follows).map((id) => world.artistById[id]).filter(Boolean);
-  const myWorks = state.uploads.map((u) => world.artworkById[u.id]).filter(Boolean);
+  const myWorks = world.artworks.filter(isMine).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   const canAnalyze = hasFeature(state.user.plan, 'whoLiked');
 
   root.innerHTML = `<div class="shell profile">
@@ -997,28 +1010,7 @@ function renderProfile(root) {
       ${followed.length ? `<div class="artist-grid">${followed.map((a) => ArtistCard(a, { cover: coverOf(a.id), following: true, rank: world.globalArtistRanks[a.id] })).join('')}</div>` : EmptyState({ icon: 'user', title: 'Not following anyone yet', body: 'Follow artists to subscribe to their journey.' })}
     </section>
 
-    ${state.user.role === 'artist' ? `<section class="section section-tight">
-      ${SectionHeader({ eyebrow: 'Studio', title: 'Your work' })}
-      <div class="profile-grid">
-        <form id="upload" class="panel upload">
-          <label class="dropzone dropzone-sm"><input type="file" name="file" accept="image/*" required>${Icon('plus', { size: 22 })}<b>Choose an image</b><small id="upload-name">Free to upload</small></label>
-          <label class="field"><span>Title</span><input name="title" required maxlength="60"></label>
-          <div class="field-row">
-            <label class="field"><span>Medium</span><select name="category">${CATEGORIES.map((c) => `<option value="${c.id}">${esc(c.label)}</option>`).join('')}</select></label>
-            <label class="field"><span>Movement</span><select name="style">${STYLES.map((s) => `<option>${s}</option>`).join('')}</select></label>
-          </div>
-          <label class="field"><span>Price (USD)</span><input name="price" type="number" min="10" step="10" required></label>
-          <button class="btn btn-primary btn-block">Publish work</button>
-        </form>
-        <div class="panel">
-          ${myWorks.length ? `<ol class="rank-list">${myWorks.map((w) => {
-            const c = world.countsOf(w);
-            const detail = canAnalyze ? ROLES.map((r) => `${r.label} ${c.likes[r.id] + c.saves[r.id]}`).join(' · ') : 'Who liked this · Pro';
-            return `<li><button class="rank-row" data-act="artwork" data-id="${w.id}"><span class="rank-thumb">${ArtImage(w)}</span><span class="rank-text"><b>${esc(w.title)}</b><small>${detail}</small></span><span class="rank-score">${fmt(world.influence[w.id])}</span></button></li>`;
-          }).join('')}</ol>` : EmptyState({ icon: 'grid', title: 'No works yet', body: 'Published works enter the rankings and Art Battles straight away.' })}
-        </div>
-      </div>
-    </section>` : ''}
+    ${state.user.role === 'artist' ? studioHTML(myWorks, canAnalyze) : ''}
 
     <section class="section section-tight">
       ${SectionHeader({ eyebrow: 'Membership', title: 'Plans' })}
@@ -1048,47 +1040,157 @@ function renderProfile(root) {
   const form = $('#upload', root);
   if (form) {
     form.addEventListener('submit', onUpload);
-    $('input[type=file]', form).addEventListener('change', (e) => { $('#upload-name').textContent = e.target.files?.[0]?.name || 'Free to upload'; });
+    $('input[type=file]', form).addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      $('#upload-name').textContent = file?.name || 'JPG, PNG or HEIC, up to 30 MB';
+      const preview = $('#upload-preview');
+      if (preview.dataset.url) URL.revokeObjectURL(preview.dataset.url);
+      if (file && /^image\//.test(file.type)) {
+        preview.dataset.url = URL.createObjectURL(file);
+        preview.src = preview.dataset.url;
+        preview.hidden = false;
+      } else preview.hidden = true;
+      setUploadStatus('');
+    });
   }
+}
+
+let uploading = false;
+
+function studioHTML(myWorks, canAnalyze) {
+  const where = COMMUNITY ? 'Published works are visible to everyone and enter the rankings and Art Battles straight away.' : 'Demo mode: your works are saved on this device only.';
+  return `<section class="section section-tight" id="studio">
+    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work' })}
+    <div class="profile-grid">
+      <form id="upload" class="panel upload" novalidate>
+        <label class="dropzone dropzone-sm">
+          <input type="file" name="file" accept="image/*">
+          <img id="upload-preview" class="upload-preview" alt="" hidden>
+          ${Icon('plus', { size: 22 })}<b>Choose a photo of your work</b><small id="upload-name">JPG, PNG or HEIC, up to 30 MB</small>
+        </label>
+        <label class="field"><span>Title</span><input name="title" maxlength="60" autocomplete="off"></label>
+        <div class="field-row">
+          <label class="field"><span>Medium</span><select name="category">${CATEGORIES.map((c) => `<option value="${c.id}">${esc(c.label)}</option>`).join('')}</select></label>
+          <label class="field"><span>Movement</span><select name="style">${STYLES.map((x) => `<option>${x}</option>`).join('')}</select></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>Year</span><input name="year" type="number" inputmode="numeric" min="1900" max="2100" value="${CURRENT_YEAR}"></label>
+          <label class="field"><span>Price (USD)</span><input name="price" type="number" inputmode="numeric" min="${PRICE_MIN}" step="10" placeholder="500"></label>
+        </div>
+        <p class="upload-status" id="upload-status" role="status" aria-live="polite"></p>
+        <button class="btn btn-primary btn-block" id="upload-submit">${COMMUNITY ? 'Publish to Abremi' : 'Publish work'}</button>
+        <p class="fine">${where} Photos are resized and their hidden data (such as location) is removed before upload.</p>
+      </form>
+      <div class="panel">
+        ${myWorks.length ? `<ol class="rank-list">${myWorks.map((w) => {
+          const c = world.countsOf(w);
+          const detail = canAnalyze ? ROLES.map((r) => `${r.label} ${c.likes[r.id] + c.saves[r.id]}`).join(' · ') : 'Who liked this · Pro';
+          return `<li class="work-row"><button class="rank-row" data-act="artwork" data-id="${w.id}"><span class="rank-thumb">${ArtImage(w)}</span><span class="rank-text"><b>${esc(w.title)}</b><small>${detail}</small></span><span class="rank-score">${fmt(world.influence[w.id])}</span></button>
+            ${IconButton('x', `Delete ${w.title}`, { act: 'delete-artwork', attrs: `data-id="${w.id}"` })}</li>`;
+        }).join('')}</ol>` : EmptyState({ icon: 'grid', title: 'No works yet', body: 'Your published works appear here, with who liked them.' })}
+      </div>
+    </div>
+  </section>`;
+}
+
+function setUploadStatus(text, kind = '') {
+  const el = $('#upload-status');
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.kind = kind;
 }
 
 async function onUpload(e) {
   e.preventDefault();
-  const fd = new FormData(e.target);
+  if (uploading) return;
+  const form = e.target;
+  const fd = new FormData(form);
   const file = fd.get('file');
-  if (!file || !file.size) return toast('Choose an image first.');
-  const url = URL.createObjectURL(file);
+  const meta = {
+    title: String(fd.get('title') || '').trim(),
+    category: fd.get('category'),
+    style: fd.get('style'),
+    price: Number(fd.get('price')),
+    year: Number(fd.get('year')) || CURRENT_YEAR,
+  };
+  if (!file || !file.size) return setUploadStatus('Choose a photo of your work first.', 'error');
+  const errors = validateUpload({ ...meta, fileType: file.type, fileSize: file.size });
+  if (errors.length) return setUploadStatus(errors[0], 'error');
+  if (COMMUNITY && !me) return openSignIn();
+
+  uploading = true;
+  const button = $('#upload-submit');
+  button.disabled = true;
+  let prepared;
   try {
-    const img = await loadImage(url);
-    const scale = Math.min(1, 1200 / Math.max(img.naturalWidth, img.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-    const category = fd.get('category');
-    state.uploads.push({
-      id: `u${Date.now()}`,
-      title: String(fd.get('title')).trim().slice(0, 60),
-      artistId: 'me',
-      category,
-      style: fd.get('style'),
-      medium: categoryById[category].medium,
-      year: CURRENT_YEAR,
-      price: Math.max(10, Number(fd.get('price')) || 100),
-      quality: 0.5,
-      palette: PALETTES[0],
-      image: canvas.toDataURL('image/jpeg', 0.82),
-      counts: { likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } },
-      elo: START_RATING,
-      at: Date.now(),
-    });
-    commit();
-    toast('Published. Your work is now in the rankings and battles.');
+    setUploadStatus('Preparing your image…');
+    prepared = await prepareImage(file);
+    const medium = categoryById[meta.category].medium;
+    if (COMMUNITY) {
+      setUploadStatus('Uploading…');
+      await cloud.publishArtwork({ ...prepared, ...meta, medium });
+      await refreshCommunity();
+      toast('Published. Your work is live for everyone.', { force: true });
+    } else {
+      // Demo mode keeps the work on this device, so keep it small enough for local storage.
+      const image = await blobToDataURL(prepared.image.size < 900_000 ? prepared.image : prepared.thumb);
+      const thumb = await blobToDataURL(prepared.thumb);
+      state.uploads.push({
+        id: `u${Date.now()}`,
+        title: meta.title,
+        artistId: 'me',
+        category: meta.category,
+        style: meta.style,
+        medium,
+        year: meta.year,
+        price: meta.price,
+        quality: 0.5,
+        palette: PALETTES[0],
+        image,
+        thumb,
+        width: prepared.width,
+        height: prepared.height,
+        counts: { likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } },
+        elo: START_RATING,
+        at: Date.now(),
+        createdAt: Date.now(),
+      });
+      commit();
+      toast('Published. Your work is now in the rankings and battles.', { force: true });
+    }
     renderView();
-  } catch {
-    toast('Could not read that image.');
+  } catch (err) {
+    const msg = err?.message || '';
+    setUploadStatus(/decode|read|source/i.test(msg) ? 'That image could not be read. Try a JPG or PNG.' : /quota|storage is full/i.test(msg) ? 'This device is out of space for demo uploads.' : msg || 'Upload failed. Check your connection and try again.', 'error');
   } finally {
-    URL.revokeObjectURL(url);
+    uploading = false;
+    if (prepared?.previewURL) URL.revokeObjectURL(prepared.previewURL);
+    const b = $('#upload-submit');
+    if (b) b.disabled = false;
+  }
+}
+
+async function deleteArtwork(id) {
+  const w = world.artworkById[id];
+  if (!w || !isMine(w)) return;
+  if (!confirm(`Delete “${w.title}”? Its likes, saves and battle rating go with it.`)) return;
+  try {
+    if (COMMUNITY) {
+      await cloud.deleteArtwork(id);
+      await refreshCommunity();
+    } else {
+      state.uploads = state.uploads.filter((u) => u.id !== id);
+      delete state.deltas[id];
+      delete state.interactions[id];
+      delete state.elo[id];
+      commit();
+    }
+    deck = deck.filter((d) => d.artwork.id !== id);
+    if (sheetRenderer) closeSheet();
+    toast(`Deleted “${w.title}”`, { force: true });
+    renderView();
+  } catch (e) {
+    toast(e?.message || 'Could not delete that work.', { force: true });
   }
 }
 
@@ -1327,8 +1429,8 @@ async function syncAccount({ importGuest = false } = {}) {
   let imported = 0;
   if (importGuest) {
     const extra = guestContributions(state, mine, {
-      artworkIds: new Set(seed.artworks.map((w) => w.id)),
-      artistIds: new Set(seed.artists.map((a) => a.id)),
+      artworkIds: new Set([...seed.artworks, ...(state.community?.artworks || [])].map((w) => w.id)),
+      artistIds: new Set([...seed.artists, ...(state.community?.artists || [])].map((a) => a.id)),
     });
     imported = extra.reactions.filter((r) => r.kind !== 'pass').length + extra.follows.length;
     if (extra.reactions.length || extra.follows.length) {
@@ -1349,7 +1451,7 @@ async function refreshCommunity() {
   if (pendingWrites > 0) return; // don't overwrite changes still on their way to the server
   const snap = await cloud.snapshot();
   if (pendingWrites > 0) return;
-  state.community = snapshotToCommunity(snap);
+  state.community = snapshotToCommunity(snap, Date.now(), { storageBase: cloud.storageBase || '' });
   commit();
 }
 
@@ -1558,6 +1660,7 @@ const ACTIONS = {
     renderView();
   },
   'sign-in': () => openSignIn(),
+  'delete-artwork': (el) => deleteArtwork(el.dataset.id),
   'pwa-install': async () => {
     closePopovers();
     const result = await pwa.install();

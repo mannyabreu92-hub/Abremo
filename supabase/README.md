@@ -11,6 +11,7 @@ Abremi runs in two modes:
 | File | Purpose |
 | --- | --- |
 | `migrations/0001_community.sql` | Tables, Row Level Security, role stamping, battle voting, community totals |
+| `migrations/0002_artist_uploads.sql` | Member artists, uploaded artworks, the `artworks` image bucket and its access rules, publish/delete |
 | `seed.sql` | The catalog (artists, artworks, starting battle ratings), generated from `src/core/seed.js` |
 | `setup.sql` | Both of the above in one file, to paste into the SQL editor. Safe to run more than once |
 | `test/auth_stub.sql` | A stand-in for Supabase's `auth` schema, used only by the local database tests |
@@ -35,7 +36,13 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
   update profiles set role = 'critic' where id = (select id from auth.users where email = 'name@example.com');
   ```
 - Battle ratings change only through `cast_battle_vote()`. It applies the same maths as `src/core/elo.js`, allows one vote per second, and allows the same pair once per 10 minutes.
-- `community_snapshot()` exposes totals only (counts per artwork and role). It never shows who voted.
+- `community_snapshot()` exposes totals only (counts per artwork and role). It never shows who voted. It also lists member artists and their published works.
+- **Uploads:**
+  - Only members with the Artist role can upload. Images go to the public `artworks` bucket (5 MB limit; WebP, JPEG or PNG), and each artist can only write to or delete from their own folder.
+  - `publish_artwork()` checks that both files were really uploaded, validates the details, and allows 20 new works per artist per day.
+  - `delete_artwork()` works for the owner only, and removes the work's likes, saves, reviews and battle rating along with it.
+  - The app resizes photos and strips their metadata (such as GPS location) before upload.
+- **Moderation:** to hide a work from everyone, run `update artworks set hidden = true where id = '…';` in the SQL editor.
 
 ## Email
 

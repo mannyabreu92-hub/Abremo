@@ -8,7 +8,8 @@ window.__abremiCloud = async () => {
   const seed = buildSeedWorld();
   const baseElo = Object.fromEntries(seed.artworks.map((w) => [w.id, w.elo]));
   const KEY = 'mockcloud';
-  const load = () => JSON.parse(localStorage.getItem(KEY) || '{"profiles":{},"reactions":[],"follows":[],"reviews":[],"ratings":{},"votes":[]}');
+  const load = () => ({ uploads: [], artists: {}, ...JSON.parse(localStorage.getItem(KEY) || '{"profiles":{},"reactions":[],"follows":[],"reviews":[],"ratings":{},"votes":[]}') });
+  const toDataURL = (blob) => new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(blob); });
   const save = (db) => localStorage.setItem(KEY, JSON.stringify(db));
   const SESSION = 'mockcloud-session';
   let user = JSON.parse(sessionStorage.getItem(SESSION) || localStorage.getItem(SESSION) || 'null');
@@ -43,6 +44,8 @@ window.__abremiCloud = async () => {
         follows: group(db.follows, (f) => ({ key: `${f.artist_id}|${f.role}`, out: { a: f.artist_id, r: f.role } })),
         ratings: Object.entries(db.ratings).map(([a, v]) => ({ a, v })),
         members: Object.keys(db.profiles).length,
+        artists: Object.values(db.artists),
+        uploads: db.uploads.slice().reverse(),
       };
     },
     async profile() { needUser(); const db = load(); const p = profileOf(db, user.id); save(db); return p; },
@@ -94,8 +97,36 @@ window.__abremiCloud = async () => {
       const p = profileOf(db, user.id);
       if (fields.role && ['critic', 'collector'].includes(fields.role) && fields.role !== p.role) throw new Error('Critic and Collector roles require verification');
       Object.assign(p, fields);
+      const artist = db.artists[`m_${user.id}`];
+      if (artist) Object.assign(artist, { name: p.name, country: p.country });
       save(db);
       return p;
+    },
+    storageBase: '',
+    async publishArtwork({ image, thumb, width, height, title, category, style, medium, year, price }) {
+      needUser(); await wait();
+      const db = load();
+      const p = profileOf(db, user.id);
+      if (p.role !== 'artist') throw new Error('Switch to the Artist role to publish work');
+      if (!/^image\/(webp|jpeg|png)$/.test(image.type) || image.size > 5 * 1024 * 1024) throw new Error('Image rejected by storage');
+      const id = `u_${crypto.randomUUID().replace(/-/g, '')}`;
+      const artistId = `m_${user.id}`;
+      db.artists[artistId] = { id: artistId, name: p.name, country: p.country, created_at: new Date().toISOString() };
+      db.uploads.push({ id, artist_id: artistId, owner: user.id, title: title.trim(), category, style, medium, year, price,
+        image_path: await toDataURL(image), thumb_path: await toDataURL(thumb), width, height, created_at: new Date().toISOString(),
+        image_type: image.type, image_bytes: image.size });
+      save(db);
+      return { id };
+    },
+    async deleteArtwork(id) {
+      needUser(); await wait();
+      const db = load();
+      const work = db.uploads.find((u) => u.id === id);
+      if (!work || work.owner !== user.id) throw new Error('Not your artwork');
+      db.uploads = db.uploads.filter((u) => u.id !== id);
+      db.reactions = db.reactions.filter((r) => r.artwork_id !== id);
+      delete db.ratings[id];
+      save(db);
     },
     async importGuest({ reactions, follows }) {
       needUser(); await wait();

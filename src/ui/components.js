@@ -49,14 +49,20 @@ export function Icon(name, { size = 20, label } = {}) {
 // ——— Images ———
 const uriCache = new Map();
 /** Artwork as an <img>: lazy, async-decoded, never distorted. Uploaded photos are letterboxed, not cropped. */
-export function ArtImage(art, { eager = false, className = '' } = {}) {
-  let src = art.image;
+/**
+ * Artwork as an <img>: lazy, async-decoded, never distorted. Uploaded photos are letterboxed, not cropped.
+ * Grids get the small thumbnail; large views (eager or full) get the full image.
+ */
+export function ArtImage(art, { eager = false, full = false, className = '' } = {}) {
+  let src = (eager || full ? art.image : art.thumb || art.image) || '';
   if (!src) {
     if (!uriCache.has(art.id)) uriCache.set(art.id, `data:image/svg+xml;charset=utf-8,${encodeURIComponent(artSVG(art))}`);
     src = uriCache.get(art.id);
   }
+  const remote = /^https?:/.test(src);
+  const size = art.width && art.height ? ` width="${art.width}" height="${art.height}"` : '';
   const cls = `art-img${art.image ? ' is-photo' : ''}${className ? ` ${className}` : ''}`;
-  return `<img class="${cls}" src="${src}" alt="${esc(art.title)}" ${eager ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async" draggable="false">`;
+  return `<img class="${cls}" src="${esc(src)}" alt="${esc(art.title)}"${size}${remote ? ' crossorigin="anonymous"' : ''} ${eager ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async" draggable="false">`;
 }
 
 export function Avatar(artist, size = 'md') {
@@ -172,7 +178,7 @@ export function SearchBar({ value = '', placeholder = 'Search artworks, artists,
 export function ArtBattleCard(art, { artist, index, elo, result }) {
   return `<article class="battle-card${result ? ` is-${result.state}` : ''}">
     <button class="battle-frame" data-act="vote" data-i="${index}" aria-label="Vote for ${esc(art.title)}" ${result ? 'disabled' : ''}>
-      ${ArtImage(art)}
+      ${ArtImage(art, { full: true })}
       ${result ? `<span class="battle-outcome"><b>${result.delta}</b><small>${result.share}% of voters</small></span>` : ''}
     </button>
     <div class="battle-caption">
