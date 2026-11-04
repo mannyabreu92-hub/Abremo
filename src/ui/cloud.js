@@ -49,6 +49,33 @@ export async function createSupabaseCloud(url, key) {
       user = null;
     },
 
+    // ——— Critic & Collector applications ———
+    async applyForRole(role, statement, links) {
+      return check(await sb.rpc('apply_for_role', { p_role: role, p_statement: statement, p_links: links }));
+    },
+    async withdrawApplication(id) {
+      check(await sb.rpc('withdraw_role_application', { p_id: id }));
+    },
+    async myApplications() {
+      if (!user) return [];
+      return check(await sb.from('role_applications').select('id, role, status, decision_note, created_at, decided_at').order('created_at', { ascending: false }));
+    },
+    async isAdmin() {
+      return user ? Boolean(check(await sb.rpc('is_admin'))) : false;
+    },
+    async adminQueue() {
+      return check(await sb.rpc('admin_role_queue'));
+    },
+    async decideApplication(id, approve, note) {
+      return check(await sb.rpc('decide_role_application', { p_id: id, p_approve: approve, p_note: note || null }));
+    },
+    async verifiedMembers() {
+      return check(await sb.rpc('admin_verified_members'));
+    },
+    async revokeRole(userId, note) {
+      check(await sb.rpc('revoke_role', { p_user: userId, p_note: note || null }));
+    },
+
     /** Top Collectors, Critics and Discoverers (display names and scores only). */
     async leaderboards(country = null) {
       return check(await sb.rpc('member_leaderboards', { p_country: country, p_limit: 50 }));

@@ -324,6 +324,77 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.ok(boards('anon', `null, 100000`).discoverers.length <= 100);
   });
 
+  // ——— Critic & Collector applications ———
+  const P = ['00000000-0000-0000-0000-000000000201', '00000000-0000-0000-0000-000000000202', '00000000-0000-0000-0000-000000000203'];
+  const STATEMENT = 'I have reviewed contemporary painting for eight years, mostly for regional newspapers and two art quarterlies.';
+  const apply = (who, role = 'critic', links = `array['https://example.org/portfolio']`) =>
+    as(who, `select id || '|' || status from apply_for_role('${role}', '${STATEMENT}', ${links})`);
+
+  await t.test('applications: members apply with a statement and https links; limits apply', () => {
+    psql(`insert into auth.users (id, email) values ('${P[0]}', 'applicant@example.com'), ('${P[1]}', 'admin@example.com'), ('${P[2]}', 'other@example.com')`);
+    fails('anon', `select * from apply_for_role('critic', '${STATEMENT}')`, /permission denied|Sign in/);
+    fails(P[0], `select * from apply_for_role('artist', '${STATEMENT}')`, /Critic or a Collector/);
+    fails(P[0], `select * from apply_for_role('critic', 'too short')`, /check constraint/);
+    fails(P[0], `select * from apply_for_role('critic', '${STATEMENT}', array['http://insecure.example'])`, /https/);
+    fails(P[0], `select * from apply_for_role('critic', '${STATEMENT}', array['javascript:alert(1)'])`, /https/);
+    fails(P[0], `select * from apply_for_role('critic', '${STATEMENT}', array['https://a.io/1','https://a.io/2','https://a.io/3','https://a.io/4','https://a.io/5','https://a.io/6'])`, /check constraint/);
+    const [, status] = apply(P[0]).split('|');
+    assert.equal(status, 'pending');
+    fails(P[0], `select * from apply_for_role('critic', '${STATEMENT}')`, /already have a pending application/);
+    assert.equal(as(P[0], 'select count(*) from role_applications'), '1');
+    assert.equal(as(P[2], 'select count(*) from role_applications'), '0', 'applications are private');
+    fails(P[0], `insert into role_applications (user_id, role, statement) values ('${P[0]}', 'collector', '${STATEMENT}')`, /permission denied|row-level security/);
+    fails(P[0], `update role_applications set status = 'approved'`, /permission denied/);
+    assert.equal(as(P[0], 'select role from profiles'), 'fan', 'applying does not grant anything');
+  });
+
+  await t.test('applications: only admins can see the queue or decide', () => {
+    fails(P[2], 'select * from admin_role_queue()', /Admins only/);
+    fails(P[2], `select * from decide_role_application((select id from role_applications limit 1), true)`, /Admins only|permission denied/);
+    fails(P[1], `insert into admins (user_id) values ('${P[1]}')`, /permission denied/);
+    assert.equal(as(P[1], 'select is_admin()'), 'f');
+    psql(`insert into admins (user_id) values ('${P[1]}')`); // done once, by you, in the SQL editor
+    assert.equal(as(P[1], 'select is_admin()'), 't');
+    const row = as(P[1], `select role || '|' || applicant_role || '|' || email || '|' || cardinality(links) from admin_role_queue()`);
+    assert.equal(row, 'critic|fan|applicant@example.com|1');
+  });
+
+  await t.test('approving grants the role, and new votes carry its weight', () => {
+    const id = as(P[0], 'select id from role_applications');
+    const decided = as(P[1], `select status || '|' || coalesce(decision_note, '') from decide_role_application('${id}', true, 'Welcome')`);
+    assert.equal(decided, 'approved|Welcome');
+    assert.equal(as(P[0], 'select role from profiles'), 'critic');
+    as(P[0], `insert into reactions (artwork_id, kind) values ('${seed.artworks[200].id}', 'like')`);
+    assert.equal(as(P[0], `select role from reactions where artwork_id = '${seed.artworks[200].id}'`), 'critic');
+    as(P[0], `insert into reviews (artwork_id, rating) values ('${seed.artworks[200].id}', 4)`); // critics can now review
+    fails(P[1], `select * from decide_role_application('${id}', false)`, /no longer pending/);
+    fails(P[0], `select * from apply_for_role('critic', '${STATEMENT}')`, /already have this role/);
+    assert.ok(as(P[1], 'select name || role from admin_verified_members()').includes('critic'));
+  });
+
+  await t.test('declines carry a note; members can withdraw; three applications per 30 days', () => {
+    apply(P[2], 'collector');
+    const id = as(P[2], 'select id from role_applications');
+    assert.equal(as(P[1], `select status || '|' || decision_note from decide_role_application('${id}', false, 'Please add links to sales records')`), 'declined|Please add links to sales records');
+    assert.equal(as(P[2], 'select role from profiles'), 'fan');
+    assert.equal(as(P[2], 'select decision_note from role_applications'), 'Please add links to sales records');
+    apply(P[2], 'collector');
+    as(P[2], `select withdraw_role_application((select id from role_applications where status = 'pending'))`);
+    fails(P[2], `select withdraw_role_application((select id from role_applications limit 1))`, /No pending application/);
+    apply(P[2], 'critic'); // the third application in 30 days is still allowed…
+    as(P[2], `select withdraw_role_application((select id from role_applications where status = 'pending'))`);
+    fails(P[2], `select * from apply_for_role('critic', '${STATEMENT}')`, /three applications every 30 days/); // …the fourth is not
+  });
+
+  await t.test('admins can revoke a verified role; nobody else can', () => {
+    fails(P[2], `select revoke_role('${P[0]}')`, /Admins only|permission denied/);
+    as(P[1], `select revoke_role('${P[0]}', 'Vote manipulation')`);
+    assert.equal(as(P[0], 'select role from profiles'), 'fan');
+    assert.equal(as(P[0], `select role from reactions where artwork_id = '${seed.artworks[200].id}'`), 'critic', 'past votes keep the weight they had');
+    fails(P[1], `select revoke_role('${P[0]}')`, /no verified role/);
+    fails(P[0], `update profiles set role = 'critic' where id = '${P[0]}'`, /require verification/);
+  });
+
   await t.test('ensure_profile heals a missing profile', () => {
     const D = '00000000-0000-0000-0000-00000000000d';
     psql(`alter table auth.users disable trigger on_auth_user_created; insert into auth.users (id, email) values ('${D}', 'dee@example.com'); alter table auth.users enable trigger on_auth_user_created;`);
