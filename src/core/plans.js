@@ -11,7 +11,7 @@
 
 /** @type {Plan[]} */
 export const PLANS = [
-  { code: 'free', name: 'Artist Free', audience: 'artist', coach_monthly: 20, analytics_days: 90, max_upcoming_drops: 1, priority_review: false, direct_opportunities: false, badge: null, sort: 1, assistant_daily: 30 },
+  { code: 'free', name: 'Artist Free', audience: 'artist', coach_monthly: 0, analytics_days: 90, max_upcoming_drops: 1, priority_review: false, direct_opportunities: false, badge: null, sort: 1, assistant_daily: 30 },
   { code: 'pro', name: 'Artist Pro', audience: 'artist', coach_monthly: 60, analytics_days: 365, max_upcoming_drops: 3, priority_review: false, direct_opportunities: false, badge: 'Pro', sort: 2, assistant_daily: 60 },
   { code: 'elite', name: 'Artist Elite', audience: 'artist', coach_monthly: 150, analytics_days: 365, max_upcoming_drops: 3, priority_review: true, direct_opportunities: false, badge: 'Elite', sort: 3, assistant_daily: 100 },
   { code: 'gallery', name: 'Gallery', audience: 'gallery', coach_monthly: 100, analytics_days: 90, max_upcoming_drops: 1, priority_review: false, direct_opportunities: true, badge: null, sort: 4, assistant_daily: 60 },
@@ -38,7 +38,7 @@ export function planBenefits(p) {
     out.push(`${p.assistant_daily} Abremi Guide messages a day`);
     return out;
   }
-  out.push(`${p.coach_monthly} Career Coach requests a month`);
+  if (p.coach_monthly) out.push(`The Career Coach: ${p.coach_monthly} drafts a month`);
   out.push(`${p.assistant_daily} Abremi Guide messages a day`);
   out.push(p.analytics_days >= 365 ? 'Analytics for up to a year' : 'Analytics for up to 90 days');
   out.push(`${p.max_upcoming_drops} upcoming drop${p.max_upcoming_drops === 1 ? '' : 's'} at a time`);

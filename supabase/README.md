@@ -93,7 +93,7 @@ The Coach runs in a Vercel server function (`api/coach.js`) that calls Claude. T
 1. Create an API key at console.anthropic.com and set a monthly spend limit there (Settings → Limits).
 2. In Vercel: Project → Settings → Environment Variables, add `ANTHROPIC_API_KEY` for Production (and Preview if you want it there), then redeploy.
 
-Never paste the key into the app, the repository or a chat. Without the key, the Coach says it isn't set up yet and nothing else is affected. Monthly Coach requests depend on the plan: 20 on Artist Free, 60 on Pro, 150 on Elite (100 on Gallery). Requests use the API's server-side fallback: if the main model declines a request, the API retries on its fallback model. To turn that off, remove `betas` and `fallbacks` from `buildRequest()` in `api/coach.js`.
+Never paste the key into the app, the repository or a chat. Without the key, the Coach says it isn't set up yet and nothing else is affected. The Coach is a paid-plan feature to keep AI costs down: 60 requests a month on Pro, 150 on Elite, 100 on Gallery, none on Artist Free (set in migration 0013; while payments are off, moderators grant Pro or Elite). Requests use the API's server-side fallback: if the main model declines a request, the API retries on its fallback model. To turn that off, remove `betas` and `fallbacks` from `buildRequest()` in `api/coach.js`.
 
 ## Abremi Guide (AI)
 

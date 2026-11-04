@@ -831,6 +831,7 @@ window.__abremiCloud = async () => {
       const db = load();
       if (!db.artists[`m_${user.id}`]) throw new Error('The Coach is for artists: publish a work first');
       const usage = await this.coachUsage();
+      if (usage.limit === 0) throw new Error('The Career Coach comes with Artist Pro and Elite');
       if (usage.used >= usage.limit) throw new Error(`You’ve used this month’s ${usage.limit} Coach requests. They reset on the 1st.`);
       const w = artworkId ? db.uploads.find((u) => u.id === artworkId && u.owner === user.id) : null;
       if (['description', 'social'].includes(tool) && !w) throw new Error('Choose one of your own works');

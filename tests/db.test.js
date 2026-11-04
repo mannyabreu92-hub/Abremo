@@ -960,8 +960,10 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log() where action like 'opportunity.%'`), /opportunity\.approved/);
   });
 
-  await t.test('coach: artists only, their own data as context, 20 a month (failed requests don’t count), no direct writes', () => {
+  await t.test('coach: Pro and Elite artists only, their own data as context, the plan’s monthly limit (failed requests don’t count), no direct writes', () => {
     fails(B, `select begin_coach_request('bio')`, /for artists/);
+    fails(E, `select begin_coach_request('bio')`, /comes with Artist Pro and Elite/);
+    as(P[1], `select admin_grant_plan('${E}', 'pro', current_date + 30)`);
     fails('anon', `select begin_coach_request('bio')`, /permission denied|Sign in/);
     fails(E, `select begin_coach_request('hack')`, /Unknown Coach tool/);
     fails(E, `select begin_coach_request('description', '${gWork}')`, /your own works/);
@@ -977,11 +979,13 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     as(E, `select finish_coach_request('${eng.request_id}', true)`);
     const app = JSON.parse(as(E, `select begin_coach_request('application', null, '${opp}')`));
     assert.equal(app.opportunity.title, 'Spring Open Call');
-    psql(`insert into coach_requests (user_id, tool, status) select '${E}', 'bio', 'done' from generate_series(1, 18)`);
-    fails(E, `select begin_coach_request('bio')`, /20 Coach requests/);
-    assert.equal(JSON.parse(as(E, 'select coach_usage()')).used, 20);
+    psql(`insert into coach_requests (user_id, tool, status) select '${E}', 'bio', 'done' from generate_series(1, 58)`);
+    fails(E, `select begin_coach_request('bio')`, /60 Coach requests/);
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).used, 60);
     noRowsFor(E, `with u as (delete from coach_requests returning 1) select count(*) from u`);
     noRowsFor(B, `select count(*) from coach_requests where user_id = '${E}'`);
+    as(P[1], `select admin_revoke_plan('${E}')`);
+    psql(`update coach_requests set created_at = created_at - interval '40 days' where user_id = '${E}'`); // last month's
   });
 
   await t.test('passport: exhibitions show only once a moderator verifies them; history and milestones come from records', () => {
@@ -1013,8 +1017,8 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     const plans = JSON.parse(as('anon', `select json_agg(row_to_json(p) order by p.sort) from plans p`));
     assert.deepEqual(plans, PLANS, 'supabase plans = src/core/plans.js');
     assert.equal(JSON.parse(as(E, 'select my_plan()')).plan.code, 'free');
-    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 20);
-    fails(E, `select begin_coach_request('bio')`, /20 Coach requests/);
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 0, 'the Coach is a Pro and Elite feature');
+    fails(E, `select begin_coach_request('bio')`, /comes with Artist Pro and Elite/);
     fails(E, 'select studio_analytics(365)', /Artist Pro and Elite/);
     fails(E, `select admin_grant_plan('${E}', 'elite', current_date + 30)`, /Admins only|permission denied/);
     fails(P[1], `select admin_grant_plan('${E}', 'pro', current_date)`, /between tomorrow and a year/);
@@ -1298,7 +1302,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
   await t.test('0012 can be undone, and setup.sql re-applies it', () => {
     psql(file('supabase/migrations/down/0012_down.sql'));
     assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('plans', 'subscriptions', 'galleries', 'invite_codes', 'feedback', 'client_errors', 'app_settings', 'billing_events')`), '0');
-    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 20, 'the earlier Coach limit is back');
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 20, 'undoing 0013 gives Free its earlier 20 Coach requests');
     psql(`insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000999', 'after-undo@example.com')`);
     psql(file('supabase/setup.sql'));
     assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('plans', 'subscriptions', 'galleries', 'invite_codes', 'feedback', 'client_errors', 'app_settings', 'billing_events')`), '8');
