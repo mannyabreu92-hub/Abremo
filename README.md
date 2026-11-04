@@ -99,6 +99,11 @@ Every number comes from real activity: likes, Super Likes, follows, reviews and 
 - **Achievements:**
   - First Discovery, Hidden Gem Finder, Trend Hunter, Cultural Scout, Master Curator, Global Tastemaker
   - **Early Believer**, at 1K / 10K / 100K: you followed an artist before they reached that many followers, and they got there
+- **Member leaderboards:** Top Discoverers, Top Collectors and Top Critics, worldwide or for your country. The server computes them (`member_leaderboards()`, mirrored in `src/core/leaderboards.js` and checked against it in the tests):
+  - **Discovery Score:** credit for liking work before others do, weighted by who came later (Fan 1 … Collector 9), so throwaway accounts barely count.
+  - **Collectors and critics:** ranked by the influence they added in that role, with critics' reviews included.
+  - **Privacy:** members appear by display name and country only. New members get a neutral name ("Member 3F2A") rather than part of their email, and anyone can opt out in Profile while still seeing their own position.
+  - **Demo mode:** shows no boards, because there are no real members to rank.
 - **Cultural Influence by Country:** each country's artists' combined score, with its leading artist and work.
 - **Collections:** Super Likes, Liked and Acquired, plus named collections you create (Personal Museum, Hidden Gems, Masterpieces and more), which can be private. They're stored on the device for now.
 
@@ -129,6 +134,7 @@ src/core/community.js server totals ↔ app state mapping, member uploads, guest
 src/core/media.js     upload rules (sizes, limits, validation) shared with the database
 src/core/taste.js     Taste Score, personal influence, weekly activity, achievements
 src/core/insights.js  credibility, artist signals, momentum, country standings, Daily Masterpiece
+src/core/leaderboards.js  member leaderboards and Discovery Score (reference for the SQL)
 src/ui/images.js      on-device image pipeline: rotate, resize, re-encode (strips metadata), thumbnail
 supabase/             migration, generated seed, one-file setup, setup guide
 scripts/write-config.js  build step: env vars → src/config.js (refuses secret keys)

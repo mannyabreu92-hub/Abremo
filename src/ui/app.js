@@ -7,7 +7,7 @@ import { BADGES, BADGE_RULES, userBadges } from '../core/badges.js';
 import { rank, rankMap, movement, rollSnapshot, hourKey } from '../core/rankings.js';
 import { extractFeatures, classifyStyle, guessMedium, similarArtists } from '../core/recognition.js';
 import { createWorld } from '../core/world.js';
-import { mulberry32 } from '../core/random.js';
+import { mulberry32, hashString } from '../core/random.js';
 import { artSVG } from './art.js';
 import { loadState, saveState, resetState } from './store.js';
 import { createSupabaseCloud } from './cloud.js';
@@ -63,7 +63,7 @@ let deck = [];
 const discover = { category: '' };
 let battlePair = null;
 let battleOutcome = null; // { winner: index, res, crowd }
-const charts = { tab: 'global', expanded: '', country: '', category: '' };
+const charts = { tab: 'global', expanded: '', country: '', category: '', memberCountry: '' };
 const explore = { category: '', style: '', country: '', sort: 'trending', limit: 24 };
 const artistsView = { country: '', category: '', limit: 24 };
 const homeFeed = { category: '', mode: 'trending' };
@@ -989,6 +989,72 @@ function rankRow(r, kind, previous, { elo = false } = {}) {
     <span class="rank-score">${elo ? Math.round(r.score) : fmt(r.score)}${cred}</span></button></li>`;
 }
 
+// ——— Member leaderboards (computed by the server; display names and scores only) ———
+const memberCache = new Map(); // scope → { at, data, loading, error }
+
+async function loadMembers(scope) {
+  const prev = memberCache.get(scope);
+  if (prev?.loading || !cloud) return;
+  memberCache.set(scope, { ...prev, loading: true });
+  try {
+    const data = await cloud.leaderboards(scope === 'world' ? null : scope);
+    memberCache.set(scope, { at: Date.now(), data, loading: false });
+  } catch (e) {
+    memberCache.set(scope, { ...prev, at: Date.now(), loading: false, error: e?.message || 'Leaderboards are unavailable right now.' });
+  }
+  if (currentView() === 'charts' && charts.tab === 'members' && !sheetRenderer) renderView();
+}
+
+const MEMBER_BOARDS = {
+  collectors: { title: 'Top Collectors', detail: (n) => `${fmt(n)} influence added as a collector`, qualify: 'Collector status is granted after verification.' },
+  critics: { title: 'Top Critics', detail: (n) => `${n} review${n === 1 ? '' : 's'}`, qualify: 'Critic status is granted after verification.' },
+  discoverers: { title: 'Top Discoverers', detail: (n) => `${n} discoveries`, qualify: 'Like works before others do: three discoveries put you on the board.' },
+};
+
+function memberRow(row) {
+  const crown = row.rank === 1 ? `<span class="crown">${Icon('crown', { size: 14 })}</span>` : '';
+  const person = { name: row.name, palette: hashString(row.name) % PALETTES.length };
+  return `<li class="${row.rank <= 3 ? 'is-podium' : ''}${row.me ? ' is-me' : ''}"><div class="rank-row">
+    <span class="rank-num">${crown}${row.rank}</span>${Avatar(person, 'md')}
+    <span class="rank-text"><b>${esc(row.name)} <span class="flag">${flag(row.country)}</span>${row.me ? ' <em>you</em>' : ''}</b><small>${esc(MEMBER_BOARDS[row.board].detail(row.detail))}</small></span>
+    <span class="rank-score">${row.board === 'discoverers' ? `${row.score}<small>/ 100</small>` : fmt(row.score)}</span></div></li>`;
+}
+
+function membersBoardsHTML() {
+  if (!COMMUNITY) {
+    return `<section class="board">${EmptyState({ icon: 'user', title: 'Member leaderboards go live with accounts',
+      body: 'Top Collectors, Top Critics and Top Discoverers rank real members. This site is in demo mode, so there is nobody to rank yet. Your own Taste Score is on your profile.',
+      action: '<a class="btn btn-secondary" href="#profile"><span>See your Taste Score</span></a>' })}</section>`;
+  }
+  const scope = charts.memberCountry || 'world';
+  const entry = memberCache.get(scope);
+  if (!entry || (!entry.loading && Date.now() - entry.at > 60_000)) setTimeout(() => loadMembers(scope), 0);
+  const country = state.user.country;
+  const pills = `<div class="chip-row pill-row" role="tablist" aria-label="Region">
+    <button class="chip${scope === 'world' ? ' is-on' : ''}" role="tab" aria-selected="${scope === 'world'}" data-act="members-scope" data-v="">Worldwide</button>
+    <button class="chip${scope === country ? ' is-on' : ''}" role="tab" aria-selected="${scope === country}" data-act="members-scope" data-v="${country}">${flag(country)} ${esc(countryName(country))}</button></div>`;
+  if (!entry?.data) {
+    return `${pills}${entry?.error ? EmptyState({ title: 'Leaderboards are unavailable', body: entry.error, action: PremiumButton('Try again', { act: 'members-retry', variant: 'secondary' }) }) : LoadingSkeleton({ cards: 5, variant: 'list' })}`;
+  }
+  const d = entry.data;
+  const standing = me ? `<section class="standing">
+      <p class="eyebrow">Your standing${scope === 'world' ? ' worldwide' : ` in ${esc(countryName(scope))}`}</p>
+      <div class="standing-grid">${['discoverers', 'collectors', 'critics'].map((k) => [k, MEMBER_BOARDS[k]]).map(([k, b]) => {
+        const s = d.me?.[k];
+        return `<div class="standing-item${s ? ' is-ranked' : ''}"><small>${b.title.replace('Top ', '')}</small>
+          ${s ? `<b>No. ${s.rank}</b><span>${k === 'discoverers' ? `${s.score} / 100` : fmt(s.score)}</span>` : `<span class="muted">${esc(b.qualify)}</span>`}</div>`;
+      }).join('')}</div>
+      ${state.user.publicLeaderboards === false ? '<p class="fine">You have chosen not to appear publicly; only you can see your position.</p>' : ''}
+    </section>` : `<p class="board-note"><button class="link" data-act="sign-in">Sign in</button> to see where you stand.</p>`;
+  const board = (k) => {
+    const rows = (d[k] || []).map((r) => ({ ...r, board: k }));
+    return `<section class="board"><header class="board-head"><h2>${MEMBER_BOARDS[k].title}</h2></header>
+      ${rows.length ? `<ol class="rank-list">${rows.map(memberRow).join('')}</ol>` : `<p class="board-note">Nobody here yet. ${esc(MEMBER_BOARDS[k].qualify)}</p>`}</section>`;
+  };
+  return `${pills}${standing}${board('discoverers')}${board('collectors')}${board('critics')}
+    <p class="fine explainer"><b>Discovery Score</b> rewards liking work before others do: the more weight (Fan 1 … Collector 9) that arrives after you, and the earlier you were, the higher it climbs. <b>Collectors</b> and <b>critics</b> are ranked by the influence they have added in that role; critics’ reviews count too. Members appear by display name only and can opt out in their profile. ${fmt(d.members || 0)} member${d.members === 1 ? '' : 's'} on the boards.</p>`;
+}
+
 function countryRow(row) {
   const c = countryByCode[row.country];
   const crown = row.rank === 1 ? `<span class="crown">${Icon('crown', { size: 14 })}</span>` : '';
@@ -1010,7 +1076,7 @@ function renderCharts(root) {
       ${rows.length ? `<ol class="rank-list">${rows.map((r) => rankRow(r, kind, opts.previous || undefined, opts)).join('')}</ol>` : EmptyState({ title: 'Nothing ranked here yet' })}
     </section>`;
   };
-  const tabs = Object.entries({ global: 'Global', countries: 'Countries', categories: 'Categories' })
+  const tabs = Object.entries({ global: 'Global', countries: 'Countries', categories: 'Categories', members: 'Members' })
     .map(([k, v]) => `<button role="tab" aria-selected="${charts.tab === k}" class="${charts.tab === k ? 'is-on' : ''}" data-act="chart-tab" data-v="${k}">${v}</button>`).join('');
   let body = '';
   if (charts.tab === 'global') {
@@ -1038,6 +1104,8 @@ function renderCharts(root) {
         <ol class="rank-list">${standings.map(countryRow).join('')}</ol>
       </section>`;
     }
+  } else if (charts.tab === 'members') {
+    body = membersBoardsHTML();
   } else {
     const cat = charts.category || 'oil';
     body = `${CategoryFilter(CATEGORIES, cat, { act: 'chart-cat', pills: true, noAll: true })}
@@ -1437,6 +1505,13 @@ function renderProfile(root) {
     <div class="profile-foot">${PremiumButton('About Abremi', { act: 'about', variant: 'ghost' })}${PremiumButton('Reset demo data', { act: 'reset', variant: 'ghost', attrs: 'data-danger' })}</div>
   </div>`;
 
+  $('#public-leaderboards', root)?.addEventListener('change', (e) => {
+    state.user.publicLeaderboards = e.target.checked;
+    commit();
+    memberCache.clear();
+    remote(() => cloud.updateProfile({ public_leaderboards: e.target.checked }));
+    toast(e.target.checked ? 'You appear on member leaderboards' : 'You no longer appear on member leaderboards', { force: true });
+  });
   $('#name', root).addEventListener('change', (e) => {
     state.user.name = e.target.value.trim().slice(0, 40) || 'You';
     commit();
@@ -1816,6 +1891,7 @@ async function verifyCode() {
 async function signedIn(user) {
   if (!user || me?.id === user.id) return;
   me = user;
+  memberCache.clear();
   Object.assign(auth, { stage: 'email', busy: false, error: '' });
   closeSheet();
   try {
@@ -1835,6 +1911,7 @@ async function signOut() {
 
 function signedOut() {
   me = null;
+  memberCache.clear(); // leaderboards fetched while signed in include your private standing
   Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
   state.user = { ...state.user, role: 'fan', name: 'You' };
   deck = [];
@@ -1859,7 +1936,8 @@ async function syncAccount({ importGuest = false } = {}) {
     }
   }
   Object.assign(state, mineToState(mine));
-  state.user = { ...state.user, name: profile.name, country: profile.country, role: profile.role };
+  state.user = { ...state.user, name: profile.name, country: profile.country, role: profile.role, publicLeaderboards: profile.public_leaderboards !== false };
+  memberCache.clear();
   state.account = { id: me.id, email: me.email };
   deck = [];
   await refreshCommunity();
@@ -1941,7 +2019,10 @@ function accountCardHTML() {
   return `<section class="account-card">
     <div><p class="eyebrow">Signed in</p><p><b>${esc(me.email || 'Member')}</b></p>
     <p class="muted">Synced with the community${members ? ` · ${fmt(members)} member${members === 1 ? '' : 's'}` : ''}</p></div>
-    ${PremiumButton('Sign out', { act: 'sign-out', variant: 'secondary' })}
+    <div class="account-actions">
+      <label class="check"><input type="checkbox" id="public-leaderboards" ${state.user.publicLeaderboards !== false ? 'checked' : ''}> Appear on member leaderboards</label>
+      ${PremiumButton('Sign out', { act: 'sign-out', variant: 'secondary' })}
+    </div>
   </section>`;
 }
 
@@ -1962,6 +2043,8 @@ const ACTIONS = {
     } catch { /* share sheet dismissed */ }
   },
   'discover-cat': (el) => { discover.category = el.dataset.v; deck = []; renderView(); },
+  'members-scope': (el) => { charts.memberCountry = el.dataset.v; renderView(); },
+  'members-retry': () => { memberCache.delete(charts.memberCountry || 'world'); renderView(); },
   'chart-expand': (el) => { charts.expanded = charts.expanded === el.dataset.v ? '' : el.dataset.v; renderView(); },
   'chart-country': (el) => { Object.assign(charts, { tab: 'countries', country: el.dataset.v, expanded: '' }); renderView(); window.scrollTo(0, 0); },
   'charts-goto': (el) => { Object.assign(charts, { tab: el.dataset.v, country: '', expanded: '' }); location.hash = 'charts'; },

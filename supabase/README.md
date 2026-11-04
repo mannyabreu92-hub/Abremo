@@ -12,6 +12,7 @@ Abremi runs in two modes:
 | --- | --- |
 | `migrations/0001_community.sql` | Tables, Row Level Security, role stamping, battle voting, community totals |
 | `migrations/0002_artist_uploads.sql` | Member artists, uploaded artworks, the `artworks` image bucket and its access rules, publish/delete |
+| `migrations/0003_member_leaderboards.sql` | Member leaderboards (`member_leaderboards()`), the leaderboard opt-out, neutral default names |
 | `seed.sql` | The catalog (artists, artworks, starting battle ratings), generated from `src/core/seed.js` |
 | `setup.sql` | Both of the above in one file, to paste into the SQL editor. Safe to run more than once |
 | `test/auth_stub.sql` | A stand-in for Supabase's `auth` schema, used only by the local database tests |
