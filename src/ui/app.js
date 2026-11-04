@@ -17,7 +17,7 @@ import { credibility, dailyMasterpiece, dayKey, momentum, percentiles, artistSig
 import { tasteScore, personalInfluence, dailyActivity, earnedAchievements, ACHIEVEMENTS, COLLECTION_PRESETS, MIN_DISCOVERIES } from '../core/taste.js';
 import { initPWA } from './pwa.js';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
-import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions } from '../core/community.js';
+import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, sampleCatalog } from '../core/community.js';
 import {
   esc, fmt, money, flag, countryName, initials, Icon, ArtImage, Avatar, PremiumButton, IconButton, AbremiSymbol,
   ArtworkCard, ArtworkGrid, FeaturedArtwork, ArtistCard, CategoryFilter, Select, SearchBar,
@@ -25,12 +25,13 @@ import {
 } from './components.js';
 
 // ——— State ———
-const seed = buildSeedWorld();
-let state = loadState();
-
 // Community mode: everyone's likes, follows and votes are shared through Supabase.
 // Demo mode (no configuration): everything stays on this device, exactly as before.
 const COMMUNITY = Boolean(window.__abremiCloud || (SUPABASE_URL && SUPABASE_ANON_KEY));
+// Community mode shows the catalog as labelled sample works with no simulated activity:
+// every like, follower, review and battle rating it shows is real.
+const seed = COMMUNITY ? sampleCatalog(buildSeedWorld()) : buildSeedWorld();
+let state = loadState();
 let cloud = null; // backend adapter, once connected
 let me = null; // signed-in account { id, email }
 let pendingWrites = 0;
@@ -45,7 +46,7 @@ function viewState() {
   const c = state.community;
   return {
     ...state,
-    deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas,
+    deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas, rankedOnly: true,
     memberArtists: c.artists || [], memberArtworks: c.artworks || [], myArtistId: myArtistId(),
     uploads: [], // device-only demo uploads are not part of the shared catalog
   };
@@ -84,6 +85,10 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const role = () => ROLES.find((r) => r.id === state.user.role);
 const artistOf = (art) => world.artistById[art.artistId];
 const reactionOf = (id) => state.interactions[id];
+/** Community mode's catalog is sample content; say so wherever a sample work or artist is shown in full. */
+const SampleNote = (kind) => `<p class="sample-note">${Icon('info', { size: 14 })} ${kind === 'artist'
+  ? 'Sample artist: part of Abremi’s starter catalog, not a real person. Their followers and rankings come only from real members.'
+  : 'Sample artwork from Abremi’s starter catalog. Not for sale; its likes, saves and rankings come only from real members.'}</p>`;
 const cardCtx = (w, extra = {}) => ({ artist: artistOf(w), reaction: reactionOf(w.id), ...extra });
 const card = (w, extra) => ArtworkCard(w, cardCtx(w, extra));
 const isMine = (w) => w.artistId === myArtistId();
@@ -443,7 +448,7 @@ function todaysMasterpiece() {
     const ranks = currentRanks();
     return { artwork: kept, rank: ranks[kept.id], day: today, revealAt: (() => { const d = new Date(); d.setHours(24, 0, 0, 0); return d; })() };
   }
-  const pick = dailyMasterpiece(world.topArtworks().filter((r) => !isMine(r.item)), credOf, new Date());
+  const pick = dailyMasterpiece(world.topArtworks().filter((r) => r.rank != null && !isMine(r.item)), credOf, new Date());
   if (pick) { state.masterpiece = { day: today, id: pick.artwork.id }; saveState(state); }
   return pick;
 }
@@ -487,6 +492,7 @@ function renderHome(root) {
   const mp = todaysMasterpiece();
   if (mp && state.masterpieceSeen !== mp.day) { state.masterpieceSeen = mp.day; saveState(state); }
   const heroArt = mp?.artwork || top[0].item;
+  const nothingRanked = COMMUNITY && top[0]?.rank == null;
   const feedSource = homeFeed.mode === 'new'
     ? catalog().slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || b.year - a.year || world.influence[b.id] - world.influence[a.id])
     : top.map((r) => r.item);
@@ -495,7 +501,7 @@ function renderHome(root) {
   const rising = world.artists.filter((a) => !a.isMe && ins.signals[a.id]?.includes('rising'))
     .sort((a, b) => ins.mom[b.id] - ins.mom[a.id]).slice(0, 4);
   if (!battlePair) newBattle();
-  const countries = countryStandings(world.artists, (a) => world.artistScores[a.id], world.artworks, (w) => world.influence[w.id]).slice(0, 5);
+  const countries = countryBoard().slice(0, 5);
   const members = COMMUNITY ? state.community?.members || 0 : 0;
   const proof = members
     ? `${fmt(members)} member${members === 1 ? '' : 's'} shaping the rankings`
@@ -528,7 +534,7 @@ function renderHome(root) {
       </section>` : ''}
 
       <section class="section">
-        ${SectionHeader({ eyebrow: 'Discover', title: homeFeed.mode === 'new' ? 'New discoveries' : 'Trending now', action: `<div class="seg seg-sm" role="tablist">
+        ${SectionHeader({ eyebrow: 'Discover', title: homeFeed.mode === 'new' ? 'New discoveries' : nothingRanked ? 'Sample works' : 'Trending now', action: `<div class="seg seg-sm" role="tablist">
           <button role="tab" class="${homeFeed.mode === 'trending' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'trending'}" data-act="home-mode" data-v="trending">Trending</button>
           <button role="tab" class="${homeFeed.mode === 'new' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'new'}" data-act="home-mode" data-v="new">New</button></div>` })}
         ${CategoryFilter(CATEGORIES, homeFeed.category, { act: 'home-cat', allLabel: 'All', pills: true })}
@@ -617,11 +623,11 @@ function discoverPanelHTML(entry) {
       <div><dt>Ranking</dt><dd>No. ${rankNow} worldwide</dd></div>
       <div><dt>Influence</dt><dd>${fmt(world.influence[w.id])}</dd></div>
       <div><dt>Credibility</dt><dd>${Math.round(c.share * 100)}% critics &amp; collectors</dd></div>
-      <div><dt>Price</dt><dd>${money(w.price)}</dd></div>
+      ${w.sample ? '<div><dt>Status</dt><dd>Sample work</dd></div>' : `<div><dt>Price</dt><dd>${money(w.price)}</dd></div>`}
     </dl>
     <div class="panel-actions">
-      ${PremiumButton('View details', { act: 'artwork', variant: 'secondary', attrs: `data-id="${w.id}"` })}
-      ${PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${w.id}"` })}
+      ${PremiumButton('View details', { act: 'artwork', variant: w.sample ? 'primary' : 'secondary', attrs: `data-id="${w.id}"` })}
+      ${w.sample ? '' : PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${w.id}"` })}
       ${state.user.role === 'critic' ? PremiumButton('Write review', { act: 'review', variant: 'ghost', icon: 'pen', attrs: `data-id="${w.id}"` }) : ''}
     </div>
     <p class="fine">${counts() ? `Your ${role().label.toLowerCase()} vote adds ${role().weight} influence (${role().weight * SAVE_MULTIPLIER} for a Super Like).` : '<button class="link" data-act="sign-in">Sign in</button> so your likes count in the rankings.'} Keys: ← pass, → like, ↑ Super Like, Enter for details.</p>`;
@@ -736,6 +742,7 @@ function artworkSheet(id) {
     <div class="detail-body">
       <p class="eyebrow">${esc(categoryById[w.category].label)} · ${esc(w.style)}</p>
       <h2 class="display-md" id="modal-title">${esc(w.title)}</h2>
+      ${w.sample ? SampleNote('artwork') : ''}
       <div class="panel-artist">
         <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}</b><small>${esc(countryName(a.country))}</small></span></button>
         ${a.isMe ? '' : `<button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${a.id}" aria-pressed="${following}">${following ? 'Following' : 'Follow'}</button>`}
@@ -743,23 +750,24 @@ function artworkSheet(id) {
       <dl class="spec">
         <div><dt>Medium</dt><dd>${esc(w.medium)}</dd></div>
         <div><dt>Year</dt><dd>${w.year}</dd></div>
-        <div><dt>Price</dt><dd>${money(w.price)}</dd></div>
+        ${w.sample ? '' : `<div><dt>Price</dt><dd>${money(w.price)}</dd></div>`}
       </dl>
       <div class="detail-actions">
         <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Like">${Icon('heart', { size: 18 })}</button>
         <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="Save to collection">${Icon('bookmark', { size: 18 })}</button>
-        ${PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
+        ${w.sample ? '' : PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
         ${PremiumButton('Add to collection', { act: 'add-to-collection', variant: 'secondary', icon: 'folderPlus', attrs: `data-id="${id}"` })}
         ${state.user.role === 'critic' && !myReview ? PremiumButton('Review', { act: 'review', variant: 'secondary', icon: 'pen', attrs: `data-id="${id}"` }) : ''}
         ${isMine(w) ? PremiumButton('Delete', { act: 'delete-artwork', variant: 'ghost', attrs: `data-id="${id}" data-danger` }) : ''}
       </div>
       ${myReview ? `<blockquote class="quote"><span class="stars-static">${'★'.repeat(myReview.rating)}${'☆'.repeat(5 - myReview.rating)}</span>${esc(myReview.text)}</blockquote>` : ''}
       <div class="stat-row">
-        <div><b>${globalRank}</b><small>Worldwide</small></div>
-        <div><b>${countryRank}</b><small>${esc(countryName(a.country))}</small></div>
-        <div><b>${catRank}</b><small>${esc(categoryById[w.category].label)}</small></div>
-        <div><b>${Math.round(world.eloOf(w))}</b><small>Battle Elo</small></div>
+        <div><b>${globalRank ?? '—'}</b><small>Worldwide</small></div>
+        <div><b>${countryRank ?? '—'}</b><small>${esc(countryName(a.country))}</small></div>
+        <div><b>${catRank ?? '—'}</b><small>${esc(categoryById[w.category].label)}</small></div>
+        <div><b>${!COMMUNITY || state.community?.elo?.[w.id] != null ? Math.round(world.eloOf(w)) : '—'}</b><small>Battle Elo</small></div>
       </div>
+      ${globalRank == null ? '<p class="fine">Not ranked yet: a work is ranked once members like or save it.</p>' : ''}
       <div class="influence">
         <div class="influence-head"><h3>Influence score</h3><span>${fmt(world.influence[id])}</span></div>
         ${rows.map((x) => `<div class="meter-row"><span>${esc(x.label)}</span><div class="meter"><i style="width:${(x.points / max) * 100}%"></i></div><span class="num">${fmt(x.points)}</span></div>
@@ -1090,6 +1098,12 @@ function membersBoardsHTML() {
     <p class="fine explainer"><b>Discovery Score</b> rewards liking work before others do: the more weight (Fan 1 … Collector 9) that arrives after you, and the earlier you were, the higher it climbs. <b>Collectors</b> and <b>critics</b> are ranked by the influence they have added in that role; critics’ reviews count too. Members appear by display name only and can opt out in their profile. ${fmt(d.members || 0)} member${d.members === 1 ? '' : 's'} on the boards.</p>`;
 }
 
+/** Cultural Influence by Country. Community mode lists only countries with real activity. */
+function countryBoard() {
+  const rows = countryStandings(world.artists, (a) => world.artistScores[a.id], world.artworks, (w) => world.influence[w.id]);
+  return COMMUNITY ? rows.filter((r) => r.score > 0) : rows;
+}
+
 function countryRow(row) {
   const c = countryByCode[row.country];
   const crown = row.rank === 1 ? `<span class="crown">${Icon('crown', { size: 14 })}</span>` : '';
@@ -1115,17 +1129,18 @@ function renderCharts(root) {
   hour.setMinutes(0, 0, 0);
   const section = (key, title, list, kind, opts = {}) => {
     const open = charts.expanded === key;
+    list = list.filter((r) => r.rank != null);
     const rows = list.slice(0, open ? 100 : 5);
     return `<section class="board">
       <header class="board-head"><h2>${title}</h2>${list.length > 5 ? `<button class="link-arrow" data-act="chart-expand" data-v="${key}">${open ? 'Show top 5' : 'See all'} ${Icon('arrow', { size: 14 })}</button>` : ''}</header>
-      ${rows.length ? `<ol class="rank-list">${rows.map((r) => rankRow(r, kind, opts.previous || undefined, opts)).join('')}</ol>` : EmptyState({ title: 'Nothing ranked here yet' })}
+      ${rows.length ? `<ol class="rank-list">${rows.map((r) => rankRow(r, kind, opts.previous || undefined, opts)).join('')}</ol>` : EmptyState({ title: 'Nothing ranked here yet', body: COMMUNITY ? 'Rankings come only from real members’ likes, saves, follows and battle votes.' : '' })}
     </section>`;
   };
   const tabs = Object.entries({ global: 'Global', countries: 'Countries', categories: 'Categories', members: 'Members' })
     .map(([k, v]) => `<button role="tab" aria-selected="${charts.tab === k}" class="${charts.tab === k ? 'is-on' : ''}" data-act="chart-tab" data-v="${k}">${v}</button>`).join('');
   let body = '';
   if (charts.tab === 'global') {
-    const standings = countryStandings(world.artists, (a) => world.artistScores[a.id], world.artworks, (w) => world.influence[w.id]);
+    const standings = countryBoard();
     body = `${section('artworks', 'Top Artworks Worldwide', world.topArtworks(), 'art', { previous })}
       ${section('artists', 'Top Artists Worldwide', world.topArtists(), 'artist', { previous })}
       ${section('battles', 'Art Battle Champions', world.topElo(), 'art', { elo: true })}
@@ -1141,7 +1156,7 @@ function renderCharts(root) {
         ${section('c-artworks', `Top Artworks · ${esc(c.name)}`, world.topArtworks({ country: c.code }), 'art')}
         ${section('c-artists', `Top Artists · ${esc(c.name)}`, world.topArtists({ country: c.code }), 'artist')}`;
     } else {
-      const standings = countryStandings(world.artists, (a) => world.artistScores[a.id], world.artworks, (w) => world.influence[w.id]);
+      const standings = countryBoard();
       const mine = standings.find((r) => r.country === state.user.country);
       body = `<section class="board">
         <header class="board-head"><h2>Cultural Influence by Country</h2></header>
@@ -1214,7 +1229,7 @@ function renderArtistPage(root) {
     root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artist not found', body: 'They may have left Abremi.', action: '<a class="btn btn-secondary" href="#artists"><span>All artists</span></a>' })}</div>`;
     return;
   }
-  const works = world.topArtworks().filter((r) => r.item.artistId === id);
+  const works = world.topArtworks().filter((r) => r.item.artistId === id).map((r) => (r.rank == null ? { ...r, rank: undefined } : r));
   const cover = works[0]?.item;
   const followers = world.followersOf(a);
   const followerTotal = Object.values(followers).reduce((x, y) => x + y, 0);
@@ -1232,17 +1247,18 @@ function renderArtistPage(root) {
         <span class="artist-portrait">${Avatar(a, 'xl')}</span>
         <div class="artist-header-actions">
           ${a.isMe ? '<span class="tag tag-gold">This is you</span>' : `<button class="btn ${following ? 'btn-secondary' : 'btn-primary'}" data-act="follow" data-id="${id}" aria-pressed="${following}"><span>${following ? 'Following' : 'Follow'}</span></button>
-            ${state.user.role === 'collector' ? PremiumButton('Sponsor', { act: 'sponsor', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
-            ${IconButton('mail', `Contact ${a.name}`, { act: 'contact', attrs: `data-id="${id}"` })}`}
+            ${a.sample ? '' : `${state.user.role === 'collector' ? PremiumButton('Sponsor', { act: 'sponsor', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
+            ${IconButton('mail', `Contact ${a.name}`, { act: 'contact', attrs: `data-id="${id}"` })}`}`}
         </div>
         <h1 class="display-md">${esc(a.name)}</h1>
+        ${a.sample ? SampleNote('artist') : ''}
         <p class="muted">${esc(categoryById[a.category]?.label || 'Contemporary')} artist • ${esc(countryName(a.country))}${a.debutYear ? ` • since ${a.debutYear}` : ''}</p>
         <div class="signal-row">${signalChips(id)}${badges.map((b) => `<span class="badge" title="${esc(BADGES[b].desc)}">${BADGES[b].emoji} ${BADGES[b].label}</span>`).join('')}</div>
         <dl class="stat-row artist-stats">
           <div><dt>Followers</dt><dd>${fmt(followerTotal)}</dd></div>
           <div><dt>Works</dt><dd>${works.length}</dd></div>
           <div><dt>Influence</dt><dd>${fmt(world.artistScores[id])}</dd></div>
-          <div><dt>Worldwide</dt><dd>No. ${world.globalArtistRanks[id]}</dd></div>
+          <div><dt>Worldwide</dt><dd>${world.globalArtistRanks[id] ? `No. ${world.globalArtistRanks[id]}` : 'Not ranked'}</dd></div>
         </dl>
       </header>
       <div class="tabs" role="tablist">
@@ -1253,7 +1269,7 @@ function renderArtistPage(root) {
         : `<dl class="spec about-spec">
             <div><dt>Movements</dt><dd>${a.styles.length ? a.styles.map(esc).join(', ') : '—'}</dd></div>
             <div><dt>Medium</dt><dd>${esc(categoryById[a.category]?.label || '—')}</dd></div>
-            <div><dt>Country</dt><dd>${flag(a.country)} ${esc(countryName(a.country))} · No. ${world.countryArtistRanks[id]}</dd></div>
+            <div><dt>Country</dt><dd>${flag(a.country)} ${esc(countryName(a.country))}${world.countryArtistRanks[id] ? ` · No. ${world.countryArtistRanks[id]}` : ''}</dd></div>
             <div><dt>Credibility</dt><dd>${Math.round((cred?.share || 0) * 100)}% of influence from critics &amp; collectors</dd></div>
             <div><dt>Followers by role</dt><dd>${ROLES.map((r) => `${r.label} ${fmt(followers[r.id])}`).join(' · ')}</dd></div>
             ${a.member ? '<div><dt>Profile</dt><dd>Member artist on Abremi</dd></div>' : ''}
@@ -1456,7 +1472,7 @@ async function scanSample() {
 function renderProfile(root) {
   const liked = collectionIds('liked');
   const collected = collectionIds('saved');
-  const top20 = new Set(world.topArtworks().slice(0, BADGE_RULES.trendSetterTopN).map((r) => r.item.id));
+  const top20 = new Set(world.topArtworks().filter((r) => r.rank != null).slice(0, BADGE_RULES.trendSetterTopN).map((r) => r.item.id));
   const trendHits = [...liked, ...collected].filter((id) => top20.has(id)).length;
   const myBadges = userBadges({ role: state.user.role, collectedCount: collected.length + state.purchases.length, reviewCount: state.reviews.length, trendHits });
   const myArtist = world.artistById[myArtistId()];
@@ -2321,8 +2337,13 @@ const ACTIONS = {
     closeSheet();
     renderView();
   },
-  buy: (el) => el.dataset.id && world.artworkById[el.dataset.id] && openSheet(() => buySheet(el.dataset.id)),
-  contact: (el) => openSheet(() => contactSheet(el.dataset.id)),
+  buy: (el) => {
+    const w = world.artworkById[el.dataset.id];
+    if (!w) return;
+    if (w.sample) return toast('Sample works aren’t for sale.');
+    openSheet(() => buySheet(w.id));
+  },
+  contact: (el) => (world.artistById[el.dataset.id]?.sample ? toast('Sample artists can’t be contacted.') : openSheet(() => contactSheet(el.dataset.id))),
   review: (el) => {
     const id = el.dataset.id;
     if (state.reviews.some((r) => r.artworkId === id)) return toast('You have already reviewed this work.');
@@ -2368,6 +2389,7 @@ const ACTIONS = {
     refresh();
   },
   sponsor: (el) => {
+    if (world.artistById[el.dataset.id]?.sample) return toast('Sample artists can’t be sponsored.');
     state.messages.push({ artistId: el.dataset.id, text: '[sponsorship request]', at: Date.now() });
     commit();
     updateNotificationDot();

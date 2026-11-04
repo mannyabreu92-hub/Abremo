@@ -123,7 +123,7 @@ export function ArtworkCard(art, ctx = {}) {
         <h3 class="art-title"><button data-act="artwork" data-id="${art.id}">${esc(art.title)}</button></h3>
         ${artist ? `<button class="art-artist" data-act="artist" data-id="${artist.id}">${esc(artist.name)}</button>` : ''}
         <p class="art-meta">${details ? `${esc(art.medium || cat?.label || '')}${art.year ? ` · ${art.year}` : ''}` : `${esc(cat?.label || '')}${art.year ? `, ${art.year}` : ''}`}</p>
-        ${details && art.price ? `<p class="art-price">${money(art.price)}</p>` : ''}
+        ${details && art.price && !art.sample ? `<p class="art-price">${money(art.price)}</p>` : ''}
       </div>
       ${score != null ? `<span class="art-score">${score}</span>` : ''}
     </div>

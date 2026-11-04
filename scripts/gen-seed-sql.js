@@ -1,11 +1,13 @@
 // Writes supabase/seed.sql from the deterministic catalog in src/core/seed.js, so the
-// database knows every artist, artwork and starting battle rating the app shows, and
+// database knows every sample artist and artwork the app shows (all starting at the same battle
+// rating: the demo's simulated ratings never reach the shared rankings), and
 // supabase/setup.sql (migration + seed in one file, to paste into the Supabase SQL editor).
 // Usage: node scripts/gen-seed-sql.js            (writes both files)
 //        node scripts/gen-seed-sql.js --stdout   (prints the seed)
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { buildSeedWorld } from '../src/core/seed.js';
+import { START_RATING } from '../src/core/elo.js';
 
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
@@ -17,7 +19,7 @@ export function seedSQL() {
     out.push(`insert into public.artists (id, name, country) values\n${part.map((a) => `  (${q(a.id)}, ${q(a.name)}, ${q(a.country)})`).join(',\n')}\non conflict (id) do update set name = excluded.name, country = excluded.country;`);
   }
   for (const part of chunk(artworks)) {
-    out.push(`insert into public.artworks (id, artist_id, title, base_elo) values\n${part.map((w) => `  (${q(w.id)}, ${q(w.artistId)}, ${q(w.title)}, ${w.elo})`).join(',\n')}\non conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;`);
+    out.push(`insert into public.artworks (id, artist_id, title, base_elo) values\n${part.map((w) => `  (${q(w.id)}, ${q(w.artistId)}, ${q(w.title)}, ${START_RATING})`).join(',\n')}\non conflict (id) do update set artist_id = excluded.artist_id, title = excluded.title, base_elo = excluded.base_elo;`);
   }
   out.push('commit;', '');
   return out.join('\n');

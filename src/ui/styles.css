@@ -1151,3 +1151,7 @@ div.rank-row:hover { background: transparent; }
   70%, 100% { box-shadow: 0 0 0 7px rgba(128, 185, 154, 0); }
 }
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+
+/* ——— Sample catalog (community mode) ——— */
+.sample-note { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--abremi-surface); color: var(--text-2); font-size: 0.85rem; line-height: 1.45; }
+.sample-note .icon { flex: none; margin-top: 2px; color: var(--gold); }

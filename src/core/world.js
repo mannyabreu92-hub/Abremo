@@ -77,14 +77,23 @@ export function createWorld(seed, state) {
   const filterArtists = ({ country, category } = {}) =>
     artists.filter((a) => (!country || a.country === country) && (!category || (worksByArtist[a.id] || []).some((w) => w.category === category)));
 
-  const topArtworks = (opts) => rank(filterArtworks(opts), (w) => influence[w.id]);
-  const topArtists = (opts) => rank(filterArtists(opts), (a) => artistScores[a.id]);
-  const topElo = (opts) => rank(filterArtworks(opts), eloOf);
+  // state.rankedOnly (community mode): only what real activity has scored gets a rank number, so a
+  // work nobody has liked is never "No. 412". Unscored items stay in the list (rank: null, last),
+  // because the same lists also order the catalog for browsing and search.
+  const earned = (rows, scored = (r) => r.score > 0) => (state.rankedOnly ? rows.map((r) => (scored(r) ? r : { ...r, rank: null })) : rows);
+  const topArtworks = (opts) => earned(rank(filterArtworks(opts), (w) => influence[w.id]));
+  const topArtists = (opts) => earned(rank(filterArtists(opts), (a) => artistScores[a.id]));
+  const topElo = (opts) => {
+    const battled = (w) => !state.rankedOnly || state.elo[w.id] != null;
+    const pool = filterArtworks(opts);
+    return earned(rank(pool.filter(battled), eloOf), () => true).concat(pool.filter((w) => !battled(w)).map((item) => ({ item, score: eloOf(item), rank: null })));
+  };
 
-  const globalArtistRanks = Object.fromEntries(topArtists().map((r) => [r.item.id, r.rank]));
+  const ranksOf = (rows) => Object.fromEntries(rows.filter((r) => r.rank != null).map((r) => [r.item.id, r.rank]));
+  const globalArtistRanks = ranksOf(topArtists());
   const countryArtistRanks = {};
   for (const c of new Set(artists.map((a) => a.country))) {
-    for (const r of topArtists({ country: c })) countryArtistRanks[r.item.id] = r.rank;
+    Object.assign(countryArtistRanks, ranksOf(topArtists({ country: c })));
   }
 
   const badgesOf = (artist) =>

@@ -27,13 +27,23 @@ const step = (name) => console.log(`✓ ${name}`);
   watch(viewer);
   await viewer.goto(BASE + '#charts');
   await viewer.waitForSelector('.live-badge.is-live');
+  assert.match(await viewer.locator('.board:first-of-type').textContent(), /Nothing ranked here yet/, 'nothing is ranked before real activity');
+  // Real activity: fans like 40 works, the first one most.
+  await viewer.evaluate(() => {
+    const db = window.__mockdb.load();
+    const ids = Array.from({ length: 40 }, (_, i) => `w${i * 7 + 3}`);
+    ids.forEach((id, i) => { for (let n = 0; n < 40 - i; n++) db.reactions.push({ user_id: `u-fan${n}`, artwork_id: id, kind: 'like', role: 'fan' }); });
+    window.__mockdb.save(db);
+  });
+  await viewer.reload();
+  await viewer.waitForSelector('.live-badge.is-live');
   assert.doesNotMatch(await viewer.locator('#chart-status').textContent(), /Movement since/, 'no earlier chart yet');
   assert.equal(await viewer.locator('.board:first-of-type .move').count(), 0, 'no movement is invented without an earlier chart');
   await viewer.click('.board:first-of-type [data-act=chart-expand]');
   await viewer.waitForFunction(() => document.querySelectorAll('.board:first-of-type .rank-row').length > 30);
   const before = await topArtworks(viewer);
   const climber = before[29];
-  step('Rankings shows “Live”, and no movement before there is an earlier chart');
+  step('Rankings shows “Live”, ranks only real activity, and shows no movement before there is an earlier chart');
 
   // ——— Activity elsewhere: collectors save the No. 30 artwork ———
   const other = await ctx.newPage();
@@ -54,12 +64,14 @@ const step = (name) => console.log(`✓ ${name}`);
   assert.ok(Date.now() - t0 < 6000, 'the update arrives within seconds, not at the next 90-second poll');
   step(`the watching tab updates without a reload (No. 30 → No. 1 in ${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
-  // ——— The shared hourly chart: an hour ago, nobody had saved it ———
+  // ——— The shared hourly chart: an hour ago, only the fans' likes existed ———
   await other.evaluate(() => {
     const db = window.__mockdb.load();
     const hour = new Date(); hour.setMinutes(0, 0, 0); hour.setHours(hour.getHours() - 1);
     db.history = (db.history || []).filter((x) => Date.parse(x.hour) >= hour.getTime() + 3600e3);
-    db.history.push({ hour: hour.toISOString(), taken_at: hour.toISOString(), snapshot: { reactions: [], reviews: [], follows: [], ratings: [], members: 0 } });
+    db.history.push({ hour: hour.toISOString(), taken_at: hour.toISOString(), snapshot: {
+      reactions: Object.values(db.reactions.filter((r) => r.role === 'fan').reduce((m, r) => { (m[r.artwork_id] ||= { a: r.artwork_id, k: 'like', r: 'fan', n: 0 }).n++; return m; }, {})),
+      reviews: [], follows: [], ratings: [], members: 40 } });
     window.__mockdb.save(db);
   });
   await viewer.reload();

@@ -4,6 +4,7 @@
 import { emptyRoleCounts, ROLE_IDS } from './scoring.js';
 import { CATEGORIES, STYLES, PALETTES, CURRENT_YEAR } from './seed.js';
 import { hashString } from './random.js';
+import { START_RATING } from './elo.js';
 
 export function emptyCommunity() {
   return { deltas: {}, followerDeltas: {}, elo: {}, members: 0, fetchedAt: 0, artists: [], artworks: [] };
@@ -11,6 +12,19 @@ export function emptyCommunity() {
 
 const emptyDelta = () => ({ likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } });
 const CATEGORY_IDS = new Set(CATEGORIES.map((c) => c.id));
+
+/**
+ * The shared catalog in community mode: the same sample works and artists, but with none of the
+ * demo's simulated likes, followers, reviews or battle ratings. Every number shown in community
+ * mode comes from real members.
+ */
+export function sampleCatalog(seed) {
+  return {
+    ...seed,
+    artists: seed.artists.map((a) => ({ ...a, followers: emptyRoleCounts(), sample: true })),
+    artworks: seed.artworks.map((w) => ({ ...w, counts: emptyDelta(), elo: START_RATING, sample: true })),
+  };
+}
 
 /** Storage paths become public URLs; data: and http(s) URLs (the test backend) pass through. */
 export function imageURL(path, storageBase = '') {
