@@ -26,6 +26,7 @@ import { inquirySheet, inboxPage, threadPage, dropsSection, dropPage, createDrop
 import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, createCompetitionForm, competitionCard } from './views/arena.js';
 import { plansPage, galleryForm, galleryPageHTML, feedbackSheet, membershipCardHTML } from './views/membership.js';
 import { adminPage } from './views/admin.js';
+import { indexPage, badgeEmbedHTML } from './views/index.js';
 import { guidePanelHTML, replyHTML, GUIDE_COPY } from './views/assistant.js';
 import { aboutHTML, installCardHTML, iosInstallHTML, signInHTML, accountCardHTML } from './views/account.js';
 import {
@@ -170,7 +171,7 @@ const VIEWS = {
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
   art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition, studio: renderStudio,
   inbox: renderInbox, inquiry: renderInquiry, drop: renderDrop, coach: renderCoach, opportunities: renderOpportunities,
-  plans: renderPlans, gallery: renderGallery,
+  plans: renderPlans, gallery: renderGallery, index: renderIndex,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -658,7 +659,7 @@ function renderHome(root) {
 
 function footerHTML() {
   return `<footer class="footer">${AbremiSymbol(18)}<span class="brand-word">Abremi</span><span>Discover art. Shape culture.</span>
-    <nav class="footer-links" aria-label="More"><a href="#opportunities">Opportunities</a><a href="#plans">Plans</a>${COMMUNITY ? '<button class="link" data-act="feedback-open">Send feedback</button>' : ''}<button class="link" data-act="about">About</button></nav></footer>`;
+    <nav class="footer-links" aria-label="More"><a href="#index">The Index</a><a href="#opportunities">Opportunities</a><a href="#plans">Plans</a>${COMMUNITY ? '<button class="link" data-act="feedback-open">Send feedback</button>' : ''}<button class="link" data-act="about">About</button></nav></footer>`;
 }
 
 // ——— Discover (swipe) ———
@@ -1262,6 +1263,25 @@ function reportError(message, source) {
 window.addEventListener('error', (e) => reportError(e.message, e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : null));
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack?.split('\n')[1]?.trim()));
 
+// ——— The Abremi Index (#index) ———
+const idx = { week: null, chart: 'overall', cache: new Map(), badge: undefined };
+function renderIndex(root) {
+  if (!COMMUNITY) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'chart', title: 'The Abremi Index runs with accounts', body: 'It charts real members’ appreciation, week by week.' })}</div>`; return; }
+  const key = `${idx.week || 'latest'}|${idx.chart}`;
+  const entry = idx.cache.get(key);
+  if (cloud?.indexWeek && (!entry || (!entry.loading && Date.now() - entry.at > 300_000))) {
+    idx.cache.set(key, { loading: true, data: entry?.data });
+    cloud.indexWeek(idx.week, idx.chart).then((data) => idx.cache.set(key, { data, at: Date.now() }))
+      .catch(() => idx.cache.set(key, { data: entry?.data ?? null, at: Date.now() }))
+      .finally(() => { if (currentView() === 'index' && !sheetRenderer) renderView(); });
+  }
+  const d = idx.cache.get(key)?.data;
+  if (d === undefined) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 6, variant: 'list' })}</div>`; return; }
+  root.innerHTML = indexPage(d, { thumb: (id) => (world.artworkById[id] ? ArtImage(world.artworkById[id]) : '') });
+  $('#index-week', root)?.addEventListener('change', (e) => { idx.week = e.target.value; renderView(); });
+  $('#index-chart', root)?.addEventListener('change', (e) => { idx.chart = e.target.value; renderView(); });
+}
+
 // ——— Phase 8: the discovery-to-ownership loop ———
 const loop = { watches: new Set(), interests: null, swipes: 0, loaded: false };
 const INTEREST_PROMPT_KEY = 'abremi:interests-prompted';
@@ -1515,7 +1535,12 @@ function renderStudio(root) {
       .finally(() => { studio.loading = false; if (currentView() === 'studio' && !sheetRenderer) renderView(); });
   }
   if (studio.data === undefined) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 6 })}</div>`; return; }
+  if (idx.badge === undefined && cloud?.artistIndexBadge && myArtistId()) {
+    idx.badge = null;
+    cloud.artistIndexBadge(myArtistId()).then((b) => { idx.badge = b; if (currentView() === 'studio' && b) renderView(); }).catch(() => {});
+  }
   root.innerHTML = studioPage(studio.data, studio.reports, { days: studio.days, maxDays: studio.data?.max_days || 90, thumb: (id) => (world.artworkById[id] ? `<span class="rank-thumb">${ArtImage(world.artworkById[id])}</span>` : '') });
+  if (idx.badge?.rank) root.querySelector('.shell')?.insertAdjacentHTML('beforeend', badgeEmbedHTML(idx.badge, { artistId: myArtistId(), origin: location.origin }));
 }
 
 /** #competition/<id>: the brief, entries, voting or results, and the rules. */
@@ -2724,6 +2749,7 @@ function signedOut() {
   Object.assign(member, { mine: undefined, gallery: undefined, busy: '', planSearch: { query: '', results: null } });
   Object.assign(guide, { threads: { visitor: [], artist: [], collector: [] }, usage: null, prefs: null, error: null, loaded: false, view: 'chat' });
   Object.assign(loop, { watches: new Set(), interests: null, swipes: 0, loaded: false });
+  idx.badge = undefined;
   careers.coach.result = null;
   threads.clear();
   Object.assign(studio, { data: undefined, reports: null, at: 0 });
@@ -3006,6 +3032,14 @@ const ACTIONS = {
     catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
   },
   // ——— Phase 8 ———
+  'index-copy': async () => {
+    const t = $('#index-embed');
+    try { await navigator.clipboard.writeText(t.value); toast('Copied. Paste it into your website.'); } catch { t.select(); toast('Select and copy the code.'); }
+  },
+  'index-publish': async () => {
+    try { await cloud.publishIndex(); idx.cache.clear(); toast('This week’s Index is published.', { force: true }); }
+    catch (e) { toast(e?.message || 'Could not publish it.', { force: true }); }
+  },
   'offer-open': (el) => {
     if (!me) return openSignIn();
     const w = world.artworkById[el.dataset.id];

@@ -564,6 +564,16 @@ export async function createSupabaseCloud(url, key) {
     async myInterests() {
       return user ? check(await sb.rpc('my_discovery_interests')) : null;
     },
+    // ——— The Abremi Index (migration 0016) ———
+    async indexWeek(week = null, chart = 'overall') {
+      return check(await sb.rpc('index_week', { p_week: week, p_chart: chart }));
+    },
+    async artistIndexBadge(artistId) {
+      return check(await sb.rpc('artist_index_badge', { p_artist: artistId }));
+    },
+    async publishIndex() {
+      return check(await sb.rpc('admin_publish_index'));
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },

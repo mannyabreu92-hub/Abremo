@@ -1217,6 +1217,35 @@ window.__abremiCloud = async () => {
       const p = profileOf(load(), user.id);
       return { interests: p.discovery_interests || {}, personalize: p.assistant_personalize !== false };
     },
+    // ——— The Abremi Index (same scoring as 0016, computed live for the latest week) ———
+    async indexWeek(week = null, chart = 'overall') {
+      await wait();
+      const db = load();
+      const since = Date.now() - 7 * 864e5;
+      const works = {};
+      for (const r of counted(db)) {
+        const u = db.uploads.find((x) => x.id === r.artwork_id);
+        if (!u || u.hidden || r.kind === 'pass' || (r.at && r.at < since)) continue;
+        const a = db.artists[u.artist_id];
+        (works[u.id] ||= { id: u.id, title: u.title, artist_id: u.artist_id, artist: a?.name, country: a?.country, category: u.category, score: 0 }).score += W[r.role] * (r.kind === 'super' ? 2 : 1);
+      }
+      const all = Object.values(works);
+      const inChart = (w) => chart === 'overall' || chart === `medium:${w.category}` || chart === `country:${w.country}`;
+      const rank = (xs) => xs.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 100).map((x, i) => ({ ...x, rank: i + 1 }));
+      const artists = {};
+      for (const w of all.filter(inChart)) (artists[w.artist_id] ||= { id: w.artist_id, name: w.artist, country: w.country, score: 0 }).score += w.score;
+      const monday = new Date(); monday.setUTCHours(0, 0, 0, 0); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+      const wk = monday.toISOString().slice(0, 10);
+      return { week: wk, covers_from: new Date(monday - 7 * 864e5).toISOString().slice(0, 10), chart, weeks: [wk],
+        charts: [...new Set(all.flatMap((w) => ['overall', `medium:${w.category}`, `country:${w.country}`]))],
+        artworks: rank(all.filter(inChart)), artists: rank(Object.values(artists)) };
+    },
+    async artistIndexBadge(artistId) {
+      const d = await this.indexWeek();
+      const a = d.artists.find((x) => x.id === artistId);
+      return a ? { week: d.week, covers_from: d.covers_from, chart: 'overall', rank: a.rank, name: a.name } : null;
+    },
+    async publishIndex() { const db = load(); needAdmin(db); return 1; },
     async auditLog() {
       const db = load();
       if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
