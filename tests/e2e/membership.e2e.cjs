@@ -82,7 +82,7 @@ const textOf = (page, sel) => page.locator(sel).first().textContent();
   await ana.waitForSelector('.studio-periods');
   assert.equal(await ana.locator('.studio-periods a.seg-locked[href="#plans"]').count(), 1, 'a year of analytics is a Pro feature');
   await ana.goto(BASE + '#coach');
-  await ana.waitForFunction(() => /20 of 20 requests left/.test(document.querySelector('.coach')?.textContent || ''));
+  await ana.waitForSelector('.coach-locked');
   step('community mode: Free by default, paid plans shown but not on sale, Pro features locked');
 
   // ——— A moderator grants Pro; the server-side limits follow ———

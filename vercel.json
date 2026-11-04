@@ -73,6 +73,9 @@
   "functions": {
     "api/coach.js": {
       "maxDuration": 60
+    },
+    "api/assistant.js": {
+      "maxDuration": 60
     }
   }
 }

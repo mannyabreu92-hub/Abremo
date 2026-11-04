@@ -61,6 +61,15 @@ Nothing critical or high was found.
 - **Browser:** a strict Content-Security-Policy (scripts from this site only), HSTS, no framing, and a
   strict referrer policy.
 
+## Phase 7 addendum: the Abremi Guide
+
+- **Data boundaries:** the Guide's context comes only from database functions that run as the signed-in member: the public catalog, the page being viewed, and the member's own data. Database tests cover hidden and unreleased works, private collections, owner names, contact details, and personalization being switched off.
+- **Invented references:** every work or artist the Guide recommends is checked against the visible catalog on the server before it's shown. Lines with invented IDs are dropped (unit tested).
+- **Prompt injection:** catalog text (titles, bios, descriptions) and the member's messages go into the conversation as marked data, never into the instructions. The instructions say to ignore any instructions found in that data. Messages are limited to text, 2,000 characters each, and the last 12 turns.
+- **Privacy:** conversations are kept only in the open browser tab. The database stores only that a request happened (mode, time, outcome) and counts of what people did with suggestions. Moderators see totals only. Members can reset personalization, which also deletes their suggestion history.
+- **Cost and abuse:** members only, with a daily allowance per plan and a site-wide daily cap. Failed replies don't count. Errors shown to people never include the provider's error text.
+- **Rankings:** the choice of suggestions never reads plans or badges (database and unit tests).
+
 ## Owner checklist (things only you can do)
 
 1. **Supabase**

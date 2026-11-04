@@ -27,11 +27,13 @@ export function coachPage({ state, usage, works = [], opportunities = [], config
     : COACH_TOOLS[tool].needs === 'opportunity'
       ? (opportunities.length ? `<label class="field"><span>Opportunity</span><select id="coach-opportunity">${opportunities.map((o) => `<option value="${esc(o.id)}"${o.id === state.opportunityId ? ' selected' : ''}>${esc(o.title)}</option>`).join('')}</select></label>` : '<p class="muted">No open listings right now. <a href="#opportunities">See Opportunities</a>.</p>')
       : '';
-  const blocked = (COACH_TOOLS[tool].needs === 'artwork' && !works.length) || (COACH_TOOLS[tool].needs === 'opportunity' && !opportunities.length);
+  const locked = usage?.limit === 0;
+  const blocked = locked || (COACH_TOOLS[tool].needs === 'artwork' && !works.length) || (COACH_TOOLS[tool].needs === 'opportunity' && !opportunities.length);
   return `<div class="shell coach">
     <header class="page-head"><p class="eyebrow">Studio</p><h1 class="display-lg">Career Coach</h1>
       <p class="muted">Drafts written from your own profile, works and numbers, never invented facts, prices or valuations. Always read and edit before you use them.</p>
-      ${left != null ? `<p class="coach-usage">${Icon('spark', { size: 14 })} ${left} of ${usage.limit} requests left this month</p>` : ''}</header>
+      ${left != null && !locked ? `<p class="coach-usage">${Icon('spark', { size: 14 })} ${left} of ${usage.limit} requests left this month</p>` : ''}</header>
+    ${locked ? `<p class="notice coach-locked">${Icon('lock', { size: 16 })} <span>The Career Coach comes with Artist Pro and Elite. <a href="#plans">See plans</a>. You can still ask the Abremi Guide for tips on presenting your work.</span></p>` : ''}
     ${configured ? '' : `<p class="notice">${Icon('info', { size: 16 })} The Coach isn’t switched on yet. The site owner needs to add an AI key.</p>`}
     <div class="coach-tools" role="radiogroup" aria-label="What should the Coach draft?">${Object.entries(COACH_TOOLS).map(([k, v]) => `<button class="coach-tool${k === tool ? ' is-on' : ''}" role="radio" aria-checked="${k === tool}" data-act="coach-tool" data-v="${k}"><b>${esc(v.label)}</b><small>${esc(v.blurb)}</small></button>`).join('')}</div>
     <div class="coach-run">${picker}

@@ -960,8 +960,10 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log() where action like 'opportunity.%'`), /opportunity\.approved/);
   });
 
-  await t.test('coach: artists only, their own data as context, 20 a month (failed requests don’t count), no direct writes', () => {
+  await t.test('coach: Pro and Elite artists only, their own data as context, the plan’s monthly limit (failed requests don’t count), no direct writes', () => {
     fails(B, `select begin_coach_request('bio')`, /for artists/);
+    fails(E, `select begin_coach_request('bio')`, /comes with Artist Pro and Elite/);
+    as(P[1], `select admin_grant_plan('${E}', 'pro', current_date + 30)`);
     fails('anon', `select begin_coach_request('bio')`, /permission denied|Sign in/);
     fails(E, `select begin_coach_request('hack')`, /Unknown Coach tool/);
     fails(E, `select begin_coach_request('description', '${gWork}')`, /your own works/);
@@ -977,11 +979,13 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     as(E, `select finish_coach_request('${eng.request_id}', true)`);
     const app = JSON.parse(as(E, `select begin_coach_request('application', null, '${opp}')`));
     assert.equal(app.opportunity.title, 'Spring Open Call');
-    psql(`insert into coach_requests (user_id, tool, status) select '${E}', 'bio', 'done' from generate_series(1, 18)`);
-    fails(E, `select begin_coach_request('bio')`, /20 Coach requests/);
-    assert.equal(JSON.parse(as(E, 'select coach_usage()')).used, 20);
+    psql(`insert into coach_requests (user_id, tool, status) select '${E}', 'bio', 'done' from generate_series(1, 58)`);
+    fails(E, `select begin_coach_request('bio')`, /60 Coach requests/);
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).used, 60);
     noRowsFor(E, `with u as (delete from coach_requests returning 1) select count(*) from u`);
     noRowsFor(B, `select count(*) from coach_requests where user_id = '${E}'`);
+    as(P[1], `select admin_revoke_plan('${E}')`);
+    psql(`update coach_requests set created_at = created_at - interval '40 days' where user_id = '${E}'`); // last month's
   });
 
   await t.test('passport: exhibitions show only once a moderator verifies them; history and milestones come from records', () => {
@@ -1013,8 +1017,8 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     const plans = JSON.parse(as('anon', `select json_agg(row_to_json(p) order by p.sort) from plans p`));
     assert.deepEqual(plans, PLANS, 'supabase plans = src/core/plans.js');
     assert.equal(JSON.parse(as(E, 'select my_plan()')).plan.code, 'free');
-    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 20);
-    fails(E, `select begin_coach_request('bio')`, /20 Coach requests/);
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 0, 'the Coach is a Pro and Elite feature');
+    fails(E, `select begin_coach_request('bio')`, /comes with Artist Pro and Elite/);
     fails(E, 'select studio_analytics(365)', /Artist Pro and Elite/);
     fails(E, `select admin_grant_plan('${E}', 'elite', current_date + 30)`, /Admins only|permission denied/);
     fails(P[1], `select admin_grant_plan('${E}', 'pro', current_date)`, /between tomorrow and a year/);
@@ -1195,10 +1199,110 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
         and p.prosrc !~ 'is_admin\\(\\)'`), '', 'moderator functions without an is_admin() check');
   });
 
+  // ——— Phase 7 (0013): the Abremi Guide ———
+  await t.test('guide: members only; the artist mode is for artists; context is public catalog data plus the member’s own, never hidden or unreleased works or private details', () => {
+    fails('anon', `select begin_assistant_request('visitor')`, /permission denied|Sign in/);
+    fails(B, `select begin_assistant_request('artist')`, /for artists/);
+    fails(B, `select begin_assistant_request('hack')`, /Unknown mode/);
+    const hidden = psql(`select coalesce(string_agg(id, ','), '') from artworks where hidden or release_at > now()`).split(',').filter(Boolean);
+    assert.ok(hidden.length > 0, 'the fixture has hidden or unreleased works');
+    const ctx = JSON.parse(as(B, `select begin_assistant_request('visitor', 'artwork', '${eArt}')`));
+    assert.equal(ctx.page.artwork.id, eArt);
+    assert.ok('likes' in ctx.page.signals);
+    const ids = new Set(ctx.catalog.artworks.map((w) => w.id));
+    assert.ok(ids.size > 100, 'the catalog is there');
+    assert.deepEqual(hidden.filter((h) => ids.has(h)), [], 'no hidden or unreleased works');
+    const text = JSON.stringify(ctx);
+    assert.doesNotMatch(text, /@example\.com|owner_id|"email"/, 'no contact details or owner ids');
+    assert.equal(ctx.collections, null, 'collections only in the collector mode');
+    assert.equal(ctx.studio, null, 'studio data only in the artist mode');
+    for (const h of hidden.slice(0, 3)) assert.equal(as(B, `select begin_assistant_request('visitor', 'artwork', '${h}') -> 'page'`), 'null', 'hidden pages give no context');
+    // Collections: someone else's private one is invisible; a shared one shows no owner name.
+    const secret = psql(`insert into collections (owner_id, name, is_private) values ('${C}', 'Secret picks', true) returning id`);
+    const shared = psql(`insert into collections (owner_id, name, is_private) values ('${C}', 'Sea light', false) returning id`);
+    psql(`insert into collection_items (collection_id, artwork_id) values ('${secret}', '${eArt}'), ('${shared}', '${eArt}')`);
+    assert.equal(as(B, `select begin_assistant_request('visitor', 'collection', '${secret}') -> 'page'`), 'null');
+    const sharedCtx = JSON.parse(as(B, `select begin_assistant_request('visitor', 'collection', '${shared}') -> 'page'`));
+    assert.equal(sharedCtx.name, 'Sea light');
+    assert.equal(JSON.stringify(sharedCtx).includes(psql(`select name from profiles where id = '${C}'`)), false, 'no owner name');
+    const mine = JSON.parse(as(C, `select begin_assistant_request('collector', 'collection', '${secret}')`));
+    assert.equal(mine.page.mine, true);
+    assert.ok(mine.collections.some((c) => c.name === 'Secret picks' && c.private), 'your own collections, in the collector mode');
+    const rank = JSON.parse(as(B, `select begin_assistant_request('visitor', 'ranking', 'artworks') -> 'page'`));
+    assert.ok(Array.isArray(rank.top_artworks));
+    const artist = JSON.parse(as(E, `select begin_assistant_request('artist', 'artist', 'm_${E}')`));
+    assert.equal(artist.studio.artist.id, `m_${E}`);
+    assert.ok('views' in artist.studio.last_30_days);
+    assert.ok(artist.studio.works.length > 0);
+  });
+
+  await t.test('guide: personalization uses only the member’s own follows, likes, saves and stated interests, and can be switched off or reset', () => {
+    psql(`insert into follows (user_id, artist_id, role) values ('${B}', '${seed.artists[3].id}', 'fan') on conflict do nothing`);
+    let ctx = JSON.parse(as(B, `select begin_assistant_request('visitor')`));
+    assert.ok(ctx.personal.follows.includes(seed.artists[3].id));
+    as(B, `select set_assistant_preferences(true, 'Street art from Lisbon')`);
+    assert.equal(JSON.parse(as(B, 'select assistant_preferences()')).interests, 'Street art from Lisbon');
+    as(B, `select set_assistant_preferences(false, 'Street art from Lisbon')`);
+    ctx = JSON.parse(as(B, `select begin_assistant_request('visitor')`));
+    assert.deepEqual([ctx.personal.follows, ctx.personal.saved, ctx.personal.interests], [[], [], ''], 'switched off: nothing personal');
+    as(B, `select record_assistant_event('artwork_click', '${eArt}')`);
+    as(B, 'select reset_assistant_personalization()');
+    const prefs = JSON.parse(as(B, 'select assistant_preferences()'));
+    assert.deepEqual(prefs, { personalize: true, interests: '' });
+    assert.equal(psql(`select count(*) from assistant_events where user_id = '${B}'`), '0', 'reset forgets what you did with suggestions');
+    noRowsFor(C, `with u as (update profiles set assistant_interests = 'x' where id = '${B}' returning 1) select count(*) from u`);
+  });
+
+  await t.test('guide: a daily allowance by plan (failed replies don’t count), no direct writes, and requests stay private', () => {
+    const usage = () => JSON.parse(as(B, 'select assistant_usage()'));
+    assert.equal(usage().limit, 30);
+    const r = JSON.parse(as(B, `select begin_assistant_request('visitor')`)).request_id;
+    const before = usage().used;
+    as(B, `select finish_assistant_request('${r}', false)`);
+    assert.equal(usage().used, before - 1, 'failed replies don’t count');
+    psql(`insert into assistant_requests (user_id, mode, status) select '${B}', 'visitor', 'done' from generate_series(1, ${30 - usage().used})`);
+    fails(B, `select begin_assistant_request('visitor')`, /today’s 30 messages/);
+    as(P[1], `select admin_grant_plan('${B}', 'pro', current_date + 7)`);
+    assert.equal(usage().limit, 60);
+    as(B, `select begin_assistant_request('collector')`);
+    as(P[1], `select admin_revoke_plan('${B}')`);
+    noRowsFor(B, `with u as (insert into assistant_requests (user_id, mode) values ('${B}', 'visitor') returning 1) select count(*) from u`);
+    noRowsFor(B, `with u as (delete from assistant_requests returning 1) select count(*) from u`);
+    noRowsFor(C, `select count(*) from assistant_requests where user_id = '${B}'`);
+    const cReq = psql(`select id from assistant_requests where user_id = '${C}' and status = 'pending' limit 1`);
+    as(B, `select finish_assistant_request('${cReq}', true)`);
+    assert.equal(psql(`select status from assistant_requests where id = '${cReq}'`), 'pending', 'only your own requests');
+  });
+
+  await t.test('guide: what people do with suggestions is counted, readable only by moderators; repeat use is measured; choosing suggestions never reads plans', () => {
+    as(B, `select record_assistant_event('artwork_click', '${eArt}')`);
+    as(B, `select record_assistant_event('follow', 'm_${E}')`);
+    fails(B, `select record_assistant_event('bogus')`, /check constraint/);
+    fails('anon', `select record_assistant_event('open')`, /permission denied/);
+    noRowsFor(B, 'select count(*) from assistant_events');
+    psql(`update assistant_requests set created_at = now() - interval '2 days' where id = (select id from assistant_requests where user_id = '${B}' order by created_at limit 1)`);
+    fails(B, 'select admin_assistant_metrics(30)', /Admins only|permission denied/);
+    const m = JSON.parse(as(P[1], 'select admin_assistant_metrics(30)'));
+    assert.ok(m.events.artwork_click >= 1 && m.events.follow >= 1);
+    assert.ok(m.members >= 2 && m.returning >= 1, 'returning members are counted');
+    assert.ok(m.by_mode.visitor >= 1);
+    assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname in ('assistant_catalog', 'assistant_page_context') and p.prosrc ~* '(subscriptions|current_plan|plans\\b|plan_badges)'`), '', 'suggestions are chosen without plans');
+    fails(B, 'select assistant_catalog()', /permission denied/);
+  });
+
+  await t.test('0013 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0013_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('assistant_requests', 'assistant_events')`), '0');
+    assert.equal(psql(`select count(*) from information_schema.columns where table_name = 'profiles' and column_name like 'assistant_%'`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('assistant_requests', 'assistant_events')`), '2');
+  });
+
   await t.test('0012 can be undone, and setup.sql re-applies it', () => {
     psql(file('supabase/migrations/down/0012_down.sql'));
     assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('plans', 'subscriptions', 'galleries', 'invite_codes', 'feedback', 'client_errors', 'app_settings', 'billing_events')`), '0');
-    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 20, 'the earlier Coach limit is back');
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 20, 'undoing 0013 gives Free its earlier 20 Coach requests');
     psql(`insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000999', 'after-undo@example.com')`);
     psql(file('supabase/setup.sql'));
     assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('plans', 'subscriptions', 'galleries', 'invite_codes', 'feedback', 'client_errors', 'app_settings', 'billing_events')`), '8');

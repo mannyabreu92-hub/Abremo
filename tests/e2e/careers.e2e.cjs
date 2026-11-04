@@ -100,7 +100,13 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   await ana.waitForSelector('#studio .work-row');
   await ana.click('#studio a[href="#coach"]');
   await ana.waitForSelector('.coach-tools');
-  await ana.waitForFunction(() => /20 of 20 requests left/.test(document.querySelector('.coach').textContent));
+  await ana.waitForSelector('.coach-locked');
+  assert.match(await ana.locator('.coach-locked').textContent(), /comes with Artist Pro and Elite/);
+  assert.equal(await ana.locator('[data-act=coach-run]').isDisabled(), true, 'locked on Artist Free');
+  await ana.evaluate(() => { const d = window.__mockdb.load(); (d.subs ||= {})['u-ana@example.com'] = { plan: 'pro', status: 'active', source: 'grant', ends_at: new Date(Date.now() + 30 * 864e5).toISOString() }; window.__mockdb.save(d); });
+  await ana.reload();
+  await ana.waitForSelector('.coach-tools');
+  await ana.waitForFunction(() => /60 of 60 requests left/.test(document.querySelector('.coach').textContent));
   assert.match(await ana.locator('.coach header').textContent(), /never invented facts, prices or valuations/);
   await ana.click('[data-act=coach-tool][data-v=description]');
   assert.equal(await ana.locator('#coach-artwork option').count(), 1);
@@ -108,14 +114,14 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   await ana.waitForSelector('.coach-result');
   assert.match(await ana.locator('.coach-text').textContent(), /\[Stand-in draft for description\] about “Harbour”/);
   assert.match(await ana.locator('.coach-result .fine').textContent(), /Based on your profile, 1 of your works, “Harbour”/);
-  await ana.waitForFunction(() => /19 of 20 requests left/.test(document.querySelector('.coach').textContent));
+  await ana.waitForFunction(() => /59 of 60 requests left/.test(document.querySelector('.coach').textContent));
   await ana.goto(BASE + '#opportunities');
   await ana.waitForSelector('.opportunity [data-act=coach-for-opportunity]');
   await ana.locator('.opportunity', { hasText: 'Spring Open Call' }).locator('[data-act=coach-for-opportunity]').click();
   await ana.waitForSelector('#coach-opportunity');
   await ana.click('[data-act=coach-run]');
   await ana.waitForFunction(() => /for “Spring Open Call”/.test(document.querySelector('.coach-text')?.textContent || ''));
-  step('the Coach works for artists only, shows usage, drafts from a chosen work or listing, and says what each draft was based on');
+  step('the Coach is locked on Artist Free and works on Pro, shows usage, drafts from a chosen work or listing, and says what each draft was based on');
 
   // ——— The Artist Passport ———
   await ana.goto(BASE + '#profile');
