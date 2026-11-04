@@ -9,7 +9,8 @@ import { battleResult, expectedScore } from '../src/core/elo.js';
 import { buildSeedWorld } from '../src/core/seed.js';
 import { seedSQL, setupSQL } from '../scripts/gen-seed-sql.js';
 import { memberBoards } from '../src/core/leaderboards.js';
-import { sampleCatalog } from '../src/core/community.js';
+import { sampleCatalog, snapshotToCommunity } from '../src/core/community.js';
+import { artworkInfluence } from '../src/core/scoring.js';
 
 const flags = process.env.ABREMI_PG?.split(/\s+/).filter(Boolean);
 const skip = !flags && 'set ABREMI_PG to run database tests';
@@ -429,7 +430,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     as('anon', 'select chart_baseline()');
     assert.equal(psql('select count(*) from community_history'), '1', 'once per hour');
     const keys = psql(`select string_agg(k, ',' order by k) from community_history, jsonb_object_keys(snapshot) k`);
-    assert.equal(keys, 'follows,members,ratings,reactions,reviews', 'totals only: no uploads list, no member details');
+    assert.equal(keys, 'artist_scores,follows,members,ratings,reactions,reviews,scores', 'totals and scores only: no uploads list, no member details');
     // An earlier chart, and one too old to compare against.
     psql(`insert into community_history (hour, taken_at, snapshot) values
       (date_trunc('hour', now()) - interval '2 hours', date_trunc('hour', now()) - interval '2 hours', '{"members": 1}'),
@@ -531,6 +532,106 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     fails(A, `insert into collection_items (collection_id, artwork_id) values ('${id}', 'no-such-work')`, /foreign key/);
     as(A, `delete from collections where id = '${id}'`);
     assert.equal(psql(`select count(*) from collection_items where collection_id = '${id}'`), '0', 'items go with their collection');
+  });
+
+  // ——— Phase 2A (0007): ranking integrity, server-side scores, achievements ———
+  const scoreOf = (id) => JSON.parse(as('anon', 'select community_snapshot()')).scores.find((x) => x.a === id) || { p: 0, t: 0, c: 0 };
+  await t.test('your own likes, saves, follows, reviews and battle votes never count', () => {
+    psql(`update artworks set created_at = now() - interval '2 days' where owner_id = '${E}'`);
+    put(E, `${E}/own.webp`); put(E, `${E}/own-thumb.webp`);
+    const [own] = publish(E, { image: `${E}/own.webp`, thumb: `${E}/own-thumb.webp`, title: 'Self' }).split('|');
+    as(E, `insert into reactions (artwork_id, kind) values ('${own}', 'super')`);
+    assert.equal(scoreOf(own).p, 0, 'a self-save adds nothing');
+    as(A, `insert into reactions (artwork_id, kind) values ('${own}', 'like')`);
+    const [anaRole, anaWeight] = psql(`select role || '|' || role_weight(role) from profiles where id = '${A}'`).split('|');
+    assert.equal(scoreOf(own).p, Number(anaWeight), 'someone else’s like counts, at their role’s weight');
+    const snap = JSON.parse(as('anon', 'select community_snapshot()'));
+    assert.deepEqual(snap.reactions.filter((r) => r.a === own).map((r) => [r.k, r.r, r.n]), [['like', anaRole, 1]]);
+    as(E, `insert into follows (artist_id) values ('m_${E}')`);
+    assert.equal(JSON.parse(as('anon', 'select community_snapshot()')).follows.filter((f) => f.a === `m_${E}`).length, 0, 'following yourself adds nothing');
+    const rival = seed.artworks[123];
+    fails(E, `select * from cast_battle_vote('${own}', '${rival.id}')`, /your own work/);
+    for (const who of ['anon', A]) for (const v of ['counted_reactions', 'counted_follows', 'counted_reviews']) noRowsFor(who, `select count(*) from ${v}`);
+  });
+
+  await t.test('server scores: popularity matches the app formula; trending halves every 7 days; collector interest is separate', () => {
+    const snap = JSON.parse(as('anon', 'select community_snapshot()'));
+    const c = snapshotToCommunity(snap);
+    for (const row of snap.scores) {
+      const counts = c.deltas[row.a];
+      if (counts) assert.equal(row.p, artworkInfluence(counts), `popularity of ${row.a}`);
+    }
+    const w = seed.artworks[310];
+    as(B, `insert into reactions (artwork_id, kind) values ('${w.id}', 'like')`);
+    assert.equal(Number(scoreOf(w.id).t), 1);
+    psql(`update reactions set created_at = now() - interval '7 days' where artwork_id = '${w.id}'`);
+    assert.ok(Math.abs(Number(scoreOf(w.id).t) - 0.5) < 0.01, 'a week-old like counts half toward Trending');
+    assert.equal(scoreOf(w.id).p, 1, 'all-time popularity is unchanged');
+    assert.equal(scoreOf(w.id).c, 0, 'no collectors yet');
+  });
+
+  await t.test('members cannot exclude or un-exclude their own reactions', () => {
+    const w = seed.artworks[311];
+    as(B, `insert into reactions (artwork_id, kind, excluded) values ('${w.id}', 'like', true)`);
+    assert.equal(psql(`select excluded from reactions where user_id = '${B}' and artwork_id = '${w.id}'`), 'f');
+    psql(`update reactions set excluded = true, excluded_reason = 'test' where user_id = '${B}' and artwork_id = '${w.id}'`);
+    as(B, `update reactions set excluded = false, kind = 'super' where artwork_id = '${w.id}'`);
+    assert.equal(psql(`select excluded || '|' || kind from reactions where user_id = '${B}' and artwork_id = '${w.id}'`), 'true|super', 'kind changes; exclusion stays');
+    assert.equal(scoreOf(w.id).p, 0, 'excluded reactions don’t count');
+  });
+
+  await t.test('rate limits: 600 likes and saves an hour', () => {
+    const R = '00000000-0000-0000-0000-000000000301';
+    psql(`insert into auth.users (id, email) values ('${R}', 'rapid@example.com')`);
+    as(R, `insert into reactions (artwork_id, kind) select id, 'like' from artworks where owner_id is null order by id limit 600`);
+    fails(R, `insert into reactions (artwork_id, kind) values ((select id from artworks where owner_id is not null limit 1), 'like')`, /Slow down/);
+    psql(`update reactions set created_at = now() - interval '2 hours' where user_id = '${R}'`);
+    as(R, `insert into reactions (artwork_id, kind) values ((select id from artworks where owner_id is not null limit 1), 'like')`);
+    psql(`delete from auth.users where id = '${R}'`);
+  });
+
+  const NEW = Array.from({ length: 10 }, (_, i) => `00000000-0000-0000-0000-0000000004${String(i).padStart(2, '0')}`);
+  await t.test('integrity: a burst from new accounts is flagged for moderators, who can exclude it (logged)', () => {
+    const target = seed.artworks[400];
+    psql(`insert into auth.users (id, email) values ${NEW.map((u, i) => `('${u}', 'new${i}@example.com')`).join(', ')}`);
+    for (const u of NEW) as(u, `insert into reactions (artwork_id, kind) values ('${target.id}', 'like')`);
+    assert.equal(scoreOf(target.id).p, 10);
+    fails(P[0], 'select * from admin_integrity_queue()', /Admins only|permission denied/);
+    fails(A, 'select detect_suspicious_activity()', /permission denied/);
+    for (const who of ['anon', A]) noRowsFor(who, 'select count(*) from integrity_flags');
+    const flag = as(P[1], `select id || '|' || (details->>'new_accounts') from admin_integrity_queue() where target_id = '${target.id}'`);
+    const [flagId, fresh] = flag.split('|');
+    assert.equal(fresh, '10');
+    assert.equal(as(P[1], `select count(*) from admin_integrity_queue() where target_id = '${target.id}'`), '1', 'flagged once');
+    fails(A, `select resolve_integrity_flag('${flagId}', true)`, /Admins only|permission denied/);
+    assert.equal(as(P[1], `select resolve_integrity_flag('${flagId}', true, 'Coordinated new accounts')`), '10');
+    assert.equal(scoreOf(target.id).p, 0, 'excluded from rankings');
+    assert.equal(psql(`select count(*) from reactions where artwork_id = '${target.id}'`), '10', 'nothing is deleted');
+    assert.equal(as(P[1], `select details->>'excluded' from admin_audit_log() where action = 'integrity_flag.confirmed' limit 1`), '10');
+    fails(P[1], `select resolve_integrity_flag('${flagId}', false)`, /no longer open/);
+  });
+
+  await t.test('achievements: earned on the server with evidence; criteria public; artist achievements public, member ones private', () => {
+    assert.ok(Number(as('anon', 'select count(*) from achievement_definitions')) >= 13, 'criteria are public');
+    const mine = as(A, `select string_agg(code, ',' order by code) from my_achievements()`).split(',');
+    assert.ok(mine.includes('first_discovery'));
+    const eve = as(E, `select string_agg(code, ',' order by code) from my_achievements()`).split(',');
+    assert.ok(eve.includes('first_work') && eve.includes('top_100_global'), eve.join());
+    assert.equal(as(E, `select evidence->>'rank' from my_achievements() where code = 'top_100_global'`) !== '', true);
+    const pub = as('anon', `select string_agg(code, ',' order by code) from artist_achievements('m_${E}')`).split(',');
+    assert.ok(pub.includes('first_work') && !pub.includes('first_discovery'), 'only artist achievements are public');
+    assert.equal(as(B, `select count(*) from member_achievements where user_id = '${A}'`), '0', 'others can’t read your achievements');
+    noRowsFor(A, `with u as (insert into member_achievements (user_id, code) values ('${A}', 'master_critic') returning 1) select count(*) from u`);
+    fails(A, 'select award_achievements()', /permission denied/);
+    fails('anon', 'select * from my_achievements()', /permission denied|Sign in/);
+  });
+
+  await t.test('0007 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0007_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('integrity_flags', 'member_achievements', 'achievement_definitions')`), '0');
+    assert.ok(JSON.parse(as('anon', 'select community_snapshot()')).reactions.length > 0, 'the snapshot works after the undo');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('integrity_flags', 'member_achievements', 'achievement_definitions')`), '3');
   });
 
   await t.test('0006 can be undone, and setup.sql re-applies it', () => {
