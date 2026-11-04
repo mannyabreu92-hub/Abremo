@@ -1327,6 +1327,18 @@ function updateGuideStream() {
   if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 160) log.scrollTop = log.scrollHeight;
 }
 
+/** A plain message for anything that went wrong, never code or provider details. */
+function guideFailure(e) {
+  if (e?.stale) return { message: 'Abremi was just updated. Refresh to use the Guide.', refresh: true };
+  if (e instanceof TypeError && /fetch|load failed|network/i.test(e.message || '')) return { message: 'Couldn’t reach Abremi. Check your connection and try again.', retry: true };
+  if (!(e instanceof Error) || e instanceof TypeError || e instanceof ReferenceError || e instanceof SyntaxError) {
+    reportError(e?.message || String(e), 'guide');
+    return { message: 'Something went wrong on this page. Refresh and try again.', refresh: true };
+  }
+  const msg = e.message || 'The Guide is unavailable right now.';
+  return { message: msg, retry: !/sign in|today’s|for artists|switched on|Choose a mode|comes with/i.test(msg) };
+}
+
 function openGuide() {
   guide.open = true;
   guide.error = null;
@@ -1369,14 +1381,15 @@ async function guideAsk() {
   renderGuide();
   let failed = null;
   try {
+    // A page that is half-updated (some files from the previous version) can lack the Guide's call.
+    if (typeof cloud?.guide !== 'function') throw Object.assign(new Error('stale'), { stale: true });
     await cloud.guide({ mode, messages, page: guidePage() }, (ev) => {
       if (ev.type === 'text') { reply.content += ev.text; if (guide.open && guide.mode === mode) updateGuideStream(); }
       else if (ev.type === 'done') guide.usage = ev.usage || guide.usage;
       else if (ev.type === 'error') failed = { message: ev.error, retry: ev.retry !== false };
     });
   } catch (e) {
-    const msg = e?.message || 'The Guide is unavailable right now.';
-    failed = { message: msg, retry: !/sign in|today’s|for artists|switched on|Choose a mode/i.test(msg) };
+    failed = guideFailure(e);
   }
   if (failed) {
     thread.splice(thread.indexOf(reply), 1);

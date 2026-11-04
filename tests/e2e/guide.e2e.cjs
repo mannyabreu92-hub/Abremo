@@ -184,6 +184,19 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   assert.doesNotMatch(stats, /Tell me about this artist|calm and minimal/, 'no conversation text');
   step('the moderator page shows Guide counts, never conversations');
 
+  // ——— A half-updated page: a plain message and a Refresh button, never code ———
+  const stale = await open('u-cy@example.com');
+  await stale.addInitScript(() => { window.__guideMissing = true; });
+  await stale.goto(BASE + '#charts');
+  await stale.click('#guide-launcher');
+  await stale.click('#guide [data-act=guide-prompt] >> nth=0');
+  await stale.waitForSelector('#guide .guide-error [data-act=pwa-update]');
+  const msg = await stale.locator('#guide .guide-error').textContent();
+  assert.match(msg, /Abremi was just updated\. Refresh to use the Guide/);
+  assert.doesNotMatch(msg, /cloud\.|function|undefined|=>/, 'no code shown');
+  await stale.close();
+  step('a half-updated page gets a plain message and a Refresh button, never code');
+
   // ——— Phones ———
   const phone = await open('u-cy@example.com');
   await phone.setViewportSize({ width: 390, height: 844 });
