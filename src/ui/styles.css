@@ -1140,3 +1140,14 @@ div.rank-row:hover { background: transparent; }
 .app-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
 .app-stats > div { display: flex; flex-direction: column-reverse; }
 @media (max-width: 760px) { .app-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ——— Live updates ——— */
+.chart-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.live-badge { display: inline-flex; align-items: center; gap: 6px; }
+.live-badge.is-live { color: var(--abremi-success); font-weight: 600; letter-spacing: 0.02em; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 0 rgba(128, 185, 154, 0.5); animation: live-pulse 2.4s ease-out infinite; }
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(128, 185, 154, 0.45); }
+  70%, 100% { box-shadow: 0 0 0 7px rgba(128, 185, 154, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }

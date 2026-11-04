@@ -14,6 +14,7 @@ Abremi runs in two modes:
 | `migrations/0002_artist_uploads.sql` | Member artists, uploaded artworks, the `artworks` image bucket and its access rules, publish/delete |
 | `migrations/0003_member_leaderboards.sql` | Member leaderboards (`member_leaderboards()`), the leaderboard opt-out, neutral default names |
 | `migrations/0004_role_applications.sql` | Critic & Collector applications, the admin list, and the review functions |
+| `migrations/0005_live_updates.sql` | Live updates (the public `community_pulse` row, sent by Supabase Realtime) and the shared hourly charts (`community_history`, `chart_baseline()`, an hourly pg_cron job) |
 | `seed.sql` | The catalog (artists, artworks, starting battle ratings), generated from `src/core/seed.js` |
 | `setup.sql` | Both of the above in one file, to paste into the SQL editor. Safe to run more than once |
 | `test/auth_stub.sql` | A stand-in for Supabase's `auth` schema, used only by the local database tests |
@@ -42,6 +43,8 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
   - Moderators are the members listed in `public.admins`. Nobody can read or change that table through the API; add moderators in the SQL editor (see step 4 above).
   - `admin_role_queue()`, `decide_role_application()`, `admin_verified_members()` and `revoke_role()` refuse anyone who isn't a moderator. The queue shows the applicant's email and their activity totals (likes, saves, reviews, influence added), never anyone else's private data.
   - Members can read only their own applications, and can't write to the table directly. Revoking a role sets the member back to Fan; votes already cast keep the weight they had.
+- **Live updates** never broadcast who did what. A trigger bumps a single public counter (`community_pulse`, at most once a second) whenever totals change; apps subscribed through Supabase Realtime then refetch `community_snapshot()`. It's the only table in the `supabase_realtime` publication.
+- **Hourly charts** (`community_history`) keep the same public totals as `community_snapshot()`, without the upload list, for 8 days. `chart_baseline()` returns the latest earlier chart from the past 24 hours, or nothing, in which case the app shows no movement. pg_cron keeps a chart at the top of every hour; without pg_cron, the first visit in each hour keeps it.
 - Battle ratings change only through `cast_battle_vote()`. It applies the same maths as `src/core/elo.js`, allows one vote per second, and allows the same pair once per 10 minutes.
 - `community_snapshot()` exposes totals only (counts per artwork and role). It never shows who voted. It also lists member artists and their published works.
 - **Uploads:**

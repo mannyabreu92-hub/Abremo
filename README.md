@@ -15,7 +15,7 @@ npm start         # http://localhost:5173  (zero dependencies, Node 18+)
 npm run check     # syntax check of the UI modules + unit tests
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
 npm run test:db   # Supabase migration + security rules on a real Postgres (set ABREMI_PG)
-npm run test:e2e  # sign-in/sync, artist uploads, the culture engine, leaderboards, role applications and offline/install/update flows in a browser
+npm run test:e2e  # sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
 ```
 
 ### Accounts and the shared database
@@ -103,6 +103,7 @@ Every number comes from real activity: likes, Super Likes, follows, reviews and 
   - **Discovery Score:** credit for liking work before others do, weighted by who came later (Fan 1 … Collector 9), so throwaway accounts barely count.
   - **Collectors and critics:** ranked by the influence they added in that role, with critics' reviews included.
 - **Critic & Collector applications:** on Profile, tapping Critic or Collector opens an application (a statement, links, and a pledge not to game the rankings). Moderators review them at `#admin` (shown in the menu only for moderators), with the applicant's activity alongside, and approve, decline with a note, or later remove the role. Applicants are told in the app when a decision is made. Demo mode, with no database, keeps the old local role switcher.
+- **Live updates:** with accounts on, Rankings shows **● Live**. When anyone likes, saves, follows, votes or uploads, every open app refreshes the totals within seconds, with no reload and without revealing who did what. Rank movement (↑ 3) compares with a shared hourly chart kept by the server, so everyone sees the same movement. When there is no earlier chart, no movement is shown.
   - **Privacy:** members appear by display name and country only. New members get a neutral name ("Member 3F2A") rather than part of their email, and anyone can opt out in Profile while still seeing their own position.
   - **Demo mode:** shows no boards, because there are no real members to rank.
 - **Cultural Influence by Country:** each country's artists' combined score, with its leading artist and work.
@@ -151,7 +152,7 @@ tests/                node:test suites
 ```
 
 ## Prototype limits (what production needs)
-- **Backend:** accounts and the shared database are built (see above). Still to come: real-time updates (totals refresh every 90 seconds and when you return to the tab), an hourly chart job, fraud detection beyond the role and vote limits.
+- **Backend:** accounts and the shared database are built (see above). Still to come: fraud detection beyond the role and vote limits.
 - **Recognition:** uses on-device pixel statistics today. Production would use a vision model behind the same `features → prediction → matches` interface.
 - **Payments and messaging** are simulated and stay on the device. A real version needs Stripe Connect or similar for payouts.
 - **Catalog art** is generated procedurally, so the demo ships no copyrighted images. Uploaded images are stored in localStorage (about 5 MB limit).
