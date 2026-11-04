@@ -11,10 +11,22 @@ moves the global and country charts. A like counts for more when it comes from a
 ## Run it
 
 ```bash
-npm start      # http://localhost:5173  (zero dependencies, Node 18+)
-npm run check  # syntax check of the UI modules + unit tests
-npm test       # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition
+npm start         # http://localhost:5173  (zero dependencies, Node 18+)
+npm run check     # syntax check of the UI modules + unit tests
+npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
+npm run test:db   # Supabase migration + security rules on a real Postgres (set GABANGI_PG)
+npm run test:e2e  # sign-in and community sync in a browser (needs Playwright and npm start)
 ```
+
+### Accounts and the shared database
+With no configuration, Gabangi runs in **demo mode**, and everything stays on the visitor's device.
+Add a Supabase database and it switches to **community mode**:
+- **Sign-in:** by email link or code.
+- **Shared rankings:** everyone's likes, saves, follows, reviews and battle votes add up into the same rankings.
+- **Security:** row-level security, vote roles stamped by the server, and Critic/Collector granted by an admin only.
+- **Guests:** they can still swipe, and what they liked is added to their account when they sign in.
+
+Setup takes four steps: see [`supabase/README.md`](supabase/README.md).
 
 Any static file server also works. Open it on a phone, or use the browser's mobile emulator.
 
@@ -81,12 +93,18 @@ src/ui/               browser layer
                       EmptyState, LoadingSkeleton, Icons
   art.js              procedural SVG artwork generator (original, per style/medium)
   store.js            localStorage persistence (user actions stored as deltas)
+  cloud.js            Supabase adapter: auth, reactions, follows, reviews, battle votes
+src/config.js         Supabase URL + anon key, written at build time (empty = demo mode)
+src/core/community.js server totals ↔ app state mapping, guest → account import
+supabase/             migration, generated seed, one-file setup, setup guide
+scripts/write-config.js  build step: env vars → src/config.js (refuses secret keys)
+scripts/gen-seed-sql.js  catalog → supabase/seed.sql and setup.sql
   styles.css          design system: tokens, type scale, components, responsive rules
 tests/                node:test suites
 ```
 
 ## Prototype limits (what production needs)
-- **Backend:** accounts, real-time counters, an hourly chart job, fraud detection, and verification for critics and collectors (roles can be switched freely in the demo).
+- **Backend:** accounts and the shared database are built (see above). Still to come: real-time updates (totals refresh every 90 seconds and when you return to the tab), an hourly chart job, fraud detection beyond the role and vote limits, and an application flow for Critic and Collector verification.
 - **Recognition:** uses on-device pixel statistics today. Production would use a vision model behind the same `features → prediction → matches` interface.
 - **Payments and messaging** are simulated and stay on the device. A real version needs Stripe Connect or similar for payouts.
 - **Catalog art** is generated procedurally, so the demo ships no copyrighted images. Uploaded images are stored in localStorage (about 5 MB limit).
