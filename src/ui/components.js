@@ -27,6 +27,7 @@ const P = {
   scan: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><circle cx="12" cy="12" r="3"/>',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
+  chart: '<path d="M6 20V11M12 20V5M18 20v-6M3.5 20.5h17"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',

@@ -235,7 +235,7 @@ window.__abremiCloud = async () => {
       needUser(); await wait();
       const db = load();
       db.follows = db.follows.filter((f) => !(f.user_id === user.id && f.artist_id === artist_id));
-      if (on) db.follows.push({ user_id: user.id, artist_id, role: profileOf(db, user.id).role });
+      if (on) db.follows.push({ user_id: user.id, artist_id, role: profileOf(db, user.id).role, at: tick() });
       save(db);
     },
     async addReview(artwork_id, rating, body) {
@@ -551,6 +551,72 @@ window.__abremiCloud = async () => {
       const db = load();
       for (const n of db.notifications || []) if (n.user_id === user?.id && !n.read_at) n.read_at = new Date().toISOString();
       save(db);
+    },
+    // ——— Phase 3 (same rules as supabase/migrations/0009_analytics.sql) ———
+    async recordEvents(events, guestKey) {
+      await wait();
+      const db = load();
+      db.events ||= [];
+      const viewer = user ? user.id : /^[A-Za-z0-9-]{16,64}$/.test(guestKey || '') ? `g:${guestKey}` : null;
+      if (!viewer || events.length > 100) return 0;
+      const day = new Date().toISOString().slice(0, 10);
+      let n = 0;
+      for (const { k, t } of events) {
+        const work = db.uploads.find((u) => u.id === t);
+        const artistId = k === 'profile_visit' ? t : work?.artist_id;
+        const owner = artistId?.startsWith('m_') ? artistId.slice(2) : null;
+        if (!['impression', 'artwork_view', 'profile_visit'].includes(k) || !owner || owner === user?.id) continue;
+        if (db.events.some((e) => e.k === k && e.t === t && e.viewer === viewer && e.day === day)) continue;
+        const p = user ? profileOf(db, user.id) : null;
+        db.events.push({ k, t, artist: artistId, artwork: work?.id || null, viewer, member: Boolean(user), role: p?.role || null, country: p?.country || null, day, at: Date.now() });
+        n++;
+      }
+      if (n) save(db);
+      return n;
+    },
+    async studio(days = 30) {
+      await wait();
+      needUser();
+      const db = load();
+      const artist = `m_${user.id}`;
+      if (!db.artists[artist]) return null;
+      days = [7, 30, 90].includes(days) ? days : 30;
+      const DAY = 864e5, end = new Date(new Date().toISOString().slice(0, 10)).getTime() + DAY;
+      const from = end - days * DAY, prev = from - days * DAY;
+      const evs = (db.events || []).filter((e) => e.artist === artist);
+      const mine = db.uploads.filter((u) => u.artist_id === artist).map((u) => u.id);
+      const reacts = counted(db).filter((r) => mine.includes(r.artwork_id) && r.kind !== 'pass');
+      const fol = countedFollows(db).filter((f) => f.artist_id === artist);
+      const split = (k, a, b) => { const xs = evs.filter((e) => e.k === k && e.at >= a && e.at < b); return { members: xs.filter((e) => e.member).length, guests: xs.filter((e) => !e.member).length }; };
+      const summary = (a, b) => ({ impressions: split('impression', a, b), views: split('artwork_view', a, b), visits: split('profile_visit', a, b),
+        likes: reacts.filter((r) => r.kind === 'like' && (r.at || 0) >= a && (r.at || 0) < b).length,
+        saves: reacts.filter((r) => r.kind === 'super' && (r.at || 0) >= a && (r.at || 0) < b).length,
+        followers: fol.filter((f) => (f.at || 0) >= a && (f.at || 0) < b).length });
+      const daily = Array.from({ length: days }, (_, i) => {
+        const a = from + i * DAY, b = a + DAY;
+        return { day: new Date(a).toISOString().slice(0, 10), impressions: evs.filter((e) => e.k === 'impression' && e.at >= a && e.at < b).length,
+          views: evs.filter((e) => e.k === 'artwork_view' && e.at >= a && e.at < b).length, visits: evs.filter((e) => e.k === 'profile_visit' && e.at >= a && e.at < b).length,
+          likes: reacts.filter((r) => (r.at || 0) >= a && (r.at || 0) < b).length, followers: fol.filter((f) => (f.at || 0) < b).length };
+      });
+      const works = db.uploads.filter((u) => u.artist_id === artist).map((u) => ({ id: u.id, title: u.title,
+        impressions: evs.filter((e) => e.artwork === u.id && e.k === 'impression' && e.at >= from).length,
+        views: evs.filter((e) => e.artwork === u.id && e.k === 'artwork_view' && e.at >= from).length,
+        likes: reacts.filter((r) => r.artwork_id === u.id && r.kind === 'like' && (r.at || 0) >= from).length,
+        saves: reacts.filter((r) => r.artwork_id === u.id && r.kind === 'super' && (r.at || 0) >= from).length }));
+      const people = new Set([...reacts.filter((r) => (r.at || 0) >= from).map((r) => r.user_id), ...fol.filter((f) => (f.at || 0) >= from).map((f) => f.user_id), ...evs.filter((e) => e.member && e.at >= from).map((e) => e.viewer)]);
+      const byCountry = {};
+      for (const id of people) { const c = profileOf(db, id).country; byCountry[c] = (byCountry[c] || 0) + 1; }
+      const grouped = {};
+      for (const [c, n] of Object.entries(byCountry)) grouped[n >= 3 ? c : 'Other'] = (grouped[n >= 3 ? c : 'Other'] || 0) + n;
+      const roles = {};
+      for (const x of [...reacts.filter((r) => (r.at || 0) >= from), ...fol.filter((f) => (f.at || 0) >= from)]) roles[x.role] = (roles[x.role] || 0) + 1;
+      return { artist, days, current: summary(from, end), previous: summary(prev, from), followers_total: fol.length, daily, works, roles,
+        countries: Object.entries(grouped).map(([country, n]) => ({ country, people: n })).sort((a, b) => b.people - a.people) };
+    },
+    async weeklyReports() {
+      await wait();
+      needUser();
+      return (load().weeklyReports || []).filter((r) => r.user_id === user.id);
     },
     async auditLog() {
       const db = load();

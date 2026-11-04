@@ -20,6 +20,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
 import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, sampleCatalog, collectionsToState, AVAILABILITY } from '../core/community.js';
 import { artistProfileForm, validateArtistProfile, artworkEditForm, collectionEditForm } from './views/forms.js';
 import { howRankedSheet } from './views/explainers.js';
+import { studioPage } from './views/studio.js';
 import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, createCompetitionForm, competitionCard } from './views/arena.js';
 import {
   esc, fmt, money, flag, countryName, initials, Icon, ArtImage, Avatar, PremiumButton, IconButton, AbremiSymbol,
@@ -159,7 +160,7 @@ function refresh() {
 const VIEWS = {
   home: renderHome, discover: renderDiscover, explore: renderExplore, battle: renderBattle, artists: renderArtists,
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
-  art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition,
+  art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition, studio: renderStudio,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -167,7 +168,7 @@ function route() {
   return VIEWS[name] ? { name, param: decodeURIComponent(rest.join('/')) } : { name: 'home', param: '' };
 }
 const currentView = () => route().name;
-const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections', competition: 'battle' };
+const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections', competition: 'battle', studio: 'profile' };
 
 function renderView() {
   const name = currentView();
@@ -191,7 +192,50 @@ function renderView() {
   const menuAdmin = $('#menu-admin');
   if (menuAdmin) menuAdmin.hidden = !(COMMUNITY && me && isAdmin);
   VIEWS[name]($('#view'));
+  observeImpressions();
 }
+
+// ——— Analytics (community mode): impressions, artwork views and profile visits of member work ———
+// Each is sent once per day per work or page; the server counts each person once a day, ignores
+// artists' own views, and never uses these for rankings.
+const trackedToday = new Set();
+const pendingEvents = [];
+let flushTimer = null;
+function guestKey() {
+  try {
+    let k = localStorage.getItem('abremi:guest-key');
+    if (!k) { k = crypto.randomUUID(); localStorage.setItem('abremi:guest-key', k); }
+    return k;
+  } catch { return null; }
+}
+function track(kind, target) {
+  if (!COMMUNITY || !target) return;
+  const key = `${kind}:${target}:${new Date().toISOString().slice(0, 10)}`;
+  if (trackedToday.has(key)) return;
+  trackedToday.add(key);
+  pendingEvents.push({ k: kind, t: target });
+  if (pendingEvents.length >= 50) flushEvents();
+  else flushTimer ||= setTimeout(flushEvents, 5000);
+}
+function flushEvents() {
+  clearTimeout(flushTimer);
+  flushTimer = null;
+  if (!cloud?.recordEvents || !pendingEvents.length) return;
+  const batch = pendingEvents.splice(0, 100);
+  cloud.recordEvents(batch, me ? null : guestKey()).catch(() => {});
+}
+const trackArtwork = (kind, id) => { const w = world.artworkById[id]; if (w?.member && !isMine(w)) track(kind, id); };
+const impressionObserver = COMMUNITY && 'IntersectionObserver' in window
+  ? new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) { impressionObserver.unobserve(e.target); trackArtwork('impression', e.target.dataset.id); }
+  }, { threshold: 0.5 })
+  : null;
+function observeImpressions() {
+  if (!impressionObserver) return;
+  impressionObserver.disconnect();
+  $$('#view .art-frame[data-id], #view .swipe-card.is-top[data-id], #view .rank-row[data-act=artwork][data-id]').forEach((el) => impressionObserver.observe(el));
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushEvents(); });
 
 function navigate() {
   closeSheet();
@@ -822,6 +866,7 @@ function renderArtworkPage(root) {
     root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artwork not found', body: 'It may have been removed by the artist.', action: '<a class="btn btn-secondary" href="#explore"><span>Explore art</span></a>' })}</div>`;
     return;
   }
+  trackArtwork('artwork_view', id);
   root.innerHTML = `<div class="shell artwork-page"><button class="link-arrow back-link" data-act="back">${Icon('back', { size: 14 })} Back</button>${artworkSheet(id)}</div>`;
 }
 
@@ -997,6 +1042,22 @@ function renderBattle(root) {
       }).join('')}</ol>
     </section>` : ''}
   </div>`;
+}
+
+// ——— Artist Studio analytics (#studio) ———
+const studio = { days: 30, data: undefined, reports: null, at: 0, loading: false };
+function renderStudio(root) {
+  if (!COMMUNITY) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'grid', title: 'Studio analytics run with accounts', body: 'They count real views, visits, likes and follows from members, so they need the shared database.' })}</div>`; return; }
+  if (!me) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'lock', title: 'Sign in to see your Studio', action: PremiumButton('Sign in', { act: 'sign-in' }) })}</div>`; return; }
+  if (cloud && !studio.loading && (studio.data === undefined || Date.now() - studio.at > 60_000)) {
+    studio.loading = true;
+    Promise.all([cloud.studio(studio.days), cloud.weeklyReports().catch(() => [])])
+      .then(([data, reports]) => Object.assign(studio, { data, reports, at: Date.now() }))
+      .catch(() => Object.assign(studio, { data: studio.data ?? null, at: Date.now() }))
+      .finally(() => { studio.loading = false; if (currentView() === 'studio' && !sheetRenderer) renderView(); });
+  }
+  if (studio.data === undefined) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 6 })}</div>`; return; }
+  root.innerHTML = studioPage(studio.data, studio.reports, { days: studio.days, thumb: (id) => (world.artworkById[id] ? `<span class="rank-thumb">${ArtImage(world.artworkById[id])}</span>` : '') });
 }
 
 /** #competition/<id>: the brief, entries, voting or results, and the rules. */
@@ -1346,6 +1407,7 @@ function renderArtistPage(root) {
     root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artist not found', body: 'They may have left Abremi.', action: '<a class="btn btn-secondary" href="#artists"><span>All artists</span></a>' })}</div>`;
     return;
   }
+  if (a.member && !a.isMe) track('profile_visit', id);
   const works = world.topArtworks().filter((r) => r.item.artistId === id).map((r) => (r.rank == null ? { ...r, rank: undefined } : r));
   const cover = works[0]?.item;
   const followers = world.followersOf(a);
@@ -1619,7 +1681,9 @@ function renderProfile(root) {
   const tasteTotal = tasteTop.reduce((s, k) => s + state.taste.styles[k], 0) || 1;
   const followed = Object.keys(state.follows).map((id) => world.artistById[id]).filter(Boolean);
   const myWorks = world.artworks.filter(isMine).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  const canAnalyze = hasFeature(state.user.plan, 'whoLiked');
+  // Community mode: analytics are free for every artist until subscriptions are verified on the server
+  // (Phase 6). Demo mode keeps the on-device plan preview.
+  const canAnalyze = COMMUNITY || hasFeature(state.user.plan, 'whoLiked');
 
   root.innerHTML = `<div class="shell profile">
     ${accountCardHTML()}
@@ -1747,7 +1811,7 @@ let uploading = false;
 function studioHTML(myWorks, canAnalyze) {
   const where = COMMUNITY ? 'Published works are visible to everyone and enter the rankings and Art Battles straight away.' : 'Demo mode: your works are saved on this device only.';
   return `<section class="section section-tight" id="studio">
-    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work', action: COMMUNITY && me ? `<div class="studio-links"><button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Artist profile</button>${world.artistById[myArtistId()] ? `<a class="link-arrow" href="#artist/${encodeURIComponent(myArtistId())}">Your page ${Icon('arrow', { size: 14 })}</a>` : ''}</div>` : '' })}
+    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work', action: COMMUNITY && me ? `<div class="studio-links"><a class="link-arrow" href="#studio">${Icon('chart', { size: 14 })} Analytics</a><button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Artist profile</button>${world.artistById[myArtistId()] ? `<a class="link-arrow" href="#artist/${encodeURIComponent(myArtistId())}">Your page ${Icon('arrow', { size: 14 })}</a>` : ''}</div>` : '' })}
     <div class="profile-grid">
       <form id="upload" class="panel upload" novalidate>
         <label class="dropzone dropzone-sm">
@@ -2300,6 +2364,7 @@ function signedOut() {
   sharedCollections.clear();
   serverAchievements.earned = [];
   serverNotifications = [];
+  Object.assign(studio, { data: undefined, reports: null, at: 0 });
   Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
   state.user = { ...state.user, role: 'fan', name: 'You' };
   deck = [];
@@ -2518,11 +2583,12 @@ function accountCardHTML() {
 const ACTIONS = {
   swipe: (el) => decide(el.dataset.dir),
   react: (el) => react(world.artworkById[el.dataset.id], el.dataset.v),
-  artwork: (el) => { closePopovers(); openSheet(() => artworkSheet(el.dataset.id), { wide: true }); },
+  artwork: (el) => { closePopovers(); trackArtwork('artwork_view', el.dataset.id); openSheet(() => artworkSheet(el.dataset.id), { wide: true }); },
   artist: (el) => { closePopovers(); openArtist(el.dataset.id); },
   back: () => (history.length > 1 ? history.back() : (location.hash = 'artists')),
   'artist-tab': (el) => { artistTab = el.dataset.v; renderView(); },
   'how-ranked': () => openSheet(howRankedSheet),
+  'studio-days': (el) => { studio.days = Number(el.dataset.v) || 30; studio.data = undefined; renderView(); },
   'open-link': (el) => { closePopovers(); if (el.dataset.id) location.hash = el.dataset.id; },
   'arena-tab': (el) => {
     arena.tab = el.dataset.v;
