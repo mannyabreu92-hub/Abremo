@@ -4,6 +4,13 @@
 
 import { esc, Icon, PremiumButton, EmptyState, SectionHeader } from '../components.js';
 
+/** Before release: a soft veil painted from nine colours of the teaser (the image itself isn't sent). */
+function veilHTML(palette) {
+  const colours = String(palette || '').split(',').filter((c) => /^#[0-9a-f]{6}$/.test(c));
+  if (colours.length !== 9) return '';
+  return `<svg class="drop-veil" viewBox="0 0 3 3" preserveAspectRatio="none" aria-hidden="true">${colours.map((c, i) => `<rect x="${i % 3}" y="${Math.floor(i / 3)}" width="1.02" height="1.02" fill="${c}"/>`).join('')}</svg>`;
+}
+
 export const INQUIRY_KINDS = {
   purchase: { label: 'Interested in buying', needsWork: true },
   question: { label: 'A question' },
@@ -92,7 +99,7 @@ export function dropsSection(list, { image = (p) => p } = {}) {
 
 function dropCard(d, image) {
   return `<a class="drop-card phase-${esc(d.phase)}" href="#drop/${encodeURIComponent(d.id)}">
-    <span class="drop-teaser${d.phase === 'upcoming' ? ' is-veiled' : ''}">${d.teaser_thumb ? `<img src="${esc(image(d.teaser_thumb))}" alt="" loading="lazy">` : ''}</span>
+    <span class="drop-teaser${d.phase === 'upcoming' ? ' is-veiled' : ''}">${d.teaser_thumb ? `<img src="${esc(image(d.teaser_thumb))}" alt="" loading="lazy">` : veilHTML(d.teaser_palette)}</span>
     <span class="drop-text"><span class="eyebrow">${d.phase === 'upcoming' ? `In ${esc(countdown(d.release_at))}` : 'Released'}</span>
       <b>${esc(d.title)}</b><small>${esc(d.artist_name)} · ${d.works} work${d.works === 1 ? '' : 's'}</small></span></a>`;
 }
@@ -102,7 +109,7 @@ export function dropPage(d, { image = (p) => p, card = (_id) => '', signedIn = f
   const upcoming = d.phase === 'upcoming';
   return `<div class="shell drop-page">
     <header class="drop-hero">
-      <span class="drop-teaser drop-teaser-lg${upcoming && !d.mine ? ' is-veiled' : ''}">${d.teaser_thumb ? `<img src="${esc(image(d.teaser_thumb))}" alt="">` : ''}</span>
+      <span class="drop-teaser drop-teaser-lg${upcoming && !d.mine ? ' is-veiled' : ''}">${d.teaser_thumb ? `<img src="${esc(image(d.teaser_thumb))}" alt="">` : veilHTML(d.teaser_palette)}</span>
       <div class="drop-copy"><p class="eyebrow">${upcoming ? 'Drop · coming soon' : d.phase === 'cancelled' ? 'Drop · cancelled' : 'Drop · released'}</p>
         <h1 class="display-lg">${esc(d.title)}</h1>
         <p class="muted">by <a href="#artist/${encodeURIComponent(d.artist_id)}">${esc(d.artist_name)}</a> · ${d.work_count} work${d.work_count === 1 ? '' : 's'}</p>

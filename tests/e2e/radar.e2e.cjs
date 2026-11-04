@@ -133,6 +133,8 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   assert.ok(d.notifications.some((n) => n.user_id === 'u-ben@example.com' && n.kind === 'drop_announced'), 'followers hear about it');
   await ben.goto(BASE + `#drop/${dropId}`);
   await ben.waitForSelector('.drop-page .drop-teaser.is-veiled');
+  assert.equal(await ben.locator('.drop-page .drop-teaser img').count(), 0, 'no teaser image is sent before release');
+  assert.equal(await ben.locator('.drop-page .drop-teaser .drop-veil rect').count(), 9, 'a veil painted from nine colours');
   assert.equal(await ben.locator('.drop-page .art-card').count(), 0, 'works stay secret');
   await ben.click('[data-act=drop-subscribe]');
   await toastSays(ben, /notify you at the release/);

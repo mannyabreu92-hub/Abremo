@@ -36,7 +36,7 @@ const mock = readFileSync(path.join(__dirname, 'mock-cloud.js'), 'utf8');
   const baseInfluence = await influenceOf(firstId);
   await page.locator(`.art-grid .quick-btn[data-v=like][data-id="${firstId}"]`).first().click();
   await page.waitForTimeout(150);
-  assert.match(await toastText(), /Sign in so your likes count/);
+  assert.match(await toastText(), /Sign in so your admirations count/);
   assert.equal((await db()).reactions.length, 0);
   assert.equal(await influenceOf(firstId), baseInfluence);
   step('guest likes are kept on the device and do not move rankings');

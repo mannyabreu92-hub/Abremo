@@ -111,6 +111,15 @@ const textOf = (page, sel) => page.locator(sel).first().textContent();
   await visitor.waitForSelector('.artist-header h1');
   await visitor.waitForFunction(() => /Pro/.test(document.querySelector('.artist-header h1 .plan-badge')?.textContent || ''));
   assert.match(await visitor.locator('.plan-badge').getAttribute('title'), /doesn’t affect rankings/);
+  await ana.goto(BASE + '#plans');
+  await ana.click('[data-act=plan-badge][aria-pressed=true]');
+  await toastSays(ana, /badge is hidden/);
+  await visitor.reload();
+  await visitor.waitForSelector('.artist-header h1');
+  await visitor.waitForTimeout(500);
+  assert.equal(await visitor.locator('.artist-header .plan-badge').count(), 0, 'hidden when the artist chooses');
+  await ana.click('[data-act=plan-badge][aria-pressed=false]');
+  await toastSays(ana, /badge is shown/);
   step('a moderator grants Pro: the Coach allowance, a year of analytics and the badge follow from the server');
 
   // ——— Gallery accounts ———

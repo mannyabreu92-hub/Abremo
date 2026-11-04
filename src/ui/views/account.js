@@ -71,7 +71,7 @@ export function signInHTML({ auth, standalone, local, inviteRequired }) {
   return `<div class="auth">
     <p class="eyebrow">Join Abremi</p>
     <h2 class="display-md" id="modal-title">Make your taste count</h2>
-    <p class="muted">Members’ likes, saves, follows and battle votes shape the global rankings. Sign in with your email. There’s no password to remember.</p>
+    <p class="muted">Members’ admirations, treasures, follows and battle votes shape the global rankings. Sign in with your email. There’s no password to remember.</p>
     <label class="field"><span>Email</span>
       <input id="auth-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" value="${esc(auth.email)}"></label>
     ${inviteRequired ? `<label class="field"><span>Invite code (new members)</span>
@@ -94,7 +94,7 @@ export function accountCardHTML({ community, me, members, publicLeaderboards, is
   if (!me) {
     return `<section class="account-card is-invite">
       <div><p class="eyebrow">Community</p><h3 class="display-sm">Make your taste count</h3>
-      <p class="muted">Sign in so your likes, saves, follows and battle votes count in the global rankings${members ? `, alongside ${fmt(members)} member${members === 1 ? '' : 's'}` : ''}.</p></div>
+      <p class="muted">Sign in so your admirations, treasures, follows and battle votes count in the global rankings${members ? `, alongside ${fmt(members)} member${members === 1 ? '' : 's'}` : ''}.</p></div>
       ${PremiumButton('Sign in with email', { act: 'sign-in', size: 'lg' })}
     </section>`;
   }

@@ -125,7 +125,7 @@ function toast(msg, { action, act, duration = 2400, force = false } = {}) {
 }
 
 /** Once per visit, remind guests that their votes only count after signing in. */
-function nudgeSignIn(what = 'likes') {
+function nudgeSignIn(what = 'admirations') {
   if (!COMMUNITY || me || nudgeSignIn.done) return;
   nudgeSignIn.done = true;
   toast(`Sign in so your ${what} count in the rankings`, { action: 'Sign in', act: 'sign-in' });
@@ -328,7 +328,7 @@ function setReaction(art, next) {
     state.discoveries[id] = { at: Date.now(), rankAt: before.rank, influenceAt: before.influence, style: art.style };
   }
   const added = own ? 0 : contributionOf(next, state.interactionRoles?.[id]) - pointsBefore;
-  if (own && next && next !== 'pass' && !prev) toast('Saved for you. Your own likes don’t count toward rankings.');
+  if (own && next && next !== 'pass' && !prev) toast('Saved for you. Your own admirations don’t count toward rankings.');
   if (added && counts()) {
     state.activity.push({ t: Date.now(), id, pts: added });
     if (state.activity.length > 600) state.activity.splice(0, state.activity.length - 600);
@@ -338,7 +338,7 @@ function setReaction(art, next) {
   checkAchievements();
   if (COMMUNITY) { // every artwork in community mode (catalog or member upload) exists on the server
     if (me) remote(() => cloud.setReaction(id, next || null));
-    else if (next === 'like' || next === 'super') nudgeSignIn('likes');
+    else if (next === 'like' || next === 'super') nudgeSignIn('admirations');
   }
 }
 
@@ -724,7 +724,7 @@ function discoverPanelHTML(entry) {
       ${w.sample ? '' : PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${w.id}"` })}
       ${state.user.role === 'critic' ? PremiumButton('Write review', { act: 'review', variant: 'ghost', icon: 'pen', attrs: `data-id="${w.id}"` }) : ''}
     </div>
-    <p class="fine">${counts() ? `Your ${role().label.toLowerCase()} vote adds ${role().weight} influence (${role().weight * SAVE_MULTIPLIER} for a Treasure).` : '<button class="link" data-act="sign-in">Sign in</button> so your likes count in the rankings.'} Keys: ← pass, → like, ↑ Treasure, Enter for details.</p>`;
+    <p class="fine">${counts() ? `Your ${role().label.toLowerCase()} vote adds ${role().weight} influence (${role().weight * SAVE_MULTIPLIER} for a Treasure).` : '<button class="link" data-act="sign-in">Sign in</button> so your admirations count in the rankings.'} Keys: ← pass, → admire, ↑ treasure, Enter for details.</p>`;
 }
 
 function renderDiscover(root) {
@@ -870,7 +870,7 @@ function artworkSheet(id) {
       <div class="influence">
         <div class="influence-head"><h3>Influence score</h3><span>${fmt(world.influence[id])}</span></div>
         ${rows.map((x) => `<div class="meter-row"><span>${esc(x.label)}</span><div class="meter"><i style="width:${(x.points / max) * 100}%"></i></div><span class="num">${fmt(x.points)}</span></div>
-          <p class="meter-sub">${x.role === 'review' ? `${x.likes} reviews · average ${avg}★` : `${fmt(x.likes)} likes · ${fmt(x.saves)} saves · weight ×${ROLE_WEIGHTS[x.role]}`}</p>`).join('')}
+          <p class="meter-sub">${x.role === 'review' ? `${x.likes} reviews · average ${avg}★` : `${fmt(x.likes)} admirations · ${fmt(x.saves)} treasures · weight ×${ROLE_WEIGHTS[x.role]}`}</p>`).join('')}
       </div>
     </div>
   </div>`;
@@ -1185,6 +1185,23 @@ function passportTabHTML(id) {
   }
   const data = careers.passports.get(id)?.data;
   return data === undefined ? LoadingSkeleton({ cards: 3, variant: 'list' }) : passportHTML(data, { artworkTitle: (aid) => world.artworkById[aid]?.title || 'A work' });
+}
+
+/**
+ * Nine colours sampled from a drop's teaser image (a 3×3 grid). Until release, the drop page paints a
+ * soft veil from these instead of the image, so the work itself can't be seen early.
+ */
+async function teaserPalette(src) {
+  if (!src) return null;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  await new Promise((ok, no) => { img.onload = ok; img.onerror = no; img.src = src; });
+  const c = document.createElement('canvas');
+  c.width = 3; c.height = 3;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0, 3, 3);
+  const d = g.getImageData(0, 0, 3, 3).data;
+  return Array.from({ length: 9 }, (_, i) => `#${[d[i * 4], d[i * 4 + 1], d[i * 4 + 2]].map((x) => x.toString(16).padStart(2, '0')).join('')}`).join(',');
 }
 
 // ——— Phase 6: plans, gallery accounts, beta tools ———
@@ -2933,7 +2950,7 @@ const ACTIONS = {
     guide.prefsBusy = false; renderGuide();
   },
   'guide-reset': async () => {
-    if (!confirm('Reset personalization? This clears what you told the Guide you enjoy and what you did with its suggestions. Your follows, likes and collections stay.')) return;
+    if (!confirm('Reset personalization? This clears what you told the Guide you enjoy and what you did with its suggestions. Your follows, admirations and collections stay.')) return;
     try {
       await cloud.resetGuide();
       guide.prefs = { personalize: true, interests: '' };
@@ -2962,6 +2979,16 @@ const ACTIONS = {
     try { const { url } = await cloud.billing('portal'); location.assign(url); }
     catch (e) { toast(e?.message || 'Could not open your billing page.', { force: true }); }
     member.busy = ''; renderView();
+  },
+  'plan-badge': async (el) => {
+    const show = el.getAttribute('aria-pressed') !== 'true';
+    try {
+      await cloud.setPlanBadge(show);
+      member.mine = { ...member.mine, show_badge: show };
+      member.badges = await cloud.planBadges().catch(() => member.badges);
+      toast(show ? 'Your badge is shown on your artist page.' : 'Your badge is hidden.', { force: true });
+      renderView();
+    } catch (e) { toast(e?.message || 'Could not change it.', { force: true }); }
   },
   'gallery-open': () => (me ? openSheet(() => galleryForm(member.gallery)) : openSignIn()),
   'gallery-submit': async (el) => {
@@ -3116,7 +3143,8 @@ const ACTIONS = {
     if (!v('release')) return fail('Choose a release time.');
     el.disabled = true;
     try {
-      const id = await cloud.createDrop({ title: v('title'), description: v('description'), releaseAt: new Date(v('release')).toISOString(), artworkIds: ids });
+      const palette = await teaserPalette(world.artworkById[ids[0]]?.image).catch(() => null);
+      const id = await cloud.createDrop({ title: v('title'), description: v('description'), releaseAt: new Date(v('release')).toISOString(), artworkIds: ids, palette });
       closeSheet();
       toast('Drop scheduled. Your followers have been notified.', { force: true });
       await refreshCommunity();
@@ -3298,7 +3326,7 @@ const ACTIONS = {
   },
   'flag-resolve': async (el) => {
     const exclude = el.dataset.v === 'exclude';
-    if (exclude && !confirm('Exclude these likes from the rankings? They are kept, and the decision is recorded.')) return;
+    if (exclude && !confirm('Exclude these admirations from the rankings? They are kept, and the decision is recorded.')) return;
     try {
       const n = await cloud.resolveFlag(el.dataset.id, exclude, $(`#flag-note-${el.dataset.id}`)?.value || null);
       toast(exclude ? `${n} like${n === 1 ? '' : 's'} excluded from the rankings.` : 'Flag dismissed.', { force: true });

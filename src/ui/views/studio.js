@@ -99,7 +99,7 @@ export function studioPage(s, reports, { thumb = (_id) => '', days = 30, maxDays
     ? `<a class="seg-locked" href="#plans" title="A year of analytics comes with Artist Pro and Elite">1 year · Pro</a>`
     : `<button role="tab" aria-selected="${d === days}" class="${d === days ? 'is-on' : ''}" data-act="studio-days" data-v="${d}">${d === 365 ? '1 year' : `${d} days`}</button>`)).join('');
   const head = `<header class="page-head page-head-row"><div><p class="eyebrow">Artist Studio</p><h1 class="display-lg">Your audience</h1>
-    <p class="muted">Only what was actually recorded: impressions, views and visits once per person per day, plus likes, saves and follows. Your own views never count.</p></div></header>
+    <p class="muted">Only what was actually recorded: impressions, views and visits once per person per day, plus admirations, treasures and follows. Your own views never count.</p></div></header>
     <div class="seg seg-gold studio-periods" role="tablist">${periods}</div>`;
   if (!s) {
     return `<div class="shell studio">${head}${EmptyState({ icon: 'grid', title: 'Publish a work to open your Studio', body: 'Your analytics start with your first published work.', action: '<a class="btn btn-secondary" href="#profile"><span>Go to Studio</span></a>' })}</div>`;
@@ -113,18 +113,18 @@ export function studioPage(s, reports, { thumb = (_id) => '', days = 30, maxDays
       ${tile('Impressions', c.impressions, p.impressions, true)}
       ${tile('Artwork views', c.views, p.views, true)}
       ${tile('Profile visits', c.visits, p.visits, true)}
-      ${tile('Likes', c.likes, p.likes)}
+      ${tile('Admirations', c.likes, p.likes)}
       ${tile('Saves', c.saves, p.saves)}
       ${tile('New followers', c.followers, p.followers)}
     </section>
     <p class="fine">Changes compare with the ${s.days} days before. Followers today: <b>${fmt(s.followers_total)}</b>.</p>
     <section class="section section-tight chart-grid">
       ${barChart(s.daily, 'views', 'Artwork views')}
-      ${barChart(s.daily, 'likes', 'Likes and saves')}
+      ${barChart(s.daily, 'likes', 'Admirations and treasures')}
       ${lineChart(s.daily, 'followers', 'Followers')}
     </section>
     <section class="section section-tight">${SectionHeader({ eyebrow: 'Per work', title: 'Your works' })}
-      ${works.length ? `<div class="table-wrap"><table class="works-table"><thead><tr><th>Work</th><th>Impressions</th><th>Views</th><th>Likes</th><th>Saves</th><th title="Likes and saves per view">Liked by viewers</th><th title="Conversations started about this work">Inquiries</th><th title="Verified collectors who saved it">Collector saves</th></tr></thead>
+      ${works.length ? `<div class="table-wrap"><table class="works-table"><thead><tr><th>Work</th><th>Impressions</th><th>Views</th><th>Admirations</th><th>Treasures</th><th title="Admirations and treasures per view">Admired by viewers</th><th title="Conversations started about this work">Inquiries</th><th title="Verified collectors who saved it">Collector treasures</th></tr></thead>
         <tbody>${works.map((w) => `<tr><td><button class="link work-link" data-act="artwork" data-id="${esc(w.id)}">${thumb(w.id)}<span>${esc(w.title)}</span></button></td>
           <td>${fmt(w.impressions)}</td><td>${fmt(w.views)}</td><td>${fmt(w.likes)}</td><td>${fmt(w.saves)}</td>
           <td>${w.views ? `${Math.min(100, Math.round(((w.likes + w.saves) / w.views) * 100))}%` : '—'}</td>
@@ -147,5 +147,5 @@ function reportRow(r) {
   const c = r.current, p = r.previous;
   const item = (label, a, b) => { const ch = change(total(a), total(b)); return `<span><small>${label}</small> <b>${fmt(total(a))}</b> <em class="delta delta-${ch.dir}">${esc(ch.text)}</em></span>`; };
   return `<li class="report"><p class="eyebrow">${Icon('clock', { size: 14 })} Week of ${esc(shortDay(r.week_start))}</p>
-    <div class="report-items">${item('Views', c.views, p.views)}${item('Visits', c.visits, p.visits)}${item('Likes', c.likes, p.likes)}${item('Saves', c.saves, p.saves)}${item('New followers', c.followers, p.followers)}</div></li>`;
+    <div class="report-items">${item('Views', c.views, p.views)}${item('Visits', c.visits, p.visits)}${item('Admirations', c.likes, p.likes)}${item('Treasures', c.saves, p.saves)}${item('New followers', c.followers, p.followers)}</div></li>`;
 }

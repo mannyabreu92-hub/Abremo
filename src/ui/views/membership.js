@@ -17,7 +17,9 @@ export function plansPage({ community, signedIn, mine, payments, gallery, busy =
   const verifiedGallery = gallery?.status === 'verified';
   const status = mine && current !== 'free'
     ? `<p class="plan-status">${Icon('check', { size: 16 })} <span>You’re on <b>${esc(mine.plan.name)}</b>${mine.ends_at ? ` until ${esc(day(mine.ends_at))}` : ''}${mine.source === 'grant' ? ', granted by Abremi' : ''}.</span>
-       ${mine.manage ? PremiumButton(busy === 'manage' ? 'Opening…' : 'Manage or cancel', { act: 'plan-manage', variant: 'ghost', attrs: busy ? 'disabled' : '' }) : ''}</p>`
+       ${mine.manage ? PremiumButton(busy === 'manage' ? 'Opening…' : 'Manage or cancel', { act: 'plan-manage', variant: 'ghost', attrs: busy ? 'disabled' : '' }) : ''}</p>
+     ${mine.plan.badge ? `<p class="plan-badge-switch"><button class="switch" role="switch" data-act="plan-badge" aria-pressed="${mine.show_badge !== false}" aria-checked="${mine.show_badge !== false}"><span></span></button>
+       Show my ${esc(mine.plan.badge)} badge on my artist page</p>` : ''}`
     : '';
   const action = (p) => {
     if (p.code === current) return '<span class="tag tag-gold">Your plan</span>';
@@ -42,7 +44,7 @@ export function plansPage({ community, signedIn, mine, payments, gallery, busy =
       ${action(p)}</div>`).join('')}</div>
     <section class="section section-tight">${SectionHeader({ eyebrow: 'Included in every plan', title: 'The essentials stay free' })}
       <ul class="plain-list">${EVERY_PLAN.map((x) => `<li>${Icon('check', { size: 16 })} ${esc(x)}</li>`).join('')}</ul>
-      <p class="fine"><b>Our ranking promise:</b> likes, votes, followers and scores count exactly the same whatever plan anyone is on. If Abremi ever offers paid promotion, it will be a separate, clearly labelled placement, never a change to the rankings.</p>
+      <p class="fine"><b>Our ranking promise:</b> admirations, votes, followers and scores count exactly the same whatever plan anyone is on. If Abremi ever offers paid promotion, it will be a separate, clearly labelled placement, never a change to the rankings.</p>
     </section>
     ${community && signedIn ? gallerySummaryHTML(gallery) : ''}
   </div>`;

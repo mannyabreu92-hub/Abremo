@@ -93,7 +93,8 @@ window.__abremiCloud = async () => {
   // Drops (0010): announced once released, to followers and subscribers.
   const dropView = (db, d) => ({ id: d.id, title: d.title, description: d.description, release_at: d.release_at, artist_id: d.artist_id,
     artist_name: profileOf(db, d.owner).name, phase: d.cancelled ? 'cancelled' : Date.parse(d.release_at) > Date.now() ? 'upcoming' : 'released',
-    teaser_thumb: db.uploads.find((u) => u.id === d.teaser)?.thumb_path || null, works: db.uploads.filter((u) => u.drop_id === d.id).length,
+    teaser_thumb: (Date.parse(d.release_at) <= Date.now() || d.owner === user?.id) ? db.uploads.find((u) => u.id === d.teaser)?.thumb_path || null : null,
+    teaser_palette: d.palette || null, works: db.uploads.filter((u) => u.drop_id === d.id).length,
     subscribed: (db.dropSubs || []).some((x) => x.drop === d.id && x.user === user?.id), mine: d.owner === user?.id });
   const releaseDue = (db) => {
     let changed = false;
@@ -778,7 +779,7 @@ window.__abremiCloud = async () => {
       const ids = db.uploads.filter((u) => u.drop_id === id).map((u) => u.id);
       return { ...v, work_count: ids.length, works: v.phase !== 'upcoming' || v.mine ? ids : [] };
     },
-    async createDrop({ title, description = '', releaseAt, artworkIds }) {
+    async createDrop({ title, description = '', releaseAt, artworkIds, palette = null }) {
       needUser(); await wait();
       const db = load();
       const t = Date.parse(releaseAt);
@@ -789,7 +790,7 @@ window.__abremiCloud = async () => {
       db.drops ||= [];
       const maxUpcoming = planOf(db, user.id).max_upcoming_drops;
       if (db.drops.filter((d) => d.owner === user.id && !d.released && !d.cancelled).length >= maxUpcoming) throw new Error(`Your plan allows ${maxUpcoming} upcoming drop${maxUpcoming === 1 ? '' : 's'} at a time`);
-      const d = { id: crypto.randomUUID(), owner: user.id, artist_id: `m_${user.id}`, title: title.trim(), description, release_at: new Date(t).toISOString(), teaser: artworkIds[0] };
+      const d = { id: crypto.randomUUID(), owner: user.id, artist_id: `m_${user.id}`, title: title.trim(), description, release_at: new Date(t).toISOString(), teaser: artworkIds[0], palette: /^(#[0-9a-f]{6},){8}#[0-9a-f]{6}$/.test(palette || '') ? palette : null };
       db.drops.push(d);
       for (const w of works) Object.assign(w, { drop_id: d.id, release_at: d.release_at });
       for (const f of countedFollows(db).filter((x) => x.artist_id === d.artist_id)) (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: f.user_id, kind: 'drop_announced', title: `${profileOf(db, user.id).name} announced a drop: “${d.title}”`, link: `drop/${d.id}`, created_at: new Date().toISOString(), read_at: null });
@@ -946,11 +947,19 @@ window.__abremiCloud = async () => {
       const db = load();
       const plan = planOf(db, user.id);
       const s = (db.subs || {})[user.id];
-      return { plan, status: plan.code === 'free' ? null : s.status, source: plan.code === 'free' ? null : s.source, ends_at: plan.code === 'free' ? null : s.ends_at, manage: false };
+      return { plan, status: plan.code === 'free' ? null : s.status, source: plan.code === 'free' ? null : s.source, ends_at: plan.code === 'free' ? null : s.ends_at, manage: false,
+        show_badge: profileOf(db, user.id).show_plan_badge !== false };
+    },
+    async setPlanBadge(show) {
+      needUser();
+      const db = load();
+      profileOf(db, user.id).show_plan_badge = show;
+      save(db);
     },
     async planBadges() {
       const db = load();
-      return Object.fromEntries(Object.keys(db.subs || {}).map((uid) => [`m_${uid}`, planOf(db, uid).badge]).filter(([a, b]) => b && db.artists[a]));
+      return Object.fromEntries(Object.keys(db.subs || {}).filter((uid) => profileOf(db, uid).show_plan_badge !== false)
+        .map((uid) => [`m_${uid}`, planOf(db, uid).badge]).filter(([a, b]) => b && db.artists[a]));
     },
     async billing() { await wait(); throw new Error('Payments aren’t switched on yet.'); },
     async myGallery() {

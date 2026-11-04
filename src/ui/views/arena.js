@@ -14,7 +14,7 @@ export const KINDS = {
   challenge: { label: 'Creative Challenge', blurb: 'A theme to respond to.' },
 };
 
-export const DEFAULT_RULES = 'One entry per artist, of your own published work. One vote per member (all roles count the same; accounts must be 3+ days old with 5+ likes). You can change your vote until voting closes; you can’t vote for your own entry. Most votes wins; ties share the place. Vote totals are published when voting closes.';
+export const DEFAULT_RULES = 'One entry per artist, of your own published work. One vote per member (all roles count the same; accounts must be 3+ days old with 5+ admirations). You can change your vote until voting closes; you can’t vote for your own entry. Most votes wins; ties share the place. Vote totals are published when voting closes.';
 
 const HOUR = 3600e3, DAY = 24 * HOUR;
 /** Ready-made schedules for moderators: [entries open, voting opens, voting closes], from the next hour. */
