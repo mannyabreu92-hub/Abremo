@@ -948,7 +948,7 @@ window.__abremiCloud = async () => {
     // ——— Phase 6 (same rules as 0012) ———
     async appFlags() {
       const db = load();
-      return { invite_required: Boolean(db.settings?.invite_required), payments_enabled: false };
+      return { invite_required: Boolean(db.settings?.invite_required), payments_enabled: false, sales_enabled: Boolean(db.settings?.sales_enabled) };
     },
     async myPlan() {
       if (!user) return null;
@@ -1246,6 +1246,87 @@ window.__abremiCloud = async () => {
       return a ? { week: d.week, covers_from: d.covers_from, chart: 'overall', rank: a.rank, name: a.name } : null;
     },
     async publishIndex() { const db = load(); needAdmin(db); return 1; },
+    // ——— Checkout (same rules as 0017; Stripe stood in) ———
+    async checkout(action, { artworkId } = {}) {
+      needUser(); await wait();
+      const db = load();
+      if (!db.settings?.sales_enabled) throw new Error('Buying isn’t switched on yet.');
+      db.payouts ||= {};
+      if (action === 'onboard') { db.payouts[user.id] = { charges_enabled: true, payouts_enabled: true }; save(db); return { url: '#orders?payouts=done' }; }
+      if (action === 'dashboard') return { url: '#orders' };
+      const w = db.uploads.find((u) => u.id === artworkId);
+      if (!w || w.owner === user.id) throw new Error('That’s your own work');
+      if (!db.payouts[w.owner]?.charges_enabled) throw new Error('This artist can’t take payments yet. Ask them about it instead.');
+      if ((w.availability || 'available') !== 'available' || !(w.price > 0)) throw new Error('This work isn’t for sale at a listed price');
+      db.orders ||= [];
+      const open = db.orders.filter((o) => o.artwork_id === w.id && o.status !== 'refunded').length;
+      if (!w.edition_size && open) throw new Error('Someone is already buying this work');
+      if (w.edition_size && open >= w.edition_size) throw new Error('This edition is sold out');
+      const n = w.edition_size ? (w.editions_sold || 0) + 1 : null;
+      if (w.edition_size) { w.editions_sold = n; if (n >= w.edition_size) w.availability = 'sold'; } else w.availability = 'sold';
+      db.orders.push({ id: crypto.randomUUID(), artwork_id: w.id, title: w.title, artist_user: w.owner, buyer: user.id, amount_cents: w.price * 100, fee_cents: Math.round(w.price * 20),
+        currency: 'usd', edition_number: n, status: 'paid', shipping: { name: profileOf(db, user.id).name, address: { city: 'Lisbon', country: 'PT' } }, paid_at: new Date().toISOString() });
+      (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: w.owner, kind: 'sale', title: `You sold “${w.title}”. Ship it and add tracking in Orders.`, link: 'orders', created_at: new Date().toISOString(), read_at: null });
+      save(db);
+      return { url: '#orders?paid=1' };
+    },
+    async salesCatalog() {
+      const db = load();
+      if (!db.settings?.sales_enabled) return { accepting: [], editions: [] };
+      return { accepting: Object.entries(db.payouts || {}).filter(([, p]) => p.charges_enabled).map(([u]) => `m_${u}`),
+        editions: db.uploads.filter((u) => u.edition_size).map((u) => ({ id: u.id, edition_size: u.edition_size, editions_sold: u.editions_sold || 0 })) };
+    },
+    async myPayoutStatus() {
+      const p = (load().payouts || {})[user?.id];
+      return { connected: Boolean(p), charges_enabled: Boolean(p?.charges_enabled), payouts_enabled: Boolean(p?.payouts_enabled) };
+    },
+    async myOrders() {
+      const db = load();
+      const view = (o) => ({ ...o, buyer: profileOf(db, o.buyer).name, can_dispute: ['paid', 'shipped'].includes(o.status) || (o.status === 'delivered' && Date.parse(o.delivered_at) > Date.now() - 14 * 864e5) });
+      return { sales: (db.orders || []).filter((o) => o.artist_user === user?.id).map(view), purchases: (db.orders || []).filter((o) => o.buyer === user?.id).map(({ shipping, ...o }) => view(o)) };
+    },
+    async markShipped(id, carrier, tracking) {
+      const db = load();
+      const o = (db.orders || []).find((x) => x.id === id && x.artist_user === user?.id && x.status === 'paid');
+      if (!o) throw new Error('That order can’t be marked shipped');
+      if (String(carrier).trim().length < 2 || String(tracking).trim().length < 4) throw new Error('Add the carrier and tracking number');
+      Object.assign(o, { status: 'shipped', carrier, tracking, shipped_at: new Date().toISOString() });
+      save(db);
+    },
+    async confirmDelivery(id) {
+      const db = load();
+      const o = (db.orders || []).find((x) => x.id === id && x.buyer === user?.id && x.status === 'shipped');
+      if (!o) throw new Error('That order can’t be marked delivered');
+      Object.assign(o, { status: 'delivered', delivered_at: new Date().toISOString() });
+      save(db);
+    },
+    async openDispute(id, reason) {
+      const db = load();
+      if (String(reason).trim().length < 10) throw new Error('Describe the problem (at least 10 characters)');
+      const o = (db.orders || []).find((x) => x.id === id && x.buyer === user?.id && ['paid', 'shipped', 'delivered'].includes(x.status));
+      if (!o) throw new Error('Problems can be reported until 14 days after delivery');
+      Object.assign(o, { status: 'disputed', dispute_reason: reason.trim(), was: o.status });
+      save(db);
+    },
+    async disputes() {
+      const db = load(); needAdmin(db);
+      return (db.orders || []).filter((o) => o.status === 'disputed').map((o) => ({ ...o, reason: o.dispute_reason, buyer: profileOf(db, o.buyer).name, artist: profileOf(db, o.artist_user).name }));
+    },
+    async resolveDispute(id, refund, note) {
+      const db = load(); needAdmin(db);
+      const o = (db.orders || []).find((x) => x.id === id && x.status === 'disputed');
+      if (!o) throw new Error('That order isn’t disputed');
+      Object.assign(o, { status: refund ? 'refunded' : o.was, dispute_resolution: note || null });
+      save(db);
+    },
+    async setEdition(id, size) {
+      const db = load();
+      const w = db.uploads.find((u) => u.id === id && u.owner === user?.id);
+      if (!w) throw new Error('Not your artwork');
+      if (size != null && (size < 2 || size > 500 || size < (w.editions_sold || 0))) throw new Error('An edition has 2 to 500 prints, and no fewer than already sold');
+      w.edition_size = size;
+      save(db);
+    },
     async auditLog() {
       const db = load();
       if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');

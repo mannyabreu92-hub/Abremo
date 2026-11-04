@@ -27,6 +27,7 @@ import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, 
 import { plansPage, galleryForm, galleryPageHTML, feedbackSheet, membershipCardHTML } from './views/membership.js';
 import { adminPage } from './views/admin.js';
 import { indexPage, badgeEmbedHTML } from './views/index.js';
+import { ordersPage } from './views/orders.js';
 import { guidePanelHTML, replyHTML, GUIDE_COPY } from './views/assistant.js';
 import { aboutHTML, installCardHTML, iosInstallHTML, signInHTML, accountCardHTML } from './views/account.js';
 import {
@@ -171,11 +172,11 @@ const VIEWS = {
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
   art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition, studio: renderStudio,
   inbox: renderInbox, inquiry: renderInquiry, drop: renderDrop, coach: renderCoach, opportunities: renderOpportunities,
-  plans: renderPlans, gallery: renderGallery, index: renderIndex,
+  plans: renderPlans, gallery: renderGallery, index: renderIndex, orders: renderOrders,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
-  const [name, ...rest] = location.hash.slice(1).split('/');
+  const [name, ...rest] = location.hash.slice(1).split('?')[0].split('/'); // '?…' carries messages, e.g. #orders?paid=1
   return VIEWS[name] ? { name, param: decodeURIComponent(rest.join('/')) } : { name: 'home', param: '' };
 }
 const currentView = () => route().name;
@@ -853,12 +854,14 @@ function artworkSheet(id) {
         <div><dt>Medium</dt><dd>${esc(w.medium)}</dd></div>
         <div><dt>Year</dt><dd>${w.year}</dd></div>
         ${w.dimensions ? `<div><dt>Size</dt><dd>${esc(w.dimensions)}</dd></div>` : ''}
+        ${w.editionSize ? `<div><dt>Edition</dt><dd>Prints, edition of ${w.editionSize} · ${Math.max(0, w.editionSize - (w.editionsSold || 0))} left</dd></div>` : ''}
         ${w.sample ? '' : `<div><dt>${forSale(w) ? 'Price' : 'Availability'}</dt><dd>${forSale(w) ? (w.availability === 'on_request' ? 'On request' : money(w.price)) : esc(AVAILABILITY[w.availability])}</dd></div>`}
       </dl>
       <div class="detail-actions">
         <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Admire">${Icon('admire', { size: 18 })}</button>
         <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="Treasure">${Icon('treasure', { size: 18 })}</button>
         ${w.sample || !forSale(w) ? '' : PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : w.availability === 'on_request' ? 'Inquire' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
+        ${canBuy(w) ? PremiumButton(w.editionSize ? `Buy a print · ${money(w.price)}` : `Buy · ${money(w.price)}`, { act: 'checkout-buy', attrs: `data-id="${id}"` }) : ''}
         ${COMMUNITY && w.member && !isMine(w) && forSale(w) ? PremiumButton('Make an offer', { act: 'offer-open', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
         ${COMMUNITY && w.member && !isMine(w) && !forSale(w) ? PremiumButton(loop.watches.has(id) ? 'On your waitlist' : 'Notify me if available', { act: 'watch-toggle', variant: 'secondary', icon: 'bell', attrs: `data-id="${id}" aria-pressed="${loop.watches.has(id)}"` }) : ''}
         ${PremiumButton('Add to collection', { act: 'add-to-collection', variant: 'secondary', icon: 'folderPlus', attrs: `data-id="${id}"` })}
@@ -1262,6 +1265,36 @@ function reportError(message, source) {
 }
 window.addEventListener('error', (e) => reportError(e.message, e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : null));
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack?.split('\n')[1]?.trim()));
+
+// ——— Checkout and orders (#orders) ———
+// Buying is shown only when sales are switched on and the artist can be paid (both checked again
+// by the database). Payment happens on Stripe; Abremi never holds artists' money.
+const sales = { accepting: new Set(), editions: new Map(), payout: null, orders: null, busy: '' };
+async function loadSales() {
+  if (!cloud?.salesCatalog || !member.flags?.sales_enabled) return;
+  const c = await cloud.salesCatalog().catch(() => null);
+  if (!c) return;
+  sales.accepting = new Set(c.accepting);
+  sales.editions = new Map(c.editions.map((e) => [e.id, e]));
+  for (const [id, e] of sales.editions) if (world.artworkById[id]) Object.assign(world.artworkById[id], { editionSize: e.edition_size, editionsSold: e.editions_sold });
+}
+function canBuy(w) {
+  return COMMUNITY && Boolean(member.flags?.sales_enabled) && w.member && !isMine(w) && sales.accepting.has(w.artistId)
+    && (w.availability || 'available') === 'available' && w.price > 0;
+}
+function renderOrders(root) {
+  if (!COMMUNITY || !me) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'lock', title: 'Sign in to see your orders', action: COMMUNITY ? PremiumButton('Sign in', { act: 'sign-in' }) : '' })}</div>`; return; }
+  if (/paid=1/.test(location.hash) && !sales.thanked) { sales.thanked = true; toast('Payment received. The artist will ship your work and add tracking here.', { force: true, duration: 5000 }); }
+  if (sales.orders === null && cloud?.myOrders) {
+    sales.orders = undefined;
+    Promise.all([cloud.myOrders(), cloud.myPayoutStatus().catch(() => null)])
+      .then(([orders, payout]) => Object.assign(sales, { orders, payout }))
+      .catch(() => Object.assign(sales, { orders: { sales: [], purchases: [] } }))
+      .finally(() => { if (currentView() === 'orders' && !sheetRenderer) renderView(); });
+  }
+  if (!sales.orders) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 3, variant: 'list' })}</div>`; return; }
+  root.innerHTML = ordersPage(sales.orders, { payout: sales.payout, isArtist: Boolean(world.artistById[myArtistId()]), salesOn: Boolean(member.flags?.sales_enabled), busy: sales.busy, country: state.user.country || 'US' });
+}
 
 // ——— The Abremi Index (#index) ———
 const idx = { week: null, chart: 'overall', cache: new Map(), badge: undefined };
@@ -2613,7 +2646,7 @@ async function sendApplication(role) {
 let adminData = null;
 async function loadAdmin() {
   try {
-    const [queue, verified, flags, audit, , reports, exQueue, oppQueue, galleries, holders, invites, feedback, errors, guideStats] = await Promise.all([
+    const [queue, verified, flags, audit, , reports, exQueue, oppQueue, galleries, holders, invites, feedback, errors, guideStats, disputes] = await Promise.all([
       cloud.adminQueue(), cloud.verifiedMembers(),
       cloud.integrityQueue ? cloud.integrityQueue().catch(() => []) : [],
       cloud.auditLog ? cloud.auditLog().catch(() => []) : [],
@@ -2627,8 +2660,9 @@ async function loadAdmin() {
       cloud.feedbackQueue ? cloud.feedbackQueue().catch(() => []) : [],
       cloud.clientErrors ? cloud.clientErrors(7).catch(() => []) : [],
       cloud.guideMetrics ? cloud.guideMetrics(30).catch(() => null) : null,
+      cloud.disputes ? cloud.disputes().catch(() => []) : [],
     ]);
-    adminData = { queue, verified, flags, audit, reports, exQueue, oppQueue, galleries, holders, invites, feedback, errors, guide: guideStats, at: Date.now() };
+    adminData = { queue, verified, flags, audit, reports, exQueue, oppQueue, galleries, holders, invites, feedback, errors, guide: guideStats, disputes, at: Date.now() };
   } catch (e) {
     adminData = { error: e?.message || 'Could not load applications.' };
   }
@@ -2725,6 +2759,7 @@ async function signedIn(user) {
     toast('Signed in, but your account could not be loaded. Reload to try again.', { force: true });
   }
   await Promise.all([loadMembership().catch(() => {}), loadLoop()]);
+  await loadSales();
   renderView();
 }
 
@@ -2749,6 +2784,7 @@ function signedOut() {
   Object.assign(member, { mine: undefined, gallery: undefined, busy: '', planSearch: { query: '', results: null } });
   Object.assign(guide, { threads: { visitor: [], artist: [], collector: [] }, usage: null, prefs: null, error: null, loaded: false, view: 'chat' });
   Object.assign(loop, { watches: new Set(), interests: null, swipes: 0, loaded: false });
+  Object.assign(sales, { payout: null, orders: null, busy: '' });
   idx.badge = undefined;
   careers.coach.result = null;
   threads.clear();
@@ -2907,6 +2943,7 @@ async function connectCommunity() {
     toast('Community rankings are offline. Showing the last ones saved.', { duration: 4000 });
   }
   await Promise.all([loadChartBaseline(), me ? null : loadAchievements(), loadMembership().catch(() => {}), loadLoop()]);
+  await loadSales();
   if (!sheetRenderer) renderView();
   else refresh();
   setInterval(quietRefresh, 90_000);
@@ -3039,6 +3076,39 @@ const ACTIONS = {
   'index-publish': async () => {
     try { await cloud.publishIndex(); idx.cache.clear(); toast('This week’s Index is published.', { force: true }); }
     catch (e) { toast(e?.message || 'Could not publish it.', { force: true }); }
+  },
+  'checkout-buy': async (el) => {
+    if (!me) return openSignIn();
+    el.disabled = true;
+    try { const { url } = await cloud.checkout('buy', { artworkId: el.dataset.id }); location.assign(url); }
+    catch (e) { el.disabled = false; toast(e?.message || 'Could not start checkout.', { force: true }); }
+  },
+  'payouts-setup': async (el) => {
+    sales.busy = 'payouts'; renderView();
+    try { const { url } = await cloud.checkout(el.dataset.v === 'dashboard' ? 'dashboard' : 'onboard', { country: $('#payout-country')?.value }); location.assign(url); sales.payout = null; sales.orders = null; }
+    catch (e) { toast(e?.message || 'Could not open payouts.', { force: true }); }
+    sales.busy = ''; renderView();
+  },
+  'order-ship': async (el) => {
+    const id = el.dataset.id;
+    try { await cloud.markShipped(id, $(`#ship-carrier-${CSS.escape(id)}`)?.value || '', $(`#ship-tracking-${CSS.escape(id)}`)?.value || ''); sales.orders = null; toast('Marked as shipped. The buyer has been told.', { force: true }); renderView(); }
+    catch (e) { toast(e?.message || 'Could not update it.', { force: true }); }
+  },
+  'order-delivered': async (el) => {
+    try { await cloud.confirmDelivery(el.dataset.id); sales.orders = null; toast('Thanks. Enjoy your work.', { force: true }); renderView(); }
+    catch (e) { toast(e?.message || 'Could not update it.', { force: true }); }
+  },
+  'order-dispute': async (el) => {
+    const reason = prompt('What went wrong? A moderator will look at it with you and the artist.');
+    if (reason == null) return;
+    try { await cloud.openDispute(el.dataset.id, reason); sales.orders = null; toast('Reported. A moderator will be in touch.', { force: true }); renderView(); }
+    catch (e) { toast(e?.message || 'Could not report it.', { force: true }); }
+  },
+  'dispute-resolve': async (el) => {
+    const refund = el.dataset.v === 'refund';
+    if (refund && !confirm('Approve a refund? Then refund the payment in the Stripe dashboard; Abremi records it automatically.')) return;
+    try { await cloud.resolveDispute(el.dataset.id, refund, $(`#dispute-note-${CSS.escape(el.dataset.id)}`)?.value || null); toast('Decision recorded and both people told.', { force: true }); await loadAdmin(); }
+    catch (e) { toast(e?.message || 'Could not record it.', { force: true }); }
   },
   'offer-open': (el) => {
     if (!me) return openSignIn();
@@ -3418,7 +3488,10 @@ const ACTIONS = {
     el.disabled = true;
     try {
       await cloud.updateArtwork(id, fields);
+      const edition = Number(v('edition')) || null;
+      if (cloud.setEdition && edition !== (w.editionSize || null)) await cloud.setEdition(id, edition);
       await refreshCommunity();
+      await loadSales();
       closeSheet();
       toast('Saved.', { force: true });
       renderView();

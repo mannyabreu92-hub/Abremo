@@ -49,6 +49,7 @@ export function adminPage(data, { roleLabel, competitionSection, planSearch = { 
     ${galleriesHTML(data.galleries || [])}
     ${plansAdminHTML(data.holders || [], planSearch)}
     ${betaHTML(data.invites, data.feedback || [], data.errors || [])}
+    ${disputesHTML(data.disputes || [])}
     ${guideMetricsHTML(data.guide)}
     <section class="section section-tight" id="admin-index">${SectionHeader({ eyebrow: 'The Abremi Index', title: 'Weekly chart' })}
       <p class="muted">Published automatically every Monday. Publish this week’s chart now (for example after excluding a burst of activity); it’s recorded in the audit log.</p>
@@ -123,6 +124,20 @@ export function betaHTML(invites, feedback, errors) {
     ${errors.length ? `<ul class="error-list">${errors.map((e) => `<li><b>${esc(e.message)}</b><small>${e.count}× · last ${esc(when(e.last_seen))}${e.source ? ` · ${esc(e.source)}` : ''}${e.pages?.length ? ` · ${esc(e.pages.slice(0, 3).join(', '))}` : ''}${e.releases?.length ? ` · release ${esc(e.releases.join(', '))}` : ''}</small></li>`).join('')}</ul>`
       : '<p class="muted">No errors reported.</p>'}
     <p class="fine">Errors are recorded without accounts, emails or IP addresses, and deleted after 30 days.</p>
+  </section>`;
+}
+
+/** Buyers' reported problems with orders. Refunds themselves are made in the Stripe dashboard. */
+export function disputesHTML(list) {
+  return `<section class="section section-tight" id="admin-disputes">${SectionHeader({ eyebrow: 'Orders', title: 'Problems to decide' })}
+    ${list.length ? list.map((o) => `<article class="flag-card">
+      <p class="eyebrow">${esc(o.buyer)} bought from ${esc(o.artist)} · ${esc((o.currency || 'usd').toUpperCase())} ${(o.amount_cents / 100).toFixed(2)}${o.tracking ? ` · ${esc(o.carrier || '')} ${esc(o.tracking)}` : ''}</p>
+      <h3>${esc(o.title)}</h3><p>${esc(o.reason || '')}</p>
+      <label class="field"><span>Decision (sent to both, recorded)</span><input id="dispute-note-${esc(o.id)}" maxlength="1000"></label>
+      <div class="detail-actions">${PremiumButton('Approve a refund', { act: 'dispute-resolve', attrs: `data-id="${esc(o.id)}" data-v="refund" data-danger` })}
+        ${PremiumButton('Decline', { act: 'dispute-resolve', variant: 'secondary', attrs: `data-id="${esc(o.id)}" data-v="decline"` })}</div>
+      ${o.payment_intent ? `<p class="fine">Stripe payment: ${esc(o.payment_intent)}. Refund it in the Stripe dashboard; Abremi records the refund automatically.</p>` : ''}</article>`).join('')
+      : '<p class="muted">No open problems.</p>'}
   </section>`;
 }
 

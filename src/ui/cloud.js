@@ -574,6 +574,47 @@ export async function createSupabaseCloud(url, key) {
     async publishIndex() {
       return check(await sb.rpc('admin_publish_index'));
     },
+    // ——— Checkout (api/checkout.js; rules in migration 0017) ———
+    async checkout(action, payload = {}) {
+      const { data } = await sb.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in first');
+      const res = await fetch('api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ action, ...payload }) });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error || 'Payments are unavailable right now.');
+      return out;
+    },
+    async salesCatalog() {
+      const [accepting, editions] = await Promise.all([
+        sb.rpc('artists_accepting_payments'),
+        sb.from('artworks').select('id, edition_size, editions_sold').not('edition_size', 'is', null),
+      ]);
+      return { accepting: check(accepting) || [], editions: check(editions) || [] };
+    },
+    async myPayoutStatus() {
+      return user ? check(await sb.rpc('my_payout_status')) : null;
+    },
+    async myOrders() {
+      return user ? check(await sb.rpc('my_orders')) : { sales: [], purchases: [] };
+    },
+    async markShipped(id, carrier, tracking) {
+      check(await sb.rpc('mark_shipped', { p_order: id, p_carrier: carrier, p_tracking: tracking }));
+    },
+    async confirmDelivery(id) {
+      check(await sb.rpc('confirm_delivery', { p_order: id }));
+    },
+    async openDispute(id, reason) {
+      check(await sb.rpc('open_dispute', { p_order: id, p_reason: reason }));
+    },
+    async disputes() {
+      return check(await sb.rpc('admin_disputes'));
+    },
+    async resolveDispute(id, refund, note) {
+      check(await sb.rpc('resolve_dispute', { p_order: id, p_refund: refund, p_note: note || null }));
+    },
+    async setEdition(id, size) {
+      check(await sb.rpc('set_edition', { p_artwork: id, p_size: size }));
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },

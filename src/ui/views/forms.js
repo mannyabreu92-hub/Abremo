@@ -61,6 +61,7 @@ export function artworkEditForm(w) {
     <div class="field-row">
       <label class="field"><span>Year</span><input id="edit-year" type="number" inputmode="numeric" min="1900" max="2100" value="${esc(w.year)}"></label>
       <label class="field"><span>Size</span><input id="edit-dimensions" maxlength="${ARTWORK_LIMITS.dimensions}" value="${esc(w.dimensions)}" placeholder="60 × 80 cm"></label>
+      <label class="field"><span>Edition size (prints you make and ship; leave empty for an original)</span><input id="edit-edition" type="number" min="2" max="500" inputmode="numeric" value="${w.editionSize || ''}" placeholder="e.g. 50"></label>
     </div>
     <div class="field-row">
       <label class="field"><span>Availability</span>${select('availability', Object.entries(AVAILABILITY), w.availability || 'available')}</label>

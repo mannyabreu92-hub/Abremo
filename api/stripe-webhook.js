@@ -5,6 +5,7 @@ import { billingConfig, rawBody, rpc, verifyStripeSignature } from './_billing.j
 
 const STATUS = { active: 'active', trialing: 'trialing', past_due: 'past_due', canceled: 'canceled', unpaid: 'canceled', incomplete_expired: 'canceled' };
 const HANDLED = ['customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted'];
+const SALES = ['checkout.session.completed', 'charge.refunded', 'account.updated'];
 
 /**
  * @param {{ fetchImpl: typeof fetch, env: Record<string, string | undefined>, now?: () => number }} deps
@@ -12,12 +13,41 @@ const HANDLED = ['customer.subscription.created', 'customer.subscription.updated
  */
 export function createWebhook({ fetchImpl, env, now }) {
   const cfg = billingConfig(env);
+  const service = (name, args) => rpc(fetchImpl, { supabaseUrl: cfg.supabaseUrl, key: cfg.serviceKey }, name, args);
+  /** Artwork sales: a paid Checkout, a refund, or an artist's payout account changing. */
+  async function sale(event) {
+    const o = event.data?.object || {};
+    try {
+      if (event.type === 'checkout.session.completed') {
+        if (o.mode !== 'payment' || !o.metadata?.order_id) return { status: 200, body: { result: 'ignored' } };
+        if (o.payment_status !== 'paid') return { status: 200, body: { result: 'not paid yet' } };
+        const ship = o.collected_information?.shipping_details || o.shipping_details || null;
+        const result = await service('complete_order', {
+          p_session: o.id, p_payment_intent: typeof o.payment_intent === 'string' ? o.payment_intent : o.payment_intent?.id || null,
+          p_amount: o.amount_total, p_shipping: ship ? { name: ship.name || null, address: ship.address || null } : null,
+        });
+        return { status: 200, body: { result } };
+      }
+      if (event.type === 'charge.refunded') {
+        const pi = typeof o.payment_intent === 'string' ? o.payment_intent : o.payment_intent?.id;
+        if (!pi || !o.refunded) return { status: 200, body: { result: 'partial or unknown refund' } };
+        return { status: 200, body: { result: await service('refund_order', { p_payment_intent: pi }) } };
+      }
+      await service('update_payout_status', { p_account: o.id, p_charges: Boolean(o.charges_enabled), p_payouts: Boolean(o.payouts_enabled), p_details: Boolean(o.details_submitted) });
+      return { status: 200, body: { result: 'updated' } };
+    } catch {
+      return { status: 500, body: { error: 'Could not record the event' } }; // Stripe retries
+    }
+  }
+
   return async function webhook(payload, signature) {
-    if (!cfg.enabled || !cfg.webhookSecret || !cfg.serviceKey || !cfg.supabaseUrl) return { status: 503, body: { error: 'Payments aren’t switched on' } };
-    if (!verifyStripeSignature(payload, signature, cfg.webhookSecret, now?.())) return { status: 400, body: { error: 'Bad signature' } };
+    if (!(cfg.enabled || cfg.salesEnabled) || !cfg.webhookSecret || !cfg.serviceKey || !cfg.supabaseUrl) return { status: 503, body: { error: 'Payments aren’t switched on' } };
+    const signed = [cfg.webhookSecret, cfg.connectWebhookSecret].some((secret) => secret && verifyStripeSignature(payload, signature, secret, now?.()));
+    if (!signed) return { status: 400, body: { error: 'Bad signature' } };
     let event;
     try { event = JSON.parse(payload); } catch { return { status: 400, body: { error: 'Bad payload' } }; }
-    if (!HANDLED.includes(event?.type)) return { status: 200, body: { result: 'ignored' } };
+    if (SALES.includes(event?.type)) return cfg.salesEnabled ? sale(event) : { status: 503, body: { error: 'Sales aren’t switched on' } };
+    if (!HANDLED.includes(event?.type) || !cfg.enabled) return { status: 200, body: { result: 'ignored' } };
     const sub = event.data?.object || {};
     const status = event.type === 'customer.subscription.deleted' ? 'canceled' : STATUS[sub.status];
     if (!status) return { status: 200, body: { result: 'ignored' } }; // e.g. incomplete: wait for the next event
