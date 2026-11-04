@@ -18,7 +18,7 @@ npm run lint      # ESLint
 npm run typecheck # TypeScript checks the JavaScript through JSDoc (app.js joins as it is split into src/ui/views/)
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
 npm run test:db   # Supabase migration + security rules on a real Postgres (set ABREMI_PG)
-npm run test:e2e  # Phase 1 (profiles, artwork details, collections, sample catalog), sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
+npm run test:e2e  # Phase 2A (ranking integrity, achievements), Phase 1 (profiles, artwork details, collections, sample catalog), sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
 ```
 
 ### Accounts and the shared database
@@ -34,6 +34,8 @@ Add a Supabase database and it switches to **community mode**:
 - **Artist profiles:** portrait, city, bio, artist statement, website and Instagram, edited from Studio → Artist profile and shown on the public artist page.
 - **Artwork details:** description, size and availability (available, price on request, sold, not for sale; "sold" is reported by the artist, not verified). Artists edit their works after publishing. Every work has a shareable page: `#art/<id>`.
 - **Collections with your account:** private by default; share one and anyone with the link (`#collection/<id>`) can see it. Collections made as a guest move to the account on sign-in, and signing out removes them from the device.
+- **Fair rankings (Phase 2A):** the server calculates five separate scores (artwork popularity, artist reputation, critic credibility, collector interest, battle performance) and publishes how ("How rankings work" on Rankings). Rankings show All Time, **Trending This Week** (each like halves in value every 7 days) and **Collectors' Picks**. Your own likes, saves, reviews, follows and battle votes never count; there are hourly rate limits; bursts of likes from brand-new accounts go to moderators, who can exclude them (recorded, never deleted).
+- **Achievements:** earned on the server, each with a published rule and a record of why it was earned. Artist achievements show on artist pages; member achievements stay private.
 - **Following feed:** Home → Following shows the newest work from artists you follow.
 - **Security headers:** a strict Content-Security-Policy (scripts from this site only; supabase-js is served from `src/vendor/`), plus frame, referrer, permissions and HSTS headers, set in `vercel.json` and applied by `npm start` too.
 
@@ -162,7 +164,7 @@ tests/                node:test suites
 ```
 
 ## Prototype limits (what production needs)
-- **Backend:** accounts and the shared database are built (see above). Still to come: fraud detection beyond the role and vote limits.
+- **Backend:** accounts and the shared database are built (see above). Ranking integrity covers self-votes, rate limits and new-account bursts; more fraud signals (shared devices, vote rings) are still to come.
 - **Recognition:** uses on-device pixel statistics today. Production would use a vision model behind the same `features → prediction → matches` interface.
 - **Payments and messaging** are simulated and stay on the device. A real version needs Stripe Connect or similar for payouts.
 - **Catalog art** is generated procedurally, so the demo ships no copyrighted images. Uploaded images are stored in localStorage (about 5 MB limit).

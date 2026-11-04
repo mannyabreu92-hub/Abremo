@@ -9,7 +9,9 @@ window.__abremiCloud = async () => {
   let clock = Date.now();
   const tick = () => ++clock;
   const seed = buildSeedWorld();
-  const baseElo = Object.fromEntries(seed.artworks.map((w) => [w.id, w.elo]));
+  const baseElo = Object.fromEntries(seed.artworks.map((w) => [w.id, 1200])); // the shared catalog starts every work at 1200
+  const catalogArtist = Object.fromEntries(seed.artworks.map((w) => [w.id, w.artistId]));
+  const W = { fan: 1, artist: 3, critic: 5, collector: 9 };
   const KEY = 'mockcloud';
   const load = () => ({ uploads: [], artists: {}, ...JSON.parse(localStorage.getItem(KEY) || '{"profiles":{},"reactions":[],"follows":[],"reviews":[],"ratings":{},"votes":[]}') });
   const toDataURL = (blob) => new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(blob); });
@@ -20,13 +22,36 @@ window.__abremiCloud = async () => {
   const wait = () => new Promise((r) => setTimeout(r, 30));
   const needUser = () => { if (!user) throw new Error('Sign in first'); };
   // Same neutral default name as the database: never part of the email address.
-  const profileOf = (db, id) => (db.profiles[id] ||= { id, name: `Member ${[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(16).toUpperCase().slice(0, 4).padEnd(4, '0')}`, country: 'US', role: 'fan', public_leaderboards: true });
+  const profileOf = (db, id) => (db.profiles[id] ||= { id, created_at: new Date().toISOString(), name: `Member ${[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(16).toUpperCase().slice(0, 4).padEnd(4, '0')}`, country: 'US', role: 'fan', public_leaderboards: true });
   window.__mockdb = { load, save };
   const group = (rows, keyFn) => Object.values(rows.reduce((m, r) => { const k = keyFn(r); (m[k.key] ||= { ...k.out, n: 0 }).n++; return m; }, {}));
+  // Same rules as 0007: own work and moderator-excluded reactions don't count; neither do self-follows.
+  const ownerOf = (db, artworkId) => db.uploads.find((u) => u.id === artworkId)?.owner || null;
+  const counted = (db) => db.reactions.filter((r) => !r.excluded && ownerOf(db, r.artwork_id) !== r.user_id);
+  const countedFollows = (db) => db.follows.filter((f) => f.artist_id !== `m_${f.user_id}`);
+  const scoresOf = (db) => {
+    const now = Date.now(), m = {};
+    const row = (a) => (m[a] ||= { a, p: 0, t: 0, c: 0, cr: 0 });
+    for (const r of counted(db)) {
+      if (r.kind === 'pass') continue;
+      const pts = W[r.role] * (r.kind === 'super' ? 2 : 1);
+      const x = row(r.artwork_id);
+      x.p += pts;
+      x.t += pts * 0.5 ** ((now - (r.at || now)) / (7 * 86400e3));
+      if (r.role === 'collector') x.c += pts;
+    }
+    for (const v of db.reviews) { if (ownerOf(db, v.artwork_id) !== v.user_id) { row(v.artwork_id).p += 2 * v.rating; row(v.artwork_id).cr += 2 * v.rating; } }
+    const scores = Object.values(m).map((x) => ({ ...x, p: Math.round(x.p), t: Math.round(x.t * 100) / 100 }));
+    const rep = {};
+    for (const x of scores) { const artist = catalogArtist[x.a] || db.uploads.find((u) => u.id === x.a)?.artist_id; if (artist) rep[artist] = (rep[artist] || 0) + x.p; }
+    for (const f of countedFollows(db)) rep[f.artist_id] = (rep[f.artist_id] || 0) + W[f.role];
+    return { scores, artist_scores: Object.entries(rep).filter(([, s]) => s > 0).map(([a, s]) => ({ a, s })) };
+  };
   const snapshotOf = (db) => ({
-    reactions: group(db.reactions.filter((r) => r.kind !== 'pass'), (r) => ({ key: `${r.artwork_id}|${r.kind}|${r.role}`, out: { a: r.artwork_id, k: r.kind, r: r.role } })),
+    ...scoresOf(db),
+    reactions: group(counted(db).filter((r) => r.kind !== 'pass'), (r) => ({ key: `${r.artwork_id}|${r.kind}|${r.role}`, out: { a: r.artwork_id, k: r.kind, r: r.role } })),
     reviews: Object.values(db.reviews.reduce((m, r) => { (m[r.artwork_id] ||= { a: r.artwork_id, n: 0, s: 0 }); m[r.artwork_id].n++; m[r.artwork_id].s += r.rating; return m; }, {})),
-    follows: group(db.follows, (f) => ({ key: `${f.artist_id}|${f.role}`, out: { a: f.artist_id, r: f.role } })),
+    follows: group(countedFollows(db), (f) => ({ key: `${f.artist_id}|${f.role}`, out: { a: f.artist_id, r: f.role } })),
     ratings: Object.entries(db.ratings).map(([a, v]) => ({ a, v })),
     members: Object.keys(db.profiles).length,
     artists: Object.values(db.artists),
@@ -164,8 +189,12 @@ window.__abremiCloud = async () => {
     async setReaction(artwork_id, kind) {
       needUser(); await wait();
       const db = load();
-      db.reactions = db.reactions.filter((r) => !(r.user_id === user.id && r.artwork_id === artwork_id));
-      if (kind) db.reactions.push({ user_id: user.id, artwork_id, kind, role: profileOf(db, user.id).role, at: tick() });
+      const existing = db.reactions.find((r) => r.user_id === user.id && r.artwork_id === artwork_id);
+      if (existing && kind) Object.assign(existing, { kind, role: profileOf(db, user.id).role }); // an update keeps any exclusion
+      else {
+        db.reactions = db.reactions.filter((r) => r !== existing);
+        if (kind) db.reactions.push({ user_id: user.id, artwork_id, kind, role: profileOf(db, user.id).role, at: tick() });
+      }
       save(db);
     },
     async setFollow(artist_id, on) {
@@ -186,7 +215,8 @@ window.__abremiCloud = async () => {
       needUser(); await wait();
       const db = load();
       const role = profileOf(db, user.id).role;
-      const wr = db.ratings[w] ?? baseElo[w], lr = db.ratings[l] ?? baseElo[l];
+      if (ownerOf(db, w) === user.id) throw new Error('You can’t vote for your own work');
+      const wr = db.ratings[w] ?? baseElo[w] ?? 1200, lr = db.ratings[l] ?? baseElo[l] ?? 1200;
       const r = battleResult(wr, lr, role);
       db.ratings[w] = r.winner; db.ratings[l] = r.loser;
       db.votes.push({ user_id: user.id, w, l, role });
@@ -319,6 +349,79 @@ window.__abremiCloud = async () => {
       if (!c || (c.is_private && c.owner_id !== user?.id)) return null;
       return { id: c.id, name: c.name, description: c.description, is_private: c.is_private, owner_name: profileOf(db, c.owner_id).name, mine: c.owner_id === user?.id,
         items: (db.collectionItems || []).filter((i) => i.collection_id === id).sort((a, b) => Date.parse(b.added_at) - Date.parse(a.added_at)).map((i) => i.artwork_id) };
+    },
+    // ——— Phase 2A (same rules as 0007, for the achievements and flags the tests use) ———
+    async achievementDefinitions() {
+      return [
+        { code: 'first_discovery', audience: 'member', label: 'First Discovery', criteria: 'Liked or saved your first work.', sort: 10 },
+        { code: 'master_curator', audience: 'member', label: 'Master Curator', criteria: 'Built 3 collections with at least 5 works each.', sort: 30 },
+        { code: 'first_work', audience: 'artist', label: 'First Work', criteria: 'Published a first work on Abremi.', sort: 100 },
+      ];
+    },
+    async myAchievements() {
+      await wait();
+      if (!user) return [];
+      const db = load();
+      db.achievements ||= {};
+      const mine = (db.achievements[user.id] ||= {});
+      const award = (code, evidence) => { if (!mine[code]) mine[code] = { code, awarded_at: new Date().toISOString(), evidence }; };
+      const first = counted(db).find((r) => r.user_id === user.id && r.kind !== 'pass');
+      if (first) award('first_discovery', { artwork: first.artwork_id });
+      const work = db.uploads.find((u) => u.owner === user.id);
+      if (work) award('first_work', { artwork: work.id });
+      save(db);
+      const defs = await this.achievementDefinitions();
+      return Object.values(mine).map((m) => ({ ...defs.find((d) => d.code === m.code), ...m }));
+    },
+    async artistAchievements(artistId) {
+      await wait();
+      const db = load();
+      const owner = artistId.startsWith('m_') ? artistId.slice(2) : null;
+      const earned = Object.values((db.achievements || {})[owner] || {});
+      const defs = await this.achievementDefinitions();
+      return earned.map((m) => defs.find((d) => d.code === m.code)).filter((d) => d?.audience === 'artist');
+    },
+    async integrityQueue() {
+      await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      db.flags ||= [];
+      const hourAgo = Date.now() - 3600e3;
+      const byWork = {};
+      for (const r of counted(db)) if (r.kind !== 'pass' && (r.at || 0) > hourAgo) (byWork[r.artwork_id] ||= []).push(r);
+      for (const [id, rows] of Object.entries(byWork)) {
+        const fresh = rows.filter((r) => Date.parse(profileOf(db, r.user_id).created_at) > (r.at || 0) - 72 * 3600e3).length;
+        if (rows.length >= 10 && fresh / rows.length >= 0.6 && !db.flags.some((f) => f.target_id === id)) {
+          db.flags.push({ id: crypto.randomUUID(), kind: 'new_account_burst', target_type: 'artwork', target_id: id, status: 'open', created_at: new Date().toISOString(),
+            details: { total: rows.length, new_accounts: fresh, since: Math.min(...rows.map((r) => r.at)), until: Math.max(...rows.map((r) => r.at)) } });
+        }
+      }
+      save(db);
+      const titles = Object.fromEntries(seed.artworks.map((w) => [w.id, w.title]));
+      return db.flags.filter((f) => f.status === 'open').map((f) => ({ ...f, title: titles[f.target_id] || f.target_id }));
+    },
+    async resolveFlag(id, exclude, note) {
+      await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      const f = (db.flags || []).find((x) => x.id === id && x.status === 'open');
+      if (!f) throw new Error('That flag is no longer open');
+      f.status = exclude ? 'confirmed' : 'dismissed';
+      let n = 0;
+      if (exclude) {
+        for (const r of db.reactions) {
+          if (r.artwork_id === f.target_id && !r.excluded && r.at >= f.details.since && r.at <= f.details.until
+              && Date.parse(profileOf(db, r.user_id).created_at) > r.at - 72 * 3600e3) { r.excluded = true; n++; }
+        }
+      }
+      (db.audit ||= []).unshift({ action: exclude ? 'integrity_flag.confirmed' : 'integrity_flag.dismissed', actor_email: user.email, created_at: new Date().toISOString(), details: { excluded: n, note } });
+      save(db);
+      return n;
+    },
+    async auditLog() {
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      return db.audit || [];
     },
     async importGuest({ reactions, follows }) {
       needUser(); await wait();

@@ -20,14 +20,14 @@ const step = (name) => console.log(`✓ ${name}`);
     p.on('pageerror', (e) => errors.push(e.message));
     p.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   };
-  const topArtworks = (p) => p.$$eval('.board:first-of-type .rank-row[data-act=artwork]', (rows) => rows.map((r) => r.dataset.id));
+  const topArtworks = (p) => p.$$eval('[data-board=artworks] .rank-row[data-act=artwork]', (rows) => rows.map((r) => r.dataset.id));
 
   // ——— A guest watching Rankings ———
   const viewer = await ctx.newPage();
   watch(viewer);
   await viewer.goto(BASE + '#charts');
   await viewer.waitForSelector('.live-badge.is-live');
-  assert.match(await viewer.locator('.board:first-of-type').textContent(), /Nothing ranked here yet/, 'nothing is ranked before real activity');
+  assert.match(await viewer.locator('[data-board=artworks]').textContent(), /Nothing ranked here yet/, 'nothing is ranked before real activity');
   // Real activity: fans like 40 works, the first one most.
   await viewer.evaluate(() => {
     const db = window.__mockdb.load();
@@ -38,9 +38,9 @@ const step = (name) => console.log(`✓ ${name}`);
   await viewer.reload();
   await viewer.waitForSelector('.live-badge.is-live');
   assert.doesNotMatch(await viewer.locator('#chart-status').textContent(), /Movement since/, 'no earlier chart yet');
-  assert.equal(await viewer.locator('.board:first-of-type .move').count(), 0, 'no movement is invented without an earlier chart');
-  await viewer.click('.board:first-of-type [data-act=chart-expand]');
-  await viewer.waitForFunction(() => document.querySelectorAll('.board:first-of-type .rank-row').length > 30);
+  assert.equal(await viewer.locator('[data-board=artworks] .move').count(), 0, 'no movement is invented without an earlier chart');
+  await viewer.click('[data-board=artworks] [data-act=chart-expand]');
+  await viewer.waitForFunction(() => document.querySelectorAll('[data-board=artworks] .rank-row').length > 30);
   const before = await topArtworks(viewer);
   const climber = before[29];
   step('Rankings shows “Live”, ranks only real activity, and shows no movement before there is an earlier chart');
@@ -60,7 +60,7 @@ const step = (name) => console.log(`✓ ${name}`);
     window.__mockdb.save(db);
   }, climber);
   const t0 = Date.now();
-  await viewer.waitForFunction((id) => document.querySelector('.board:first-of-type .rank-row[data-act=artwork]')?.dataset.id === id, climber, { timeout: 10000 });
+  await viewer.waitForFunction((id) => document.querySelector('[data-board=artworks] .rank-row[data-act=artwork]')?.dataset.id === id, climber, { timeout: 10000 });
   assert.ok(Date.now() - t0 < 6000, 'the update arrives within seconds, not at the next 90-second poll');
   step(`the watching tab updates without a reload (No. 30 → No. 1 in ${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
@@ -77,7 +77,7 @@ const step = (name) => console.log(`✓ ${name}`);
   await viewer.reload();
   await viewer.waitForSelector('.chart-since');
   assert.match(await viewer.locator('.chart-since').textContent(), /Movement since/);
-  const firstRow = viewer.locator('.board:first-of-type .rank-row').first();
+  const firstRow = viewer.locator('[data-board=artworks] .rank-row').first();
   assert.equal(await firstRow.getAttribute('data-id'), climber);
   assert.equal(await firstRow.locator('.move').getAttribute('aria-label'), 'Up 29');
   step('movement is measured against the shared earlier chart (↑ 29)');
