@@ -11,11 +11,14 @@ moves the global and country charts. A like counts for more when it comes from a
 ## Run it
 
 ```bash
-npm start         # http://localhost:5173  (zero dependencies, Node 18+)
-npm run check     # syntax check of the UI modules + unit tests
+npm start         # http://localhost:5173  (no runtime dependencies, Node 18+; sends the production security headers)
+npm install       # developer tools only: ESLint and TypeScript (for type-checking the JavaScript)
+npm run check     # syntax check, lint, type check and unit tests
+npm run lint      # ESLint
+npm run typecheck # TypeScript checks the JavaScript through JSDoc (app.js joins as it is split into src/ui/views/)
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
 npm run test:db   # Supabase migration + security rules on a real Postgres (set ABREMI_PG)
-npm run test:e2e  # sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
+npm run test:e2e  # Phase 1 (profiles, artwork details, collections, sample catalog), sign-in/sync, artist uploads, the culture engine, leaderboards, role applications, live updates and offline/install/update flows in a browser
 ```
 
 ### Accounts and the shared database
@@ -26,6 +29,13 @@ Add a Supabase database and it switches to **community mode**:
 - **Security:** row-level security, vote roles stamped by the server, and Critic/Collector granted only by a moderator after an application.
 - **Guests:** they can still swipe, and what they liked is added to their account when they sign in.
 - **Artist uploads:** members with the Artist role publish photos of their work from Profile → Studio. Photos are resized on the phone (a 1600px image plus a 480px thumbnail) and stripped of location data. Published works join the feed, rankings and Art Battles for everyone, and images are cached for offline viewing.
+
+- **Honest numbers:** the starter catalog is shown as clearly labelled *sample* works and artists, with none of the demo's simulated likes, followers, reviews or battle ratings. Only works and artists with real activity get a rank; sample works can't be bought or contacted.
+- **Artist profiles:** portrait, city, bio, artist statement, website and Instagram, edited from Studio → Artist profile and shown on the public artist page.
+- **Artwork details:** description, size and availability (available, price on request, sold, not for sale; "sold" is reported by the artist, not verified). Artists edit their works after publishing. Every work has a shareable page: `#art/<id>`.
+- **Collections with your account:** private by default; share one and anyone with the link (`#collection/<id>`) can see it. Collections made as a guest move to the account on sign-in, and signing out removes them from the device.
+- **Following feed:** Home → Following shows the newest work from artists you follow.
+- **Security headers:** a strict Content-Security-Policy (scripts from this site only; supabase-js is served from `src/vendor/`), plus frame, referrer, permissions and HSTS headers, set in `vercel.json` and applied by `npm start` too.
 
 Setup takes four steps: see [`supabase/README.md`](supabase/README.md).
 

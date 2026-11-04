@@ -88,6 +88,7 @@ export const ACHIEVEMENTS = Object.freeze({
 /**
  * follows: { artistId: { followersAt } } recorded when you followed; followersNow(artistId) → current total.
  * collections: [{ ids: [] }]; taste: result of tasteScore().
+ * @param {{ discoveries: any[], now: { total: number, rankOf: (id: string) => number | null }, collections?: any[], taste?: any, follows?: Record<string, { followersAt: number }>, followersNow?: (artistId: string) => number }} input
  */
 export function earnedAchievements({ discoveries, now, collections = [], taste, follows = {}, followersNow = () => 0 }) {
   const out = [];
@@ -98,7 +99,9 @@ export function earnedAchievements({ discoveries, now, collections = [], taste, 
   if (discoveries.length >= 25 && new Set(discoveries.map((d) => d.style)).size >= 5) out.push('culturalScout');
   if (collections.filter((c) => c.ids.length >= 5).length >= 3) out.push('masterCurator');
   if (taste?.score >= 95) out.push('globalTastemaker');
-  for (const [milestone, id] of [[1000, 'earlyBeliever1k'], [10000, 'earlyBeliever10k'], [100000, 'earlyBeliever100k']]) {
+  /** @type {[number, string][]} */
+  const milestones = [[1000, 'earlyBeliever1k'], [10000, 'earlyBeliever10k'], [100000, 'earlyBeliever100k']];
+  for (const [milestone, id] of milestones) {
     if (Object.entries(follows).some(([artistId, f]) => f.followersAt < milestone && followersNow(artistId) >= milestone)) out.push(id);
   }
   return out;

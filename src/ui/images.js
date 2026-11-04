@@ -46,7 +46,7 @@ async function encode(source, srcW, srcH, max, quality) {
 
 /** → { image: Blob, thumb: Blob, width, height, previewURL } */
 export async function prepareImage(file) {
-  const source = await decode(file);
+  const source = /** @type {any} */ (await decode(file)); // ImageBitmap or <img>
   const srcW = source.naturalWidth || source.width;
   const srcH = source.naturalHeight || source.height;
   if (!srcW || !srcH) throw new Error('That image could not be read.');

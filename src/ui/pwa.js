@@ -1,7 +1,7 @@
 // Installable app: service worker (offline + updates), install prompts, offline indicator.
 
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || /** @type {any} */ (navigator).standalone === true;
 
 /**
  * hooks: { toast(msg, opts), onChange() } — onChange re-renders anything showing install state.

@@ -30,7 +30,7 @@ window.__abremiCloud = async () => {
     ratings: Object.entries(db.ratings).map(([a, v]) => ({ a, v })),
     members: Object.keys(db.profiles).length,
     artists: Object.values(db.artists),
-    uploads: db.uploads.slice().reverse(),
+    uploads: db.uploads.slice().reverse().map(({ owner, image_type, image_bytes, ...u }) => u),
   });
 
   return {
@@ -213,7 +213,7 @@ window.__abremiCloud = async () => {
       if (!/^image\/(webp|jpeg|png)$/.test(image.type) || image.size > 5 * 1024 * 1024) throw new Error('Image rejected by storage');
       const id = `u_${crypto.randomUUID().replace(/-/g, '')}`;
       const artistId = `m_${user.id}`;
-      db.artists[artistId] = { id: artistId, name: p.name, country: p.country, created_at: new Date().toISOString() };
+      db.artists[artistId] = { created_at: new Date().toISOString(), ...db.artists[artistId], id: artistId, name: p.name, country: p.country };
       db.uploads.push({ id, artist_id: artistId, owner: user.id, title: title.trim(), category, style, medium, year, price,
         image_path: await toDataURL(image), thumb_path: await toDataURL(thumb), width, height, created_at: new Date().toISOString(),
         image_type: image.type, image_bytes: image.size });
@@ -229,6 +229,96 @@ window.__abremiCloud = async () => {
       db.reactions = db.reactions.filter((r) => r.artwork_id !== id);
       delete db.ratings[id];
       save(db);
+    },
+    // ——— Phase 1 (same rules as supabase/migrations/0006_profiles_artworks_collections.sql) ———
+    async uploadPortrait(blob) {
+      needUser(); await wait();
+      if (!/^image\/(webp|jpeg|png)$/.test(blob.type)) throw new Error('Image rejected by storage');
+      return toDataURL(blob);
+    },
+    async updateArtistProfile({ bio = '', statement = '', website = '', instagram = '', city = '', avatarPath = null }) {
+      needUser(); await wait();
+      const db = load();
+      const p = profileOf(db, user.id);
+      const artistId = `m_${user.id}`;
+      if (!db.artists[artistId] && p.role !== 'artist') throw new Error('Switch to the Artist role to set up an artist profile');
+      const handle = instagram.trim().replace(/^@/, '');
+      if (bio.length > 1000 || statement.length > 2000 || city.length > 60 || (website.trim() && !/^https:\/\/[^\s<>"]+$/.test(website.trim()))
+        || (handle && !/^[A-Za-z0-9._]{1,30}$/.test(handle))) throw new Error('new row for relation "artists" violates check constraint "artists_profile_valid"');
+      db.artists[artistId] = { ...(db.artists[artistId] || { id: artistId, created_at: new Date().toISOString() }), name: p.name, country: p.country,
+        bio: bio.trim() || null, statement: statement.trim() || null, website: website.trim() || null, instagram: handle || null, city: city.trim() || null, avatar_path: avatarPath || null };
+      db.audit ||= [];
+      save(db);
+      return db.artists[artistId];
+    },
+    async updateArtwork(id, { title, category, style, medium, year, price, description = '', dimensions = '', availability = 'available' }) {
+      needUser(); await wait();
+      const db = load();
+      const w = db.uploads.find((u) => u.id === id);
+      if (!w || w.owner !== user.id) throw new Error('Not your artwork');
+      if (!['available', 'sold', 'not_for_sale', 'on_request'].includes(availability) || description.length > 2000 || dimensions.length > 60) throw new Error('violates check constraint "artworks_details_valid"');
+      Object.assign(w, { title: title.trim(), category, style, medium, year, price, description: description.trim() || null, dimensions: dimensions.trim() || null, availability });
+      save(db);
+      return w;
+    },
+    async myCollections() {
+      await wait();
+      if (!user) return { collections: [], items: [] };
+      const db = load();
+      const mine = (db.collections || []).filter((c) => c.owner_id === user.id);
+      const ids = new Set(mine.map((c) => c.id));
+      return { collections: mine, items: (db.collectionItems || []).filter((i) => ids.has(i.collection_id)) };
+    },
+    async createCollection({ name, description = '', isPrivate = true }) {
+      needUser(); await wait();
+      const db = load();
+      db.collections ||= [];
+      if (!name.trim() || name.trim().length > 60) throw new Error('violates check constraint "collections_name_check"');
+      if (db.collections.filter((c) => c.owner_id === user.id).length >= 100) throw new Error('You can have up to 100 collections');
+      const row = { id: crypto.randomUUID(), owner_id: user.id, name: name.trim(), description: description || null, is_private: isPrivate !== false, created_at: new Date().toISOString() };
+      db.collections.push(row);
+      save(db);
+      return row;
+    },
+    async updateCollection(id, fields) {
+      needUser(); await wait();
+      const db = load();
+      const c = (db.collections || []).find((x) => x.id === id && x.owner_id === user.id);
+      if (!c) return; // RLS: someone else's collection updates nothing
+      if ('name' in fields) c.name = fields.name.trim();
+      if ('description' in fields) c.description = fields.description || null;
+      if ('isPrivate' in fields) c.is_private = fields.isPrivate;
+      save(db);
+    },
+    async deleteCollection(id) {
+      needUser(); await wait();
+      const db = load();
+      db.collections = (db.collections || []).filter((c) => !(c.id === id && c.owner_id === user.id));
+      db.collectionItems = (db.collectionItems || []).filter((i) => db.collections.some((c) => c.id === i.collection_id));
+      save(db);
+    },
+    async addToCollection(id, artworkId) {
+      needUser(); await wait();
+      const db = load();
+      if (!(db.collections || []).some((c) => c.id === id && c.owner_id === user.id)) throw new Error('new row violates row-level security policy for table "collection_items"');
+      db.collectionItems ||= [];
+      if (!db.collectionItems.some((i) => i.collection_id === id && i.artwork_id === artworkId)) db.collectionItems.push({ collection_id: id, artwork_id: artworkId, added_at: new Date(tick()).toISOString() });
+      save(db);
+    },
+    async removeFromCollection(id, artworkId) {
+      needUser(); await wait();
+      const db = load();
+      if (!(db.collections || []).some((c) => c.id === id && c.owner_id === user.id)) return;
+      db.collectionItems = (db.collectionItems || []).filter((i) => !(i.collection_id === id && i.artwork_id === artworkId));
+      save(db);
+    },
+    async publicCollection(id) {
+      await wait();
+      const db = load();
+      const c = (db.collections || []).find((x) => x.id === id);
+      if (!c || (c.is_private && c.owner_id !== user?.id)) return null;
+      return { id: c.id, name: c.name, description: c.description, is_private: c.is_private, owner_name: profileOf(db, c.owner_id).name, mine: c.owner_id === user?.id,
+        items: (db.collectionItems || []).filter((i) => i.collection_id === id).sort((a, b) => Date.parse(b.added_at) - Date.parse(a.added_at)).map((i) => i.artwork_id) };
     },
     async importGuest({ reactions, follows }) {
       needUser(); await wait();

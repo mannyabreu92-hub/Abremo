@@ -45,6 +45,10 @@ export function topStyles(taste, n = 3) {
  * Choose the next card.
  * pool: artworks; taste: profile; rng: () => [0,1); seen: Set of ids to skip;
  * popularity: (artwork) => number used to weight exploration toward what's hot.
+ * @param {any[]} pool
+ * @param {any} taste
+ * @param {() => number} rng
+ * @param {{ seen?: Set<string>, popularity?: (artwork: any) => number }} [opts]
  */
 export function nextArtwork(pool, taste, rng, { seen = new Set(), popularity = () => 1 } = {}) {
   const candidates = pool.filter((a) => !seen.has(a.id));

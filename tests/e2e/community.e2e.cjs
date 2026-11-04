@@ -114,7 +114,6 @@ const mock = readFileSync(path.join(__dirname, 'mock-cloud.js'), 'utf8');
   await page.click('[data-act=verify-code]');
   await page.waitForFunction(() => /Welcome/.test(document.querySelector('#toast').textContent));
   assert.equal(Number(await influenceOf(firstId)), Number(baseInfluence) + 1);
-  const artistId = await page.locator('.artist-card .follow-btn').first().getAttribute('data-id').catch(() => null);
   await page.goto(BASE + '#artists');
   await page.waitForSelector('.artist-card .follow-btn');
   await page.locator('.artist-card .follow-btn').first().click();

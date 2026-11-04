@@ -97,7 +97,10 @@ export function guessMedium(features) {
   return { id: 'mixed', label: 'Mixed media' };
 }
 
-/** artists: [{ id, styles: [...], category }], scores: id → artist score. */
+/**
+ * artists: [{ id, styles: [...], category }], scores: id → artist score.
+ * @param {(artist: any) => number} [scoreOf]
+ */
 export function similarArtists(artists, styleRanking, medium, scoreOf = () => 0, limit = 5) {
   const top = styleRanking.slice(0, 3);
   return artists

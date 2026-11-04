@@ -20,6 +20,8 @@ export function mergeCounts(base, delta) {
 /**
  * state.memberArtists / state.memberArtworks: community members and their uploads (community mode).
  * state.myArtistId: which artist is the viewer (marked isMe). Demo mode uses a local 'me' artist instead.
+ * @param {any} seed
+ * @param {any} state
  */
 export function createWorld(seed, state) {
   const members = (state.memberArtists || []).map((a) => (a.id === state.myArtistId ? { ...a, isMe: true } : a));
@@ -72,8 +74,10 @@ export function createWorld(seed, state) {
 
   const eloOf = (art) => state.elo[art.id] ?? art.elo;
 
+  /** @param {{ country?: string | null, category?: string | null }} [opts] */
   const filterArtworks = ({ country, category } = {}) =>
     artworks.filter((w) => (!country || artistById[w.artistId]?.country === country) && (!category || w.category === category));
+  /** @param {{ country?: string | null, category?: string | null }} [opts] */
   const filterArtists = ({ country, category } = {}) =>
     artists.filter((a) => (!country || a.country === country) && (!category || (worksByArtist[a.id] || []).some((w) => w.category === category)));
 
