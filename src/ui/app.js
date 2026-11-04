@@ -617,6 +617,7 @@ function renderHome(root) {
     <div class="shell">
       ${masterpieceHTML(mp)}
       ${COMMUNITY ? (radar.drops ? dropsSection(radar.drops, { image: storageImage }) : (loadDrops(), '')) : ''}
+      ${emergingHTML()}
 
       ${rising.length ? `<section class="section">
         ${SectionHeader({ eyebrow: 'Discover them first', title: 'Rising artists', action: `<a class="link-arrow" href="#artists">All artists ${Icon('arrow', { size: 16 })}</a>` })}
@@ -664,8 +665,11 @@ function footerHTML() {
 function fillDeck() {
   const seen = new Set([...Object.keys(state.interactions), ...deck.map((d) => d.artwork.id)]);
   const pool = catalog().filter((a) => !discover.category || a.category === discover.category);
+  const preferred = interestPool(pool);
   while (deck.length < 3) {
-    const n = nextArtwork(pool, state.taste, rng, { seen, popularity: (a) => world.influence[a.id] });
+    // Mostly from the member's chosen interests (when they have enough works), always with some exploring.
+    const from = preferred.filter((a) => !seen.has(a.id)).length >= 6 && rng() < 0.7 ? preferred : pool;
+    const n = nextArtwork(from, state.taste, rng, { seen, popularity: (a) => world.influence[a.id] }) || nextArtwork(pool, state.taste, rng, { seen, popularity: (a) => world.influence[a.id] });
     if (!n) break;
     deck.push(n);
     seen.add(n.artwork.id);
@@ -813,6 +817,7 @@ function decide(action) {
 }
 
 function applySwipe(art, action) {
+  setTimeout(maybeAskInterests, 450);
   setReaction(art, action);
   if (action === 'super' && !counts()) toast(`Saved “${art.title}” to your collection`);
 }
@@ -851,8 +856,10 @@ function artworkSheet(id) {
       </dl>
       <div class="detail-actions">
         <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Admire">${Icon('admire', { size: 18 })}</button>
-        <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="Save to collection">${Icon('bookmark', { size: 18 })}</button>
+        <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="Treasure">${Icon('treasure', { size: 18 })}</button>
         ${w.sample || !forSale(w) ? '' : PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : w.availability === 'on_request' ? 'Inquire' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
+        ${COMMUNITY && w.member && !isMine(w) && forSale(w) ? PremiumButton('Make an offer', { act: 'offer-open', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
+        ${COMMUNITY && w.member && !isMine(w) && !forSale(w) ? PremiumButton(loop.watches.has(id) ? 'On your waitlist' : 'Notify me if available', { act: 'watch-toggle', variant: 'secondary', icon: 'bell', attrs: `data-id="${id}" aria-pressed="${loop.watches.has(id)}"` }) : ''}
         ${PremiumButton('Add to collection', { act: 'add-to-collection', variant: 'secondary', icon: 'folderPlus', attrs: `data-id="${id}"` })}
         ${state.user.role === 'critic' && !myReview ? PremiumButton('Review', { act: 'review', variant: 'secondary', icon: 'pen', attrs: `data-id="${id}"` }) : ''}
         ${isMine(w) && COMMUNITY ? PremiumButton('Edit', { act: 'edit-artwork', variant: 'secondary', icon: 'pen', attrs: `data-id="${id}"` }) : ''}
@@ -1116,8 +1123,8 @@ function renderInquiry(root) {
   const entry = threads.get(id);
   if (cloud && (!entry || (!entry.loading && Date.now() - entry.at > 10_000))) {
     threads.set(id, { loading: true, data: entry?.data });
-    cloud.inquiryThread(id)
-      .then((data) => { threads.set(id, { data, at: Date.now() }); if (data) cloud.markInquiryRead(id).then(loadInbox).catch(() => {}); })
+    Promise.all([cloud.inquiryThread(id), cloud.inquiryOffer ? cloud.inquiryOffer(id).catch(() => null) : null])
+      .then(([data, offer]) => { if (data && offer) data.offer = offer; threads.set(id, { data, at: Date.now() }); if (data) cloud.markInquiryRead(id).then(loadInbox).catch(() => {}); })
       .catch(() => threads.set(id, { data: entry?.data || null, at: Date.now() }))
       .finally(() => { if (route().name === 'inquiry' && route().param === id && !sheetRenderer && !document.activeElement?.matches('textarea')) renderView(); });
   }
@@ -1254,6 +1261,82 @@ function reportError(message, source) {
 }
 window.addEventListener('error', (e) => reportError(e.message, e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : null));
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack?.split('\n')[1]?.trim()));
+
+// ——— Phase 8: the discovery-to-ownership loop ———
+const loop = { watches: new Set(), interests: null, swipes: 0, loaded: false };
+const INTEREST_PROMPT_KEY = 'abremi:interests-prompted';
+
+async function loadLoop() {
+  if (!cloud?.myWatches || !me) return;
+  const [watches, mine] = await Promise.all([cloud.myWatches().catch(() => []), cloud.myInterests().catch(() => null)]);
+  Object.assign(loop, { watches: new Set(watches || []), interests: mine?.interests || {}, loaded: true });
+}
+
+/** A price you can act on: in community mode, only members' works that are available (sample prices aren't real). */
+function listedPrice(w) {
+  if (!COMMUNITY) return w.price;
+  return w.member && w.price > 0 && (!w.availability || w.availability === 'available') ? w.price : null;
+}
+
+function interestPool(pool) {
+  const i = loop.interests || {};
+  const mediums = new Set(i.mediums || []);
+  const regions = new Set(i.regions || []);
+  if (!mediums.size && !regions.size && !i.price_max) return [];
+  return pool.filter((w) => (!mediums.size || mediums.has(w.category))
+    && (!regions.size || regions.has(artistOf(w)?.country))
+    && (!i.price_max || listedPrice(w) == null || listedPrice(w) <= i.price_max));
+}
+
+/** After a few swipes, offer (once) to tailor Discover. Optional, and easy to skip. */
+function maybeAskInterests() {
+  if (!COMMUNITY || !me || !loop.loaded || sheetRenderer || ++loop.swipes < 8) return;
+  const i = loop.interests || {};
+  if ((i.mediums || []).length || (i.regions || []).length || i.price_max) return;
+  try { if (localStorage.getItem(INTEREST_PROMPT_KEY)) return; localStorage.setItem(INTEREST_PROMPT_KEY, '1'); } catch { return; }
+  openSheet(interestsSheet);
+}
+
+function interestsSheet() {
+  const i = loop.interests || {};
+  const mediums = new Set(i.mediums || []);
+  const regions = new Set(i.regions || []);
+  const counts = {};
+  for (const w of catalog()) { const c = artistOf(w)?.country; if (c) counts[c] = (counts[c] || 0) + 1; }
+  const topRegions = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([c]) => c);
+  if (state.user.country && !topRegions.includes(state.user.country)) topRegions.unshift(state.user.country);
+  const chip = (act, v, label, on) => `<button type="button" class="chip${on ? ' is-on' : ''}" data-act="${act}" data-v="${esc(v)}" aria-pressed="${on}">${esc(label)}</button>`;
+  return `<form class="sheet-form" id="interests-form" onsubmit="return false">
+    <p class="eyebrow">Your taste</p><h2 class="display-md" id="modal-title">What would you like to see more of?</h2>
+    <p class="muted">Optional. It shapes your own Discover and the Guide’s suggestions, never the rankings, and you can change it any time from Profile.</p>
+    <h3 class="sub-head">Mediums</h3>
+    <div class="chip-row chip-row-wrap">${Object.entries(DISCOVER_LABELS).map(([k, v]) => chip('interest-toggle', k, v, mediums.has(k))).join('')}</div>
+    <h3 class="sub-head">Where artists are from</h3>
+    <div class="chip-row chip-row-wrap">${topRegions.map((c) => chip('interest-toggle', c, `${flag(c)} ${countryName(c) || c}`, regions.has(c))).join('')}</div>
+    <label class="field"><span>Price limit for works for sale</span><select id="interest-price">
+      ${[['', 'Any price'], ['250', 'Up to $250'], ['500', 'Up to $500'], ['1000', 'Up to $1,000'], ['2500', 'Up to $2,500'], ['5000', 'Up to $5,000'], ['10000', 'Up to $10,000']]
+        .map(([v, l]) => `<option value="${v}"${String(i.price_max || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    <div class="detail-actions">${PremiumButton('Save', { act: 'interests-save' })}${PremiumButton('Not now', { act: 'close-sheet', variant: 'ghost' })}</div>
+  </form>`;
+}
+
+/** New on Abremi: artists who joined in the last 60 days, one recent work each, in a fair daily rotation. */
+function emergingHTML() {
+  if (!COMMUNITY) return '';
+  const cutoff = Date.now() - 60 * 864e5;
+  const day = dayKey();
+  const picks = world.artists.filter((a) => a.member && a.joinedAt > cutoff && !a.isMe)
+    .map((a) => ({ a, w: catalog().filter((x) => x.artistId === a.id).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))[0] }))
+    .filter((x) => x.w)
+    .sort((x, y) => hashString(`${day}:${x.a.id}`) - hashString(`${day}:${y.a.id}`))
+    .slice(0, 8);
+  if (!picks.length) return '';
+  return `<section class="section" id="emerging">
+    ${SectionHeader({ eyebrow: 'New on Abremi', title: 'Emerging artists' })}
+    <p class="muted emerging-note">Artists who joined in the last 60 days, one work each, in a fair daily rotation, not ordered by popularity.</p>
+    ${ArtworkGrid(picks.map(({ w }) => card(w)))}
+  </section>`;
+}
 
 // ——— Phase 7: the Abremi Guide ———
 // One assistant, three modes. Conversations live only in this tab's memory (never saved); the
@@ -1741,8 +1824,8 @@ const SORTS = {
   trending: { label: 'Trending', fn: (a, b) => world.influence[b.id] - world.influence[a.id] },
   new: { label: 'Newest', fn: (a, b) => (b.createdAt || 0) - (a.createdAt || 0) || b.year - a.year || world.influence[b.id] - world.influence[a.id] },
   battle: { label: 'Battle rating', fn: (a, b) => world.eloOf(b) - world.eloOf(a) },
-  priceHigh: { label: 'Price: high to low', fn: (a, b) => b.price - a.price },
-  priceLow: { label: 'Price: low to high', fn: (a, b) => a.price - b.price },
+  priceHigh: { label: 'Price: high to low', fn: (a, b) => (listedPrice(b) ?? -1) - (listedPrice(a) ?? -1) },
+  priceLow: { label: 'Price: low to high', fn: (a, b) => (listedPrice(a) ?? Infinity) - (listedPrice(b) ?? Infinity) },
 };
 
 function renderExplore(root) {
@@ -2133,7 +2216,7 @@ function renderProfile(root) {
 
     ${membershipCardHTML(member.mine, { community: COMMUNITY })}
 
-    <div class="profile-foot">${PremiumButton('About Abremi', { act: 'about', variant: 'ghost' })}${COMMUNITY ? PremiumButton('Send feedback', { act: 'feedback-open', variant: 'ghost' }) : ''}${PremiumButton('Reset demo data', { act: 'reset', variant: 'ghost', attrs: 'data-danger' })}</div>
+    <div class="profile-foot">${PremiumButton('About Abremi', { act: 'about', variant: 'ghost' })}${COMMUNITY && me ? PremiumButton('Your interests', { act: 'interests-open', variant: 'ghost' }) : ''}${COMMUNITY ? PremiumButton('Send feedback', { act: 'feedback-open', variant: 'ghost' }) : ''}${PremiumButton('Reset demo data', { act: 'reset', variant: 'ghost', attrs: 'data-danger' })}</div>
   </div>`;
 
   $('#public-leaderboards', root)?.addEventListener('change', (e) => {
@@ -2616,7 +2699,7 @@ async function signedIn(user) {
   } catch {
     toast('Signed in, but your account could not be loaded. Reload to try again.', { force: true });
   }
-  await loadMembership().catch(() => {});
+  await Promise.all([loadMembership().catch(() => {}), loadLoop()]);
   renderView();
 }
 
@@ -2640,6 +2723,7 @@ function signedOut() {
   Object.assign(careers, { usage: null, exhibitions: null });
   Object.assign(member, { mine: undefined, gallery: undefined, busy: '', planSearch: { query: '', results: null } });
   Object.assign(guide, { threads: { visitor: [], artist: [], collector: [] }, usage: null, prefs: null, error: null, loaded: false, view: 'chat' });
+  Object.assign(loop, { watches: new Set(), interests: null, swipes: 0, loaded: false });
   careers.coach.result = null;
   threads.clear();
   Object.assign(studio, { data: undefined, reports: null, at: 0 });
@@ -2796,7 +2880,7 @@ async function connectCommunity() {
     console.warn('Abremi community unavailable', e);
     toast('Community rankings are offline. Showing the last ones saved.', { duration: 4000 });
   }
-  await Promise.all([loadChartBaseline(), me ? null : loadAchievements(), loadMembership().catch(() => {})]);
+  await Promise.all([loadChartBaseline(), me ? null : loadAchievements(), loadMembership().catch(() => {}), loadLoop()]);
   if (!sheetRenderer) renderView();
   else refresh();
   setInterval(quietRefresh, 90_000);
@@ -2920,6 +3004,64 @@ const ACTIONS = {
   'opportunity-review': async (el) => {
     try { await cloud.reviewOpportunity(el.dataset.id, el.dataset.v === 'approve', null); toast('Done.', { force: true }); await loadAdmin(); loadOpportunities(true); }
     catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
+  },
+  // ——— Phase 8 ———
+  'offer-open': (el) => {
+    if (!me) return openSignIn();
+    const w = world.artworkById[el.dataset.id];
+    openSheet(() => `<form class="sheet-form" id="offer-form" onsubmit="return false">
+      <p class="eyebrow">Make an offer</p><h2 class="display-md" id="modal-title">${esc(w.title)}</h2>
+      <p class="muted">${w.availability === 'on_request' ? 'Price on request.' : `Listed at ${esc(money(w.price))}.`} Your offer goes to the artist as a message. Nothing is charged; you agree the details together.</p>
+      <div class="field-row"><label class="field"><span>Your offer</span><input id="offer-amount" type="number" min="1" step="1" inputmode="numeric" value="${w.price > 0 ? Math.round(w.price) : ''}"></label>
+        <label class="field"><span>Currency</span><input id="offer-currency" maxlength="3" value="USD" autocapitalize="characters"></label></div>
+      <label class="field"><span>Message</span><textarea id="offer-message" rows="3" maxlength="2000">Hello, I love “${esc(w.title)}” and would like to make an offer.</textarea></label>
+      <p class="form-error" id="offer-error" role="alert" hidden></p>
+      <div class="detail-actions">${PremiumButton('Send offer', { act: 'offer-send', attrs: `data-id="${esc(w.id)}"` })}</div></form>`);
+  },
+  'offer-send': async (el) => {
+    const fail = (m) => { const e = $('#offer-error'); e.textContent = m; e.hidden = false; };
+    const amount = Number($('#offer-amount')?.value);
+    const currency = ($('#offer-currency')?.value || '').trim().toUpperCase();
+    const message = ($('#offer-message')?.value || '').trim();
+    if (!(amount > 0)) return fail('Enter your offer.');
+    if (!/^[A-Z]{3}$/.test(currency)) return fail('Use a three-letter currency code, like USD.');
+    if (message.length < 10) return fail('Write a little more (at least 10 characters).');
+    el.disabled = true;
+    try {
+      const id = await cloud.sendOffer(el.dataset.id, amount, currency, message);
+      closeSheet();
+      toast('Offer sent. The artist will reply in your Inbox.', { force: true });
+      loadInbox();
+      location.hash = `inquiry/${id}`;
+    } catch (e) { el.disabled = false; fail(e?.message || 'Could not send it.'); }
+  },
+  'watch-toggle': async (el) => {
+    if (!me) return openSignIn();
+    const id = el.dataset.id;
+    const on = !loop.watches.has(id);
+    try {
+      await cloud.watchArtwork(id, on);
+      if (on) loop.watches.add(id); else loop.watches.delete(id);
+      toast(on ? 'You’ll be told if it becomes available.' : 'Removed from your waitlist.', { force: true });
+      refresh();
+    } catch (e) { toast(e?.message || 'Could not change it.', { force: true }); }
+  },
+  'interests-open': () => (me ? openSheet(interestsSheet) : openSignIn()),
+  'interest-toggle': (el) => { const on = el.getAttribute('aria-pressed') !== 'true'; el.setAttribute('aria-pressed', String(on)); el.classList.toggle('is-on', on); },
+  'interests-save': async (el) => {
+    const picked = $$('#interests-form [data-act=interest-toggle][aria-pressed=true]').map((b) => b.dataset.v);
+    const mediums = picked.filter((v) => /^[a-z]+$/.test(v));
+    const regions = picked.filter((v) => /^[A-Z]{2}$/.test(v));
+    const priceMax = Number($('#interest-price')?.value) || null;
+    el.disabled = true;
+    try {
+      await cloud.setInterests({ mediums, regions, priceMax });
+      loop.interests = { mediums, regions, price_max: priceMax };
+      deck = [];
+      closeSheet();
+      toast('Saved. Discover will lean toward these, with some surprises.', { force: true });
+      renderView();
+    } catch (e) { el.disabled = false; toast(e?.message || 'Could not save that.', { force: true }); }
   },
   // ——— Phase 7: the Guide ———
   'guide-open': () => openGuide(),

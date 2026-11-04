@@ -79,6 +79,7 @@ export function membersToArtists(members = [], artworks = [], storageBase = '') 
       styles: ranked('style').slice(0, 2),
       talent: 0.5,
       debutYear: new Date(Date.parse(m.created_at) || Date.now()).getFullYear(),
+      joinedAt: Date.parse(m.created_at) || 0,
       followers: emptyRoleCounts(),
       palette: hashString(m.id) % PALETTES.length,
       member: true,

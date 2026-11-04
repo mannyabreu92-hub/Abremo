@@ -50,7 +50,7 @@ const fieldsOf = (w) => [w.title, w.style, w.category, categoryLabel[w.category]
 
 /**
  * Chooses the works and artists offered to the model, each with a reason.
- * @param {{ catalog: any, page?: any, personal?: { interests?: string, follows?: string[], saved?: string[], liked?: string[] },
+ * @param {{ catalog: any, page?: any, personal?: { interests?: string, follows?: string[], saved?: string[], liked?: string[], mediums?: string[], regions?: string[] },
  *   messages?: { role: string, content: string }[], mode?: string, limit?: number }} o
  * @returns {{ artworks: any[], artists: any[] }}
  */
@@ -58,6 +58,8 @@ export function selectCandidates({ catalog, page = null, personal = {}, messages
   const terms = queryTerms(messages);
   const interestTerms = queryTerms([{ role: 'user', content: personal.interests || '' }]);
   const followed = new Set(personal.follows || []);
+  const chosenMediums = new Set(personal.mediums || []);
+  const chosenRegions = new Set(personal.regions || []);
   const savedOrLiked = [...(personal.saved || []), ...(personal.liked || [])].map((id) => catalog.byId[id]).filter(Boolean);
   const tasteStyles = new Set(savedOrLiked.map((w) => w.style).filter(Boolean));
   const tasteCats = new Set(savedOrLiked.map((w) => w.category).filter(Boolean));
@@ -81,6 +83,8 @@ export function selectCandidates({ catalog, page = null, personal = {}, messages
     }
     if (pageIds.has(w.id)) { score += 2; why.push(page.type === 'ranking' ? 'in the rankings you’re viewing' : 'in the collection you’re viewing'); }
     if (followed.has(w.artist_id)) { score += 2; why.push('by an artist you follow'); }
+    if (w.category && chosenMediums.has(w.category)) { score += 2; why.push(`${categoryLabel[w.category] || w.category}, a medium you chose`); }
+    if (w.country && chosenRegions.has(w.country)) { score += 1.5; why.push('from a region you chose'); }
     if (w.style && tasteStyles.has(w.style)) { score += 1.5; why.push(`a style you’ve liked (${w.style})`); }
     else if (w.category && tasteCats.has(w.category)) score += 0.5;
     if (w.trending > 0) { score += Math.min(2, w.trending / 10); if (w.trending >= 5) why.push('trending this week'); }

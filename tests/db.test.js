@@ -1322,6 +1322,83 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     as(P[1], `select admin_revoke_plan('${E}')`);
   });
 
+  // ——— Phase 8 (0015): offers, waitlists, alerts, collector interests ———
+  const freeWork = (who) => psql(`select id from artworks where owner_id = '${E}' and not hidden and (release_at is null or release_at <= now())
+      and id not in (select artwork_id from inquiries where sender_id = '${who}' and status = 'open' and artwork_id is not null) order by id limit 1`);
+  await t.test('offers: an amount on a purchase inquiry, with every inquiry rule; only the two people see it', () => {
+    const w = freeWork(C);
+    psql(`update artworks set availability = 'available', price = 500 where id = '${w}'`);
+    fails(C, `select send_offer('${w}', 0, 'EUR', 'I would love to buy this piece.')`, /between 1 and/);
+    fails(C, `select send_offer('${w}', 450, 'dollars', 'I would love to buy this piece.')`, /three-letter currency/);
+    fails(C, `select send_offer('${seed.artworks[0].id}', 450, 'EUR', 'I would love to buy this piece.')`, /Sample artists/);
+    fails('anon', `select send_offer('${w}', 450, 'EUR', 'I would love to buy this piece.')`, /permission denied|Sign in/);
+    const q = as(C, `select send_offer('${w}', 450, 'eur', 'I would love to buy this piece.')`);
+    assert.deepEqual(JSON.parse(as(E, `select inquiry_offer('${q}')`)), { amount: 450, currency: 'EUR' });
+    assert.deepEqual(JSON.parse(as(C, `select inquiry_offer('${q}')`)), { amount: 450, currency: 'EUR' });
+    assert.equal(as(B, `select inquiry_offer('${q}')`), '', 'no one else');
+    assert.match(as(E, `select title from notifications where link = 'inquiry/${q}'`), /made an offer of EUR 450\.00 for “/);
+    noRowsFor(C, `with u as (update inquiries set offer_amount = 1 where id = '${q}' returning 1) select count(*) from u`);
+    psql(`update artworks set availability = 'sold' where id = '${w}'`);
+    const w2 = freeWork(B);
+    psql(`update artworks set availability = 'sold' where id = '${w2}'`);
+    fails(B, `select send_offer('${w2}', 300, 'USD', 'Is this still possible to buy?')`, /isn’t available/);
+  });
+
+  await t.test('waitlists and alerts: treasurers and the waitlist are told when a work becomes available or changes price; never the artist', () => {
+    const w = freeWork(B);
+    psql(`update artworks set availability = 'sold' where id = '${w}'`);
+    as(B, `select watch_artwork('${w}', true)`);
+    as(C, `insert into reactions (artwork_id, kind) values ('${w}', 'super') on conflict do nothing`);
+    fails(B, `select watch_artwork('${seed.artworks[0].id}', true)`, /can’t follow this work/);
+    assert.ok(JSON.parse(as(B, 'select my_watches()')).includes(w));
+    noRowsFor(C, `select count(*) from artwork_watches where user_id = '${B}'`);
+    const alerts = (who) => Number(as(who, `select count(*) from notifications where kind = 'artwork_alert' and link = 'art/${w}'`));
+    psql(`update artworks set availability = 'available' where id = '${w}'`);
+    assert.equal(alerts(B), 1, 'the waitlist');
+    assert.equal(alerts(C), 1, 'treasurers');
+    assert.equal(alerts(E), 0, 'never the artist');
+    assert.match(as(B, `select title from notifications where kind = 'artwork_alert' order by created_at desc limit 1`), /is now available/);
+    psql(`update artworks set price = coalesce(price, 100) + 50 where id = '${w}'`);
+    assert.equal(alerts(B), 2);
+    assert.match(as(C, `select title from notifications where kind = 'artwork_alert' order by created_at desc limit 1`), /has a new price/);
+    as(B, `select watch_artwork('${w}', false)`);
+    assert.equal(JSON.parse(as(B, 'select my_watches()')).includes(w), false);
+  });
+
+  await t.test('drop alerts: members who treasured an artist’s work hear about their drops (followers are told once, as before)', () => {
+    const w = freeWork(A);
+    as(B, `insert into reactions (artwork_id, kind) values ('${w}', 'super') on conflict do nothing`);
+    psql(`delete from follows where user_id = '${B}' and artist_id = 'm_${E}'`);
+    as(P[1], `select admin_grant_plan('${E}', 'elite', current_date + 30)`);
+    put(E, `${E}/p8.webp`); put(E, `${E}/p8-thumb.webp`);
+    const [lot] = publish(E, { image: `${E}/p8.webp`, thumb: `${E}/p8-thumb.webp`, title: 'Lot P8' }).split('|');
+    const drop = as(E, `select create_drop('Night Harbour', '', now() + interval '3 hours', array['${lot}'])`);
+    assert.match(as(B, `select title from notifications where link = 'drop/${drop}'`), /whose work you treasured, announced a drop: “Night Harbour”/);
+    const followers = psql(`select count(*) from notifications n join follows f on f.user_id = n.user_id and f.artist_id = 'm_${E}' where n.link = 'drop/${drop}' group by n.user_id having count(*) > 1`);
+    assert.equal(followers, '', 'no follower is told twice');
+    as(E, `select cancel_drop('${drop}')`);
+    as(P[1], `select admin_revoke_plan('${E}')`);
+  });
+
+  await t.test('collector interests: private to the member, validated, and switched off with personalization', () => {
+    fails('anon', `select set_discovery_interests(array['oil'], array['PT'], 2000)`, /permission denied|Sign in/);
+    fails(B, `select set_discovery_interests(array['oil'], array['PT'], 0)`, /price limit/);
+    as(B, `select set_discovery_interests(array['oil', 'photography', 'Oil!'], array['PT', 'us', 'US'], 2000)`);
+    const mine = JSON.parse(as(B, 'select my_discovery_interests()'));
+    assert.deepEqual(mine.interests.mediums, ['oil', 'photography'], 'only valid mediums');
+    assert.deepEqual(mine.interests.regions, ['PT', 'US']);
+    assert.equal(mine.interests.price_max, 2000);
+    assert.equal(mine.personalize, true);
+    noRowsFor(C, `select count(*) from profiles where id = '${B}' and discovery_interests ? 'mediums'`);
+  });
+
+  await t.test('0015 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0015_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name = 'artwork_watches'`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name = 'artwork_watches'`), '1');
+  });
+
   await t.test('0014 can be undone, and setup.sql re-applies it', () => {
     psql(file('supabase/migrations/down/0014_down.sql'));
     assert.equal(psql(`select count(*) from information_schema.columns where (table_name, column_name) in (('drops', 'teaser_palette'), ('profiles', 'show_plan_badge'))`), '0');

@@ -68,6 +68,7 @@ export function threadPage(q, { thumb = (_id) => '', title = (id) => id } = {}) 
       ${q.artwork ? `<button class="inquiry-thumb" data-act="artwork" data-id="${esc(q.artwork)}">${thumb(q.artwork)}</button>` : ''}
       <div><p class="eyebrow">${esc(INQUIRY_KINDS[q.kind]?.label || q.kind)}${q.artwork ? ` · ${esc(title(q.artwork))}` : ''}</p>
         <h1 class="display-sm">${esc(q.other_name)} <small class="muted">${esc(ROLE_LABEL[q.other_role] || '')}</small></h1>
+        ${q.offer ? `<p class="offer-line">Offer: <b>${esc(q.offer.currency)} ${esc(Number(q.offer.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}</b> · nothing is charged; agree the details here</p>` : ''}
         ${open ? '' : `<p class="tag">${q.status === 'declined' ? 'Declined by the artist' : 'Closed'}</p>`}</div>
     </header>
     <ol class="messages">${q.messages.map((m) => `<li class="message${m.mine ? ' is-mine' : ''}"><p>${esc(m.body)}</p><small>${esc(when(m.at))}</small></li>`).join('')}</ol>

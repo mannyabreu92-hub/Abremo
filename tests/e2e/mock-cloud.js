@@ -360,7 +360,15 @@ window.__abremiCloud = async () => {
       const w = db.uploads.find((u) => u.id === id);
       if (!w || w.owner !== user.id) throw new Error('Not your artwork');
       if (!['available', 'sold', 'not_for_sale', 'on_request'].includes(availability) || description.length > 2000 || dimensions.length > 60) throw new Error('violates check constraint "artworks_details_valid"');
+      const avail = (a) => ['available', 'on_request'].includes(a || 'available');
+      const becameAvailable = avail(availability) && !avail(w.availability);
+      const newPrice = price !== w.price && avail(availability);
       Object.assign(w, { title: title.trim(), category, style, medium, year, price, description: description.trim() || null, dimensions: dimensions.trim() || null, availability });
+      if (becameAvailable || newPrice) { // 0015: tell treasurers and the waitlist
+        const to = new Set([...db.reactions.filter((r) => r.artwork_id === id && r.kind === 'super').map((r) => r.user_id), ...(db.watches || []).filter((x) => x.artwork === id).map((x) => x.user)]);
+        to.delete(w.owner);
+        for (const u of to) (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: u, kind: 'artwork_alert', title: becameAvailable ? `“${w.title}” is now available` : `“${w.title}” has a new price`, link: `art/${id}`, created_at: new Date().toISOString(), read_at: null });
+      }
       save(db);
       return w;
     },
@@ -1170,6 +1178,44 @@ window.__abremiCloud = async () => {
       for (const r of reqs) byMode[r.mode] = (byMode[r.mode] || 0) + 1;
       return { days: 30, messages: reqs.filter((r) => r.ok).length, failed: 0, members: Object.keys(days).length,
         returning: Object.values(days).filter((s) => s.size >= 2).length, by_mode: byMode, events };
+    },
+    // ——— Phase 8 (same rules as 0015) ———
+    async sendOffer(artworkId, amount, currency, message) {
+      if (!(amount > 0 && amount <= 1e7)) throw new Error('Enter an offer between 1 and 10,000,000');
+      if (!/^[A-Za-z]{3}$/.test(currency || '')) throw new Error('Use a three-letter currency code, like USD');
+      const id = await this.sendInquiry({ artworkId, kind: 'purchase', message });
+      const db = load();
+      const q = (db.inquiries || []).find((x) => x.id === id);
+      if (q) { q.offer = { amount: Math.round(amount * 100) / 100, currency: currency.toUpperCase() }; save(db); }
+      return id;
+    },
+    async inquiryOffer(id) {
+      const q = (load().inquiries || []).find((x) => x.id === id);
+      return q && q.offer && [q.sender, q.artist_user].includes(user?.id) ? q.offer : null; // only the two people
+    },
+    async watchArtwork(id, on) {
+      needUser();
+      const db = load();
+      const w = db.uploads.find((u) => u.id === id);
+      if (on && (!w || w.owner === user.id)) throw new Error('You can’t follow this work');
+      db.watches = (db.watches || []).filter((x) => !(x.user === user.id && x.artwork === id));
+      if (on) db.watches.push({ user: user.id, artwork: id });
+      save(db);
+    },
+    async myWatches() {
+      return user ? (load().watches || []).filter((x) => x.user === user.id).map((x) => x.artwork) : [];
+    },
+    async setInterests({ mediums = [], regions = [], priceMax = null }) {
+      needUser();
+      if (priceMax != null && !(priceMax >= 1 && priceMax <= 1e7)) throw new Error('Choose a price limit between 1 and 10,000,000');
+      const db = load();
+      profileOf(db, user.id).discovery_interests = { mediums: mediums.filter((m) => /^[a-z]{2,20}$/.test(m)), regions: [...new Set(regions.map((r) => r.toUpperCase()))].filter((r) => /^[A-Z]{2}$/.test(r)), price_max: priceMax };
+      save(db);
+    },
+    async myInterests() {
+      if (!user) return null;
+      const p = profileOf(load(), user.id);
+      return { interests: p.discovery_interests || {}, personalize: p.assistant_personalize !== false };
     },
     async auditLog() {
       const db = load();

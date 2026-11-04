@@ -161,6 +161,13 @@ test('suggestions follow the request, the page and the member’s own taste, and
   assert.deepEqual(queryTerms([user('Show me the Abstract works by artists in São Paulo')]), ['abstract', 'sao', 'paulo']);
 });
 
+test('chosen mediums and regions lift matching works, with the reason', () => {
+  const catalog = enrichCatalog(CATALOG);
+  const picks = selectCandidates({ catalog, personal: { mediums: ['photography'], regions: ['PT'] }, messages: [user('anything')] });
+  assert.equal(picks.artworks[0].id, 'u_1');
+  assert.match(picks.artworks[0].why, /a medium you chose.*from a region you chose/);
+});
+
 test('suggestions never depend on plans or badges', () => {
   const plain = enrichCatalog(CATALOG);
   const withPlans = enrichCatalog({ ...CATALOG, artists: CATALOG.artists.map((a) => ({ ...a, plan: 'elite', badge: 'Elite', paid: true })) });

@@ -41,8 +41,11 @@ export function createGuide(deps) {
     }
     const finish = (ok) => memberRpc(deps.fetchImpl, db, 'finish_assistant_request', { p_id: ctx.request_id, p_ok: ok }).catch(() => {});
 
+    // The member's chosen interests (mediums, regions), only when they allow personalization.
+    const chosen = await memberRpc(deps.fetchImpl, db, 'my_discovery_interests', {}).catch(() => null);
+    const personal = { ...(ctx.personal || {}), ...(chosen?.personalize ? { mediums: chosen.interests?.mediums || [], regions: chosen.interests?.regions || [] } : {}) };
     const catalog = enrichCatalog(ctx.catalog);
-    const candidates = selectCandidates({ catalog, page: ctx.page, personal: ctx.personal || {}, messages, mode });
+    const candidates = selectCandidates({ catalog, page: ctx.page, personal, messages, mode });
     const context = {
       member: ctx.member,
       page: describePage(ctx.page, catalog),
