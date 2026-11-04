@@ -1,4 +1,4 @@
--- Gabangi community schema
+-- Abremi community schema
 -- Accounts, reactions, follows, reviews and Art Battles shared by everyone.
 --
 -- Security model

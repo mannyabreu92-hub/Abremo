@@ -91,7 +91,7 @@ const mock = readFileSync(path.join(__dirname, 'mock-cloud.js'), 'utf8');
   assert.equal(d.votes[0].role, 'artist');
   step('battle vote recorded by the server');
 
-  await page.evaluate(() => localStorage.removeItem('gabangi:v1'));
+  await page.evaluate(() => localStorage.removeItem('abremi:v1'));
   await page.goto(BASE + '#collections');
   await page.reload();
   await page.waitForFunction(() => /2 works/.test(document.querySelector('.collection-grid')?.textContent || ''));

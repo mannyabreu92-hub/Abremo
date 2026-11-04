@@ -1,8 +1,8 @@
-# Gabangi
+# Abremi
 
 **The Tinder and TikTok of Art.** Instead of matching people, users match with art.
 
-Gabangi is a mobile-first web app where people swipe through paintings, illustrations, sculpture,
+Abremi is a mobile-first web app where people swipe through paintings, illustrations, sculpture,
 photography, NFTs, digital art, street art, AI art and mixed media. Every swipe trains your feed and
 moves the global and country charts. A like counts for more when it comes from a heavier role.
 
@@ -14,12 +14,12 @@ moves the global and country charts. A like counts for more when it comes from a
 npm start         # http://localhost:5173  (zero dependencies, Node 18+)
 npm run check     # syntax check of the UI modules + unit tests
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
-npm run test:db   # Supabase migration + security rules on a real Postgres (set GABANGI_PG)
+npm run test:db   # Supabase migration + security rules on a real Postgres (set ABREMI_PG)
 npm run test:e2e  # sign-in/sync and offline/install/update flows in a browser (needs Playwright and npm start)
 ```
 
 ### Accounts and the shared database
-With no configuration, Gabangi runs in **demo mode**, and everything stays on the visitor's device.
+With no configuration, Abremi runs in **demo mode**, and everything stays on the visitor's device.
 Add a Supabase database and it switches to **community mode**:
 - **Sign-in:** by email link or code.
 - **Shared rankings:** everyone's likes, saves, follows, reviews and battle votes add up into the same rankings.
@@ -29,7 +29,7 @@ Add a Supabase database and it switches to **community mode**:
 Setup takes four steps: see [`supabase/README.md`](supabase/README.md).
 
 ### Install it as an app
-Gabangi is an installable web app (PWA):
+Abremi is an installable web app (PWA):
 - **Android and desktop Chrome/Edge:** an **Install** button in Profile, on the home page and in the menu.
 - **iPhone and iPad:** a short Share → *Add to Home Screen* guide.
 
@@ -51,7 +51,7 @@ Any static file server also works. Open it on a phone, or use the browser's mobi
 | **Collections** (`#collections`) | Your saved, liked and purchased works, plus curated sets by movement and by country. |
 | **Battle** | Art Battles: two random artworks by different artists. You vote, and Elo ratings update. Winners gain points; losers lose only 75% as much. |
 | **Charts** | Top Artworks (the default: artwork first), Top Artists and Battle Champions. Filter by 🌎 Global or any of 12 countries, and by category. Rank movement ▲▼ is measured against the chart from the previous hour. |
-| **Scan** | Artwork recognition: take a photo, and Gabangi guesses the style and medium, then suggests similar artists and works. |
+| **Scan** | Artwork recognition: take a photo, and Abremi guesses the style and medium, then suggests similar artists and works. |
 | **Profile** | Role (Fan / Artist / Critic / Collector), badges, a taste profile, your collection, who you follow, an artist studio (upload, analytics), and plans. |
 
 ### Weighted Influence

@@ -22,14 +22,14 @@ const step = (name) => console.log(`✓ ${name}`);
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 10000 });
   const cached = await page.evaluate(async () => {
     const keys = await caches.keys();
-    const shell = keys.find((k) => k.startsWith('gabangi-shell-'));
+    const shell = keys.find((k) => k.startsWith('abremi-shell-'));
     return { shell, count: (await (await caches.open(shell)).keys()).length };
   });
   assert.ok(cached.count >= 20, `precached ${cached.count} files`);
   step(`service worker installed and precached ${cached.count} files (${cached.shell})`);
 
   const manifest = await page.evaluate(async () => (await fetch(document.querySelector('link[rel=manifest]').href)).json());
-  assert.equal(manifest.short_name, 'Gabangi');
+  assert.equal(manifest.short_name, 'Abremi');
   step('manifest is linked and served');
 
   await context.setOffline(true);
@@ -50,15 +50,15 @@ const step = (name) => console.log(`✓ ${name}`);
   restoreSw = () => fs.writeFileSync(swPath, original);
   fs.writeFileSync(swPath, original.replace(/const VERSION = '[^']+';/, "const VERSION = 'next-deploy';"));
   await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
-  await page.waitForFunction(() => /new version of Gabangi/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
+  await page.waitForFunction(() => /new version of Abremi/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
   await Promise.all([page.waitForEvent('load'), page.click('#toast [data-act=pwa-update]')]);
   await page.waitForSelector('.hero, .swipe-card');
-  const active = await page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('gabangi-shell-')));
+  const active = await page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('abremi-shell-')));
   restoreSw();
-  assert.deepEqual(active, ['gabangi-shell-next-deploy']);
+  assert.deepEqual(active, ['abremi-shell-next-deploy']);
   step('a new deploy shows “Refresh”, reloads into the new version and clears the old cache');
 
-  // iPhone: no install prompt API, so Gabangi explains Share → Add to Home Screen.
+  // iPhone: no install prompt API, so Abremi explains Share → Add to Home Screen.
   const phone = await browser.newContext({ ...devices['iPhone 13'] });
   const ios = await phone.newPage();
   ios.on('pageerror', (e) => errors.push(e.message));
@@ -79,6 +79,22 @@ const step = (name) => console.log(`✓ ${name}`);
   assert.equal(await app.locator('.install-card').count(), 0);
   assert.ok(await app.evaluate(() => document.documentElement.classList.contains('is-standalone')));
   step('installed app hides install prompts');
+
+  // Visitors from before the rename keep their likes and collection.
+  const legacy = await browser.newContext();
+  await legacy.addInitScript(() => {
+    if (!sessionStorage.getItem('seeded')) {
+      sessionStorage.setItem('seeded', '1');
+      localStorage.setItem('gabangi:v1', JSON.stringify({ interactions: { w0: 'super', w5: 'like' }, user: { name: 'Old Friend', role: 'fan', country: 'FR', plan: 'free' } }));
+    }
+  });
+  const old = await legacy.newPage();
+  old.on('pageerror', (e) => errors.push(e.message));
+  await old.goto(BASE + '#collections');
+  await old.waitForFunction(() => /1 work/.test(document.querySelector('.collection-grid')?.textContent || ''));
+  const keys = await old.evaluate(() => [localStorage.getItem('gabangi:v1'), JSON.parse(localStorage.getItem('abremi:v1')).user.name]);
+  assert.deepEqual(keys, [null, 'Old Friend']);
+  step('data saved under the old name moves to Abremi');
 
   assert.deepEqual(errors, []);
   console.log('All app e2e checks passed');

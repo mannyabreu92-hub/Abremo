@@ -1,6 +1,6 @@
 // Database tests: run the Supabase migration on a real Postgres and check the security rules.
-// Skipped unless GABANGI_PG holds psql connection flags, e.g.
-//   GABANGI_PG="-h /tmp/gabangi-pg -p 54329 -U postgres" npm run test:db
+// Skipped unless ABREMI_PG holds psql connection flags, e.g.
+//   ABREMI_PG="-h /tmp/abremi-pg -p 54329 -U postgres" npm run test:db
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -9,9 +9,9 @@ import { battleResult, expectedScore } from '../src/core/elo.js';
 import { buildSeedWorld } from '../src/core/seed.js';
 import { seedSQL, setupSQL } from '../scripts/gen-seed-sql.js';
 
-const flags = process.env.GABANGI_PG?.split(/\s+/).filter(Boolean);
-const skip = !flags && 'set GABANGI_PG to run database tests';
-let DB = `gabangi_test_${process.pid}`;
+const flags = process.env.ABREMI_PG?.split(/\s+/).filter(Boolean);
+const skip = !flags && 'set ABREMI_PG to run database tests';
+let DB = `abremi_test_${process.pid}`;
 const file = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
 function psql(sql, db = DB) {
@@ -62,7 +62,7 @@ function noRowsFor(who, sql) {
 
 for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { skip }, async (t) => {
   assert.notEqual(STUBS['tables exposed by default'], STUBS['tables not exposed by default'], 'strict stub must differ');
-  DB = `gabangi_test_${process.pid}_${mode.startsWith('tables exposed') ? 'open' : 'strict'}`;
+  DB = `abremi_test_${process.pid}_${mode.startsWith('tables exposed') ? 'open' : 'strict'}`;
   psql(`drop database if exists ${DB}`, 'postgres');
   psql(`create database ${DB}`, 'postgres');
   t.after(() => psql(`drop database if exists ${DB}`, 'postgres'));

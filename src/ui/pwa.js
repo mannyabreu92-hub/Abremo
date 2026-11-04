@@ -21,7 +21,7 @@ export function initPWA(hooks) {
   });
   window.addEventListener('appinstalled', () => {
     deferredPrompt = null;
-    hooks.toast('Gabangi is on your home screen', { force: true });
+    hooks.toast('Abremi is on your home screen', { force: true });
     hooks.onChange();
   });
   window.matchMedia('(display-mode: standalone)').addEventListener?.('change', () => {
@@ -42,7 +42,7 @@ export function initPWA(hooks) {
   if ('serviceWorker' in navigator && secure) {
     const offerUpdate = (worker) => {
       waitingWorker = worker;
-      hooks.toast('A new version of Gabangi is ready', { action: 'Refresh', act: 'pwa-update', duration: 12000, force: true });
+      hooks.toast('A new version of Abremi is ready', { action: 'Refresh', act: 'pwa-update', duration: 12000, force: true });
     };
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (updateRequested) location.reload(); // only after the person asked; first installs claim silently

@@ -1,4 +1,4 @@
-# Gabangi: Investor Pitch
+# Abremi: Investor Pitch
 
 **"The Tinder and TikTok of Art."**
 
@@ -7,8 +7,8 @@ global rankings, and build reputation through a weighted influence system powere
 collectors and fans.
 
 ## The insight
-Tinder made finding people addictive. TikTok made finding videos addictive. **Gabangi makes finding art addictive.**
-Most art platforms focus on artists. Gabangi focuses on *discovery*.
+Tinder made finding people addictive. TikTok made finding videos addictive. **Abremi makes finding art addictive.**
+Most art platforms focus on artists. Abremi focuses on *discovery*.
 
 ## Why it could win
 - Art discovery is broken
