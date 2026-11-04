@@ -1189,6 +1189,10 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
       'plan_badges', 'public_collection', 'record_events'];
     const unexpected = anonCan.filter((f) => !PUBLIC_FUNCTIONS.includes(f));
     assert.deepEqual(unexpected, [], 'privileged functions guests can run that aren’t on the public list');
+    // Every moderator function checks is_admin() itself (the app hiding a button is not a permission).
+    assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.prosecdef and p.proname ~ '^(admin_|review_|resolve_|decide_|revoke_role$|create_competition$|cancel_competition$)'
+        and p.prosrc !~ 'is_admin\\(\\)'`), '', 'moderator functions without an is_admin() check');
   });
 
   await t.test('0012 can be undone, and setup.sql re-applies it', () => {

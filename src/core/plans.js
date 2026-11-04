@@ -41,7 +41,7 @@ export function planBenefits(p) {
   out.push(p.analytics_days >= 365 ? 'Analytics for up to a year' : 'Analytics for up to 90 days');
   out.push(`${p.max_upcoming_drops} upcoming drop${p.max_upcoming_drops === 1 ? '' : 's'} at a time`);
   if (p.priority_review) out.push('Exhibitions reviewed first for your Passport');
-  if (p.badge) out.push(`A ${p.badge} badge on your artist page`);
+  if (p.badge) out.push(`${/^[AEIOU]/.test(p.badge) ? 'An' : 'A'} ${p.badge} badge on your artist page`);
   return out;
 }
 

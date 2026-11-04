@@ -16,7 +16,7 @@ export function plansPage({ community, signedIn, mine, payments, gallery, busy =
   const current = mine?.plan?.code || 'free';
   const verifiedGallery = gallery?.status === 'verified';
   const status = mine && current !== 'free'
-    ? `<p class="plan-status">${Icon('check', { size: 16 })} You’re on <b>${esc(mine.plan.name)}</b>${mine.ends_at ? ` until ${esc(day(mine.ends_at))}` : ''}${mine.source === 'grant' ? ', granted by Abremi' : ''}.
+    ? `<p class="plan-status">${Icon('check', { size: 16 })} <span>You’re on <b>${esc(mine.plan.name)}</b>${mine.ends_at ? ` until ${esc(day(mine.ends_at))}` : ''}${mine.source === 'grant' ? ', granted by Abremi' : ''}.</span>
        ${mine.manage ? PremiumButton(busy === 'manage' ? 'Opening…' : 'Manage or cancel', { act: 'plan-manage', variant: 'ghost', attrs: busy ? 'disabled' : '' }) : ''}</p>`
     : '';
   const action = (p) => {
@@ -84,7 +84,7 @@ export function galleryPageHTML(g, { signedIn = false, artist = false } = {}) {
   return `<div class="shell gallery-page">
     <header class="page-head"><p class="eyebrow">${Icon('check', { size: 14 })} Verified gallery${g.verified_at ? ` since ${esc(day(g.verified_at))}` : ''}</p>
       <h1 class="display-lg">${esc(g.name)}</h1>
-      <p class="muted">${esc(g.city)} · <span class="flag">${flag(g.country)}</span> ${esc(countryName(g.country))}</p>
+      <p class="muted">${esc(g.city)} · <span class="flag">${flag(g.country)}</span> ${esc(countryName(g.country) || g.country)}</p>
       ${g.bio ? `<p class="lede">${esc(g.bio)}</p>` : ''}
       <a class="btn btn-secondary" href="${esc(g.website)}" target="_blank" rel="noopener noreferrer nofollow"><span>Visit their website</span>${Icon('arrow', { size: 16 })}</a></header>
     <section class="section section-tight">${SectionHeader({ eyebrow: 'Open now', title: 'Opportunities' })}
