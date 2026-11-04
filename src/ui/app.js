@@ -10,6 +10,10 @@ import { createWorld } from '../core/world.js';
 import { mulberry32 } from '../core/random.js';
 import { artSVG } from './art.js';
 import { loadState, saveState, resetState } from './store.js';
+import { createSupabaseCloud } from './cloud.js';
+import { initPWA } from './pwa.js';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
+import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions } from '../core/community.js';
 import {
   esc, fmt, money, flag, countryName, initials, Icon, ArtImage, Avatar, PremiumButton, IconButton,
   ArtworkCard, ArtworkGrid, FeaturedArtwork, ArtistCard, CategoryFilter, Select, SearchBar,
@@ -19,7 +23,26 @@ import {
 // ——— State ———
 const seed = buildSeedWorld();
 let state = loadState();
-let world = createWorld(seed, state);
+
+// Community mode: everyone's likes, follows and votes are shared through Supabase.
+// Demo mode (no configuration): everything stays on this device, exactly as before.
+const COMMUNITY = Boolean(window.__gabangiCloud || (SUPABASE_URL && SUPABASE_ANON_KEY));
+let cloud = null; // backend adapter, once connected
+let me = null; // signed-in account { id, email }
+let pendingWrites = 0;
+let pwa = null; // install + offline support, set up after the first render's helpers exist
+const auth = { stage: 'email', email: '', busy: false, error: '' };
+if (COMMUNITY) state.community ||= emptyCommunity();
+
+/** What the rankings are computed from: this device's actions, or the whole community's. */
+function viewState() {
+  if (!COMMUNITY) return state;
+  const c = state.community;
+  return { ...state, deltas: c.deltas, elo: c.elo, followerDeltas: c.followerDeltas };
+}
+/** Signed-in members and demo users move the rankings; guests in community mode do not. */
+const counts = () => !COMMUNITY || Boolean(me);
+let world = createWorld(seed, viewState());
 const rng = mulberry32((Date.now() ^ 0x9e3779b9) >>> 0);
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -38,7 +61,7 @@ let scanning = false;
 
 function commit() {
   if (!saveState(state)) toast('Storage is full — some changes may not persist.');
-  world = createWorld(seed, state);
+  world = createWorld(seed, viewState());
 }
 
 // ——— Helpers ———
@@ -52,12 +75,30 @@ const card = (w, extra) => ArtworkCard(w, cardCtx(w, extra));
 const catalog = () => world.artworks.filter((a) => a.artistId !== 'me');
 const coverOf = (artistId) => (world.worksByArtist[artistId] || []).slice().sort((a, b) => world.influence[b.id] - world.influence[a.id])[0];
 
-function toast(msg) {
+function toast(msg, { action, act, duration = 2400, force = false } = {}) {
+  // A prompt with a button stays readable for a moment instead of being replaced by routine messages.
+  if (!action && !force && Date.now() < (toast.holdUntil || 0)) return;
+  toast.holdUntil = action ? Date.now() + 2500 : 0;
   const t = $('#toast');
   t.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.dataset.act = act;
+    b.textContent = action;
+    t.append(b);
+  }
+  t.classList.toggle('has-action', Boolean(action));
   t.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove('show'), 2400);
+  toast.timer = setTimeout(() => t.classList.remove('show', 'has-action'), action ? Math.max(duration, 5000) : duration);
+}
+
+/** Once per visit, remind guests that their votes only count after signing in. */
+function nudgeSignIn(what = 'likes') {
+  if (!COMMUNITY || me || nudgeSignIn.done) return;
+  nudgeSignIn.done = true;
+  toast(`Sign in so your ${what} count in the rankings`, { action: 'Sign in', act: 'sign-in' });
 }
 
 // ——— Modal ———
@@ -106,8 +147,17 @@ function renderView() {
     if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
   const r = role();
-  $('#nav-profile').innerHTML = `<span class="avatar avatar-sm avatar-me">${esc(initials(state.user.name))}</span><span class="nav-role">${r.label} <b>×${r.weight}</b></span>`;
+  const navProfile = $('#nav-profile');
+  if (COMMUNITY && !me) {
+    navProfile.innerHTML = '<span class="nav-signin">Sign in</span>';
+    navProfile.dataset.act = 'sign-in';
+  } else {
+    navProfile.innerHTML = `<span class="avatar avatar-sm avatar-me">${esc(initials(state.user.name))}</span><span class="nav-role">${r.label} <b>×${r.weight}</b></span>`;
+    delete navProfile.dataset.act;
+  }
   updateNotificationDot();
+  const menuInstall = $('#menu-install');
+  if (menuInstall) menuInstall.hidden = !pwa?.status().available;
   VIEWS[name]($('#view'));
 }
 
@@ -130,8 +180,24 @@ function navigate() {
 }
 
 // ——— Reactions (like / save / pass) ———
+/** Where a contribution is tallied: this device (demo), the community (members), or nowhere (guests). */
 function ensureDelta(id) {
-  return (state.deltas[id] ||= { likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } });
+  const target = !COMMUNITY ? state.deltas : me ? state.community.deltas : null;
+  if (!target) return { likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } };
+  return (target[id] ||= { likes: emptyRoleCounts(), saves: emptyRoleCounts(), reviews: { count: 0, ratingSum: 0 } });
+}
+
+/** Send a write to the server; on failure, say so and reload the truth. */
+function remote(task, failMessage = 'Could not save that. Check your connection.') {
+  if (!cloud || !me) return;
+  pendingWrites++;
+  Promise.resolve()
+    .then(task)
+    .catch((e) => {
+      toast(e?.message && !/fetch|network/i.test(e.message) ? e.message : failMessage);
+      return resync();
+    })
+    .finally(() => { pendingWrites--; });
 }
 
 /** Move an artwork between none / like / super / pass, keeping influence deltas exact. */
@@ -158,6 +224,10 @@ function setReaction(art, next) {
     delete state.interactionRoles[id];
   }
   commit();
+  if (COMMUNITY && !art.image) {
+    if (me) remote(() => cloud.setReaction(id, next || null));
+    else if (next === 'like' || next === 'super') nudgeSignIn('likes');
+  }
 }
 
 function react(art, kind) {
@@ -170,7 +240,9 @@ function react(art, kind) {
   setReaction(art, next);
   deck = deck.filter((d) => d.artwork.id !== art.id);
   if (next === 'super') toast(`Saved “${art.title}” to your collection`);
-  else if (next === 'like') toast(`Liked · +${ROLE_WEIGHTS[state.user.role]} influence`);
+  else if (next === 'like') {
+    toast(counts() ? `Liked · +${ROLE_WEIGHTS[state.user.role]} influence` : 'Liked');
+  }
   syncReactionButtons(art.id);
 }
 
@@ -213,10 +285,12 @@ function renderHome(root) {
           <a class="btn btn-primary btn-lg" href="#discover"><span>Start discovering</span>${Icon('arrow', { size: 18 })}</a>
           <a class="btn btn-secondary btn-lg" href="#battle"><span>Enter an Art Battle</span></a>
         </div>
+        ${pwa?.status().available ? `<button class="link-arrow get-app" data-act="pwa-install">${Icon('download', { size: 16 })} Get the Gabangi app</button>` : ''}
         <dl class="hero-stats">
           <div><dt>Works</dt><dd>${totals.works}</dd></div>
           <div><dt>Artists</dt><dd>${totals.artists}</dd></div>
           <div><dt>Countries</dt><dd>${totals.countries}</dd></div>
+          ${COMMUNITY && state.community?.members ? `<div><dt>Members</dt><dd>${fmt(state.community.members)}</dd></div>` : ''}
         </dl>
       </div>
       <div class="hero-visual" aria-label="Top works this hour">
@@ -309,7 +383,7 @@ function discoverPanelHTML(entry) {
       ${PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${w.id}"` })}
       ${state.user.role === 'critic' ? PremiumButton('Write review', { act: 'review', variant: 'ghost', icon: 'pen', attrs: `data-id="${w.id}"` }) : ''}
     </div>
-    <p class="fine">Your ${role().label.toLowerCase()} vote counts ×${role().weight}. Use ← → to pass or like, and ↑ to save.</p>`;
+    <p class="fine">${counts() ? `Your ${role().label.toLowerCase()} vote counts ×${role().weight}.` : '<button class="link" data-act="sign-in">Sign in</button> so your likes count in the rankings.'} Use ← → to pass or like, and ↑ to save.</p>`;
 }
 
 function renderDiscover(root) {
@@ -583,11 +657,32 @@ function vote(i) {
   const wr = world.eloOf(winner), lr = world.eloOf(loser);
   const res = battleResult(wr, lr, state.user.role);
   const crowd = Math.round(expectedScore(wr, lr) * 100);
-  state.elo[winner.id] = res.winner;
-  state.elo[loser.id] = res.loser;
+  const ratings = !COMMUNITY ? state.elo : me ? state.community.elo : null; // guests' votes are not recorded
+  if (ratings) {
+    ratings[winner.id] = res.winner;
+    ratings[loser.id] = res.loser;
+  }
   state.battles.voted++;
   state.battles.streak = crowd >= 50 ? state.battles.streak + 1 : 0;
   commit();
+  if (COMMUNITY && me) {
+    // The server is the referee: it applies the same maths and returns the official ratings.
+    pendingWrites++;
+    cloud.vote(winner.id, loser.id)
+      .then((r) => {
+        state.community.elo[winner.id] = r.winner_rating;
+        state.community.elo[loser.id] = r.loser_rating;
+        commit();
+      })
+      .catch((e) => {
+        state.community.elo[winner.id] = wr;
+        state.community.elo[loser.id] = lr;
+        state.battles.voted--;
+        commit();
+        toast(e?.message || 'Your vote was not counted. Try again.');
+      })
+      .finally(() => { pendingWrites--; });
+  } else if (COMMUNITY) nudgeSignIn('votes');
   battleOutcome = { winner: i, res, crowd };
   const arena = $('.arena');
   if (arena) arena.outerHTML = battleArenaHTML(arena.classList.contains('arena-compact'));
@@ -853,6 +948,8 @@ function renderProfile(root) {
   const canAnalyze = hasFeature(state.user.plan, 'whoLiked');
 
   root.innerHTML = `<div class="shell profile">
+    ${accountCardHTML()}
+    ${installCardHTML()}
     <header class="profile-hero">
       <span class="avatar avatar-xl avatar-me">${esc(initials(state.user.name))}</span>
       <div class="profile-id">
@@ -875,8 +972,9 @@ function renderProfile(root) {
       <section class="panel">
         <h3 class="sub-head">Role</h3>
         <div class="role-grid">${ROLES.map((r) => `<button class="role-card${r.id === state.user.role ? ' is-on' : ''}" data-act="set-role" data-v="${r.id}" aria-pressed="${r.id === state.user.role}">
-          <span class="role-top"><b>${r.label}</b><span class="role-weight">×${r.weight}</span></span><small>${esc(r.blurb)}</small></button>`).join('')}</div>
-        <p class="fine">Demo: switch roles freely. In production, Critic and Collector status requires verification.</p>
+          <span class="role-top"><b>${r.label}</b><span class="role-weight">×${r.weight}</span></span><small>${esc(r.blurb)}</small>
+          ${COMMUNITY && (r.id === 'critic' || r.id === 'collector') && r.id !== state.user.role ? '<span class="role-lock">Verification required</span>' : ''}</button>`).join('')}</div>
+        <p class="fine">${COMMUNITY ? 'Fan and Artist are open to everyone. Critic and Collector carry more weight, so they are granted after verification.' : 'Demo: switch roles freely. In production, Critic and Collector status requires verification.'}</p>
       </section>
 
       <section class="panel">
@@ -934,8 +1032,19 @@ function renderProfile(root) {
     <div class="profile-foot">${PremiumButton('About Gabangi', { act: 'about', variant: 'ghost' })}${PremiumButton('Reset demo data', { act: 'reset', variant: 'ghost', attrs: 'data-danger' })}</div>
   </div>`;
 
-  $('#name', root).addEventListener('change', (e) => { state.user.name = e.target.value.trim() || 'You'; commit(); renderView(); });
-  $('#country', root).addEventListener('change', (e) => { state.user.country = e.target.value; commit(); toast(`You’re now on the ${countryName(e.target.value)} leaderboard`); renderView(); });
+  $('#name', root).addEventListener('change', (e) => {
+    state.user.name = e.target.value.trim().slice(0, 40) || 'You';
+    commit();
+    remote(() => cloud.updateProfile({ name: state.user.name }));
+    renderView();
+  });
+  $('#country', root).addEventListener('change', (e) => {
+    state.user.country = e.target.value;
+    commit();
+    remote(() => cloud.updateProfile({ country: state.user.country }));
+    toast(`You’re now on the ${countryName(e.target.value)} leaderboard`);
+    renderView();
+  });
   const form = $('#upload', root);
   if (form) {
     form.addEventListener('submit', onUpload);
@@ -1078,6 +1187,242 @@ function closePopovers() {
   $$('[aria-haspopup]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
 }
 
+// ——— Install as an app ———
+function installCardHTML() {
+  const st = pwa?.status();
+  if (!st?.available) return '';
+  return `<section class="install-card">
+    <img src="icons/icon-192.png" alt="" width="56" height="56" class="install-icon">
+    <div><p class="eyebrow">Gabangi app</p><p><b>Put Gabangi on your home screen</b></p>
+    <p class="muted">Full screen, one tap away, and it works offline.</p></div>
+    ${PremiumButton(st.canPrompt ? 'Install' : 'How to install', { act: 'pwa-install', variant: 'secondary', icon: 'download' })}
+  </section>`;
+}
+
+function iosInstallSheet() {
+  return `<div class="install-guide">
+    <p class="eyebrow">Install Gabangi</p>
+    <h2 class="display-md" id="modal-title">Add it to your Home Screen</h2>
+    <ol class="steps">
+      <li><span class="step-icon">${Icon('share', { size: 22 })}</span><div><b>Tap Share</b><small>The square with an arrow, in Safari’s toolbar. On iPad it’s at the top.</small></div></li>
+      <li><span class="step-icon">${Icon('plusSquare', { size: 22 })}</span><div><b>Choose “Add to Home Screen”</b><small>Scroll down the list if you don’t see it.</small></div></li>
+      <li><span class="step-icon"><img src="icons/icon-192.png" alt="" width="26" height="26"></span><div><b>Tap Add</b><small>Gabangi opens full screen, like any other app.</small></div></li>
+    </ol>
+    <p class="fine">Don’t see Share? Open <b>gabangi.vercel.app</b> in Safari. Apps like Instagram use their own browser, which can’t install apps.</p>
+  </div>`;
+}
+
+// ——— Accounts & community sync ———
+function refreshSheet() {
+  if (sheetRenderer) $('#sheet-body').innerHTML = sheetRenderer();
+}
+
+function openSignIn() {
+  if (!COMMUNITY) return;
+  if (!cloud) return toast('Connecting to Gabangi… try again in a moment.');
+  if (me) { location.hash = 'profile'; return; }
+  Object.assign(auth, { error: '', busy: false });
+  if (auth.stage !== 'sent') auth.stage = 'email';
+  openSheet(signInSheet);
+}
+
+function signInSheet() {
+  if (auth.stage === 'sent') {
+    return `<div class="auth">
+      <p class="eyebrow">Check your inbox</p>
+      <h2 class="display-md" id="modal-title">One tap to sign in</h2>
+      ${pwa?.status().standalone
+        ? `<p class="muted">We emailed <b>${esc(auth.email)}</b>. Type the code from the email below. In the home-screen app, the link would open your browser instead.</p>`
+        : `<p class="muted">We sent a sign-in link to <b>${esc(auth.email)}</b>. Open it on this device and you’re in.</p>`}
+      <label class="field"><span>Or enter the code from the email</span>
+        <input id="auth-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456"></label>
+      ${auth.error ? `<p class="form-error" role="alert">${esc(auth.error)}</p>` : ''}
+      <div class="detail-actions">
+        ${PremiumButton(auth.busy ? 'Checking…' : 'Verify code', { act: 'verify-code', attrs: auth.busy ? 'disabled' : '' })}
+        ${PremiumButton('Use a different email', { act: 'auth-back', variant: 'ghost' })}
+      </div>
+      <p class="fine">No email after a minute? Check spam, or go back and send it again.</p>
+    </div>`;
+  }
+  const local = Object.values(state.interactions).filter((k) => k === 'like' || k === 'super').length;
+  return `<div class="auth">
+    <p class="eyebrow">Join Gabangi</p>
+    <h2 class="display-md" id="modal-title">Make your taste count</h2>
+    <p class="muted">Members’ likes, saves, follows and battle votes shape the global rankings. Sign in with your email. There’s no password to remember.</p>
+    <label class="field"><span>Email</span>
+      <input id="auth-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" value="${esc(auth.email)}"></label>
+    ${auth.error ? `<p class="form-error" role="alert">${esc(auth.error)}</p>` : ''}
+    <div class="detail-actions">${PremiumButton(auth.busy ? 'Sending…' : 'Email me a sign-in link', { act: 'send-link', size: 'lg', attrs: auth.busy ? 'disabled' : '' })}</div>
+    ${local ? `<p class="fine">The ${local} work${local === 1 ? '' : 's'} you liked or saved on this device will be added to your account.</p>` : ''}
+  </div>`;
+}
+
+async function sendLink() {
+  const email = ($('#auth-email')?.value || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    Object.assign(auth, { error: 'Enter a valid email address.' });
+    return refreshSheet();
+  }
+  Object.assign(auth, { email, busy: true, error: '' });
+  refreshSheet();
+  try {
+    await cloud.sendLink(email);
+    Object.assign(auth, { stage: 'sent', busy: false });
+  } catch (e) {
+    Object.assign(auth, { busy: false, error: /rate|seconds/i.test(e?.message || '') ? 'Too many emails requested. Wait a minute, then try again.' : e?.message || 'Could not send the email. Try again.' });
+  }
+  refreshSheet();
+}
+
+async function verifyCode() {
+  const code = ($('#auth-code')?.value || '').replace(/\s/g, '');
+  if (!/^\d{6,10}$/.test(code)) {
+    Object.assign(auth, { error: 'Enter the code from the email.' });
+    return refreshSheet();
+  }
+  Object.assign(auth, { busy: true, error: '' });
+  refreshSheet();
+  try {
+    const user = await cloud.verifyCode(auth.email, code);
+    await signedIn(user);
+  } catch (e) {
+    Object.assign(auth, { busy: false, error: /expired|invalid/i.test(e?.message || '') ? 'That code is invalid or has expired.' : e?.message || 'Could not verify the code.' });
+    refreshSheet();
+  }
+}
+
+async function signedIn(user) {
+  if (!user || me?.id === user.id) return;
+  me = user;
+  Object.assign(auth, { stage: 'email', busy: false, error: '' });
+  closeSheet();
+  try {
+    const imported = await syncAccount({ importGuest: true });
+    toast(imported ? `Welcome. ${imported} item${imported === 1 ? '' : 's'} from this device added to your account.` : 'Welcome to Gabangi. Your votes now count.', { force: true, duration: 3500 });
+  } catch {
+    toast('Signed in, but your account could not be loaded. Reload to try again.', { force: true });
+  }
+  renderView();
+}
+
+async function signOut() {
+  try { await cloud.signOut(); } catch { /* already signed out */ }
+  signedOut();
+  toast('Signed out', { force: true });
+}
+
+function signedOut() {
+  me = null;
+  Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
+  state.user = { ...state.user, role: 'fan', name: 'You' };
+  deck = [];
+  commit();
+  renderView();
+}
+
+/** Load the member's profile and own rows; optionally add what they did as a guest first. */
+async function syncAccount({ importGuest = false } = {}) {
+  const profile = await cloud.profile();
+  let mine = await cloud.mine();
+  let imported = 0;
+  if (importGuest) {
+    const extra = guestContributions(state, mine, {
+      artworkIds: new Set(seed.artworks.map((w) => w.id)),
+      artistIds: new Set(seed.artists.map((a) => a.id)),
+    });
+    imported = extra.reactions.filter((r) => r.kind !== 'pass').length + extra.follows.length;
+    if (extra.reactions.length || extra.follows.length) {
+      await cloud.importGuest(extra);
+      mine = await cloud.mine();
+    }
+  }
+  Object.assign(state, mineToState(mine));
+  state.user = { ...state.user, name: profile.name, country: profile.country, role: profile.role };
+  state.account = { id: me.id, email: me.email };
+  deck = [];
+  await refreshCommunity();
+  return imported;
+}
+
+async function refreshCommunity() {
+  if (!cloud) return;
+  if (pendingWrites > 0) return; // don't overwrite changes still on their way to the server
+  const snap = await cloud.snapshot();
+  if (pendingWrites > 0) return;
+  state.community = snapshotToCommunity(snap);
+  commit();
+}
+
+/** After a failed write, reload what the server actually has. */
+async function resync() {
+  if (!cloud) return;
+  try {
+    if (me) await syncAccount();
+    else await refreshCommunity();
+  } catch { /* offline: keep what we have */ }
+  refresh();
+}
+
+async function connectCommunity() {
+  if (!COMMUNITY) return;
+  try {
+    cloud = window.__gabangiCloud ? await window.__gabangiCloud() : await createSupabaseCloud(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const hadTokens = /access_token|error_description/.test(location.hash);
+    const errorText = hadTokens ? new URLSearchParams(location.hash.slice(1)).get('error_description') : null;
+    const user = await cloud.init();
+    if (hadTokens) history.replaceState(null, '', `${location.pathname}${location.search}#home`);
+    if (errorText) toast(/expired/i.test(errorText) ? 'That sign-in link has expired. Request a new one.' : errorText, { duration: 5000 });
+    if (user) {
+      const switched = state.account && state.account.id !== user.id;
+      me = user;
+      await syncAccount({ importGuest: !state.account || switched });
+      if (hadTokens) toast('Welcome to Gabangi. Your votes now count.');
+    } else {
+      if (state.account) signedOut(); // session expired elsewhere
+      await refreshCommunity();
+    }
+    cloud.onAuth((u, event) => {
+      if (event === 'SIGNED_OUT' && me) signedOut();
+      else if (u && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && me?.id !== u.id) signedIn(u);
+    });
+  } catch (e) {
+    console.warn('Gabangi community unavailable', e);
+    toast('Community rankings are offline. Showing the last ones saved.', { duration: 4000 });
+  }
+  if (!sheetRenderer) renderView();
+  else refresh();
+  const quietRefresh = () => {
+    if (document.hidden || !cloud) return;
+    refreshCommunity()
+      .then(() => {
+        const passive = ['home', 'charts', 'explore', 'artists', 'collections'].includes(currentView());
+        if (passive && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
+      })
+      .catch(() => {});
+  };
+  setInterval(quietRefresh, 90_000);
+  document.addEventListener('visibilitychange', quietRefresh);
+}
+
+function accountCardHTML() {
+  const members = state.community?.members || 0;
+  if (!COMMUNITY) {
+    return `<section class="account-card"><div><p class="eyebrow">Demo mode</p><p class="muted">Everything you do is saved on this device only.</p></div></section>`;
+  }
+  if (!me) {
+    return `<section class="account-card is-invite">
+      <div><p class="eyebrow">Community</p><h3 class="display-sm">Make your taste count</h3>
+      <p class="muted">Sign in so your likes, saves, follows and battle votes count in the global rankings${members ? `, alongside ${fmt(members)} member${members === 1 ? '' : 's'}` : ''}.</p></div>
+      ${PremiumButton('Sign in with email', { act: 'sign-in', size: 'lg' })}
+    </section>`;
+  }
+  return `<section class="account-card">
+    <div><p class="eyebrow">Signed in</p><p><b>${esc(me.email || 'Member')}</b></p>
+    <p class="muted">Synced with the community${members ? ` · ${fmt(members)} member${members === 1 ? '' : 's'}` : ''}</p></div>
+    ${PremiumButton('Sign out', { act: 'sign-out', variant: 'secondary' })}
+  </section>`;
+}
+
 // ——— Actions ———
 const ACTIONS = {
   swipe: (el) => decide(el.dataset.dir),
@@ -1107,19 +1452,26 @@ const ACTIONS = {
     d.reviews.ratingSum += rating;
     state.taste = updateTaste(state.taste, world.artworkById[id], 'review');
     commit();
+    remote(() => cloud.addReview(id, rating, text), 'Your review was not published. Try again.');
     toast(`Review published · +${ROLE_WEIGHTS.critic * 2 * (rating / 5)} influence`);
     openSheet(() => artworkSheet(id), { wide: true });
     renderView();
   },
   follow: (el) => {
     const id = el.dataset.id;
-    if (state.follows[id]) delete state.follows[id];
-    else {
+    const tally = COMMUNITY && me ? (state.community.followerDeltas[id] ||= emptyRoleCounts()) : null;
+    if (state.follows[id]) {
+      if (tally) tally[state.follows[id]] = Math.max(0, (tally[state.follows[id]] || 0) - 1);
+      delete state.follows[id];
+    } else {
       state.follows[id] = state.user.role;
+      if (tally) tally[state.user.role]++;
       state.taste = { ...state.taste, artists: { ...state.taste.artists, [id]: (state.taste.artists[id] || 0) + 1.5 } };
       toast(`Following ${world.artistById[id].name}`);
+      if (COMMUNITY && !me) setTimeout(() => nudgeSignIn('follows'), 2500);
     }
     commit();
+    if (COMMUNITY && me && !world.artistById[id]?.isMe) remote(() => cloud.setFollow(id, Boolean(state.follows[id])));
     refresh();
   },
   sponsor: (el) => {
@@ -1161,7 +1513,25 @@ const ACTIONS = {
   'open-style': (el) => { Object.assign(explore, { style: el.dataset.v, country: '', category: '', limit: 24 }); location.hash = 'explore'; },
   'open-country': (el) => { Object.assign(explore, { country: el.dataset.v, style: '', category: '', limit: 24 }); location.hash = 'explore'; },
   'set-role': (el) => {
-    state.user.role = el.dataset.v;
+    const next = el.dataset.v;
+    if (next === state.user.role) return;
+    if (COMMUNITY) {
+      if (!me) return openSignIn();
+      if (next === 'critic' || next === 'collector') {
+        return toast(`${next === 'critic' ? 'Critic' : 'Collector'} status needs verification, so your votes stay trustworthy. Applications open soon.`, { duration: 4000 });
+      }
+      const before = state.user.role;
+      state.user.role = next;
+      commit();
+      renderView();
+      pendingWrites++;
+      cloud.updateProfile({ role: next })
+        .then(() => toast(`You’re now a ${role().label}. Your votes count ×${role().weight}.`))
+        .catch((e) => { state.user.role = before; commit(); renderView(); toast(e?.message || 'Could not change your role.'); })
+        .finally(() => { pendingWrites--; });
+      return;
+    }
+    state.user.role = next;
     commit();
     toast(`You’re now a ${role().label}. Your votes count ×${role().weight}.`);
     renderView();
@@ -1178,12 +1548,27 @@ const ACTIONS = {
     if (!deck.length) toast('You have liked or saved every work here. Try another medium.');
   },
   reset: () => {
-    if (!confirm('Reset all demo data on this device?')) return;
+    if (!confirm(COMMUNITY ? 'Clear the data stored on this device? Your account is not affected.' : 'Reset all demo data on this device?')) return;
+    const community = state.community;
     state = resetState();
+    if (COMMUNITY) state.community = community || emptyCommunity();
     deck = []; battlePair = null; battleOutcome = null; lastScan = null;
-    world = createWorld(seed, state);
+    if (me) return resync().then(renderView);
+    commit();
     renderView();
   },
+  'sign-in': () => openSignIn(),
+  'pwa-install': async () => {
+    closePopovers();
+    const result = await pwa.install();
+    if (result === 'ios') openSheet(iosInstallSheet);
+    else if (result === 'unavailable') toast('Use your browser’s menu and choose “Install app” or “Add to Home Screen”.', { duration: 4000 });
+  },
+  'pwa-update': () => pwa.applyUpdate(),
+  'send-link': () => sendLink(),
+  'verify-code': () => verifyCode(),
+  'auth-back': () => { Object.assign(auth, { stage: 'email', error: '' }); refreshSheet(); },
+  'sign-out': () => signOut(),
   'close-sheet': () => closeSheet(),
   'open-search': () => openSearch(),
   'close-search': () => closeSearch(),
@@ -1233,4 +1618,13 @@ document.addEventListener('focusin', (e) => {
 
 window.addEventListener('scroll', () => $('#nav').classList.toggle('is-scrolled', window.scrollY > 8), { passive: true });
 window.addEventListener('hashchange', navigate);
+pwa = initPWA({
+  toast,
+  onChange: () => {
+    const view = currentView();
+    if (!sheetRenderer && (view === 'home' || view === 'profile')) renderView();
+    else { const m = $('#menu-install'); if (m) m.hidden = !pwa.status().available; }
+  },
+});
 renderView();
+connectCommunity();

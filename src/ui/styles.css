@@ -575,6 +575,49 @@ button.tag:hover { color: var(--text); }
 .plan .btn, .plan .tag { justify-self: start; }
 .profile-foot { display: flex; gap: 8px; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--line); }
 
+/* Accounts */
+.account-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-top: clamp(24px, 4vw, 40px);
+  padding: 18px 22px; border: 1px solid var(--line); border-radius: var(--r-lg); background: rgba(21,23,27,.6); }
+.account-card > div { display: grid; gap: 4px; min-width: 0; }
+.account-card.is-invite { border-color: var(--gold-line); background: linear-gradient(135deg, rgba(200,169,107,.09), rgba(21,23,27,.6) 60%); padding: clamp(20px, 3vw, 32px); }
+.account-card.is-invite .muted { max-width: 52ch; }
+.account-card + .profile-hero { padding-top: clamp(24px, 3vw, 40px); }
+.nav-signin { white-space: nowrap; padding: 0 6px 0 10px; font-size: 13.5px; font-weight: 500; color: var(--gold); }
+.nav-profile[data-act="sign-in"] { border-color: var(--gold-line); padding: 7px 10px; }
+.nav-profile[data-act="sign-in"]:hover { background: var(--gold-soft); }
+.auth { display: grid; gap: 16px; max-width: 460px; }
+.auth .eyebrow { color: var(--gold); }
+.auth b { color: var(--text); font-weight: 500; }
+.form-error { color: var(--nope); font-size: 13.5px; }
+.role-lock { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
+.toast-action { margin-left: 12px; color: var(--gold); font-weight: 600; pointer-events: auto; }
+.toast.has-action { pointer-events: auto; }
+
+/* Installable app */
+.get-app { margin-top: -6px; }
+.get-app .icon { color: var(--gold); }
+.install-card { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 16px; padding: 16px 20px; border: 1px solid var(--line); border-radius: var(--r-lg); background: rgba(21,23,27,.6); }
+.install-card > div { flex: 1; min-width: 180px; display: grid; gap: 2px; }
+.install-card b { font-weight: 500; }
+.install-icon { width: 56px; height: 56px; border-radius: 13px; flex: none; }
+.install-guide { display: grid; gap: 18px; max-width: 480px; }
+.install-guide .eyebrow { color: var(--gold); }
+.steps { display: grid; gap: 14px; counter-reset: step; }
+.steps li { display: flex; gap: 14px; align-items: center; }
+.steps li > div { display: grid; gap: 2px; }
+.steps b { font-weight: 500; }
+.steps small { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.step-icon { width: 44px; height: 44px; flex: none; display: grid; place-items: center; border-radius: 12px; border: 1px solid var(--line-strong); color: #4fa0ff; background: var(--surface); }
+.step-icon img { border-radius: 6px; }
+.popover-menu button { display: block; width: 100%; padding: 10px 12px; border-radius: var(--r-sm); font-size: 14px; color: var(--gold); text-align: left; }
+.popover-menu button:hover { background: var(--surface); }
+
+/* Home-screen app: content flows under the iOS status bar, so the bars respect the safe area. */
+.nav { padding-top: env(safe-area-inset-top); height: calc(var(--nav-h) + env(safe-area-inset-top)); }
+.is-standalone body { overscroll-behavior-y: none; }
+.is-standalone .footer { padding-bottom: env(safe-area-inset-bottom); }
+.is-offline .nav-tools::before { content: 'Offline'; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 4px 10px; margin-right: 4px; }
+
 /* Empty, skeleton, toast */
 .empty-state { display: grid; justify-items: center; text-align: center; gap: 10px; padding: clamp(40px, 6vw, 72px) 24px; border: 1px dashed var(--line); border-radius: var(--r-lg); color: var(--muted); }
 .empty-state h3 { font-family: var(--serif); font-weight: 400; font-size: 22px; color: var(--text); }
@@ -728,4 +771,8 @@ button.tag:hover { color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; scroll-behavior: auto !important; }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+}
+
+@media (max-width: 760px) {
+  .nav-tools > .nav-profile[data-act="sign-in"] { display: inline-flex; margin-left: 2px; }
 }

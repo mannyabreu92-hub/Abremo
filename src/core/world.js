@@ -47,8 +47,13 @@ export function createWorld(seed, state) {
   };
   const influence = Object.fromEntries(artworks.map((a) => [a.id, artworkInfluence(countsOf(a))]));
 
+  // Community mode passes everyone's follows as followerDeltas; demo mode counts this device's.
   const followersOf = (artist) => {
     const f = { ...artist.followers };
+    if (state.followerDeltas) {
+      for (const [role, n] of Object.entries(state.followerDeltas[artist.id] || {})) f[role] = (f[role] || 0) + n;
+      return f;
+    }
     for (const [artistId, role] of Object.entries(state.follows)) if (artistId === artist.id) f[role] = (f[role] || 0) + 1;
     return f;
   };

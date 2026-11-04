@@ -1,0 +1,86 @@
+// End-to-end test of the installable app: offline start, update prompt, iPhone install guide.
+// Needs a running server (npm start) and Playwright:  node tests/e2e/pwa.e2e.cjs [baseUrl]
+const { chromium, devices } = require('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+let restoreSw = () => {};
+
+const BASE = process.argv[2] || 'http://localhost:5173/';
+const step = (name) => console.log(`✓ ${name}`);
+
+(async () => {
+  const browser = await chromium.launch();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.goto(BASE);
+  await page.waitForSelector('.hero');
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 10000 });
+  const cached = await page.evaluate(async () => {
+    const keys = await caches.keys();
+    const shell = keys.find((k) => k.startsWith('gabangi-shell-'));
+    return { shell, count: (await (await caches.open(shell)).keys()).length };
+  });
+  assert.ok(cached.count >= 20, `precached ${cached.count} files`);
+  step(`service worker installed and precached ${cached.count} files (${cached.shell})`);
+
+  const manifest = await page.evaluate(async () => (await fetch(document.querySelector('link[rel=manifest]').href)).json());
+  assert.equal(manifest.short_name, 'Gabangi');
+  step('manifest is linked and served');
+
+  await context.setOffline(true);
+  await page.reload();
+  await page.waitForSelector('.hero', { timeout: 10000 });
+  await page.goto(BASE + '#discover');
+  await page.waitForSelector('.swipe-card.is-top');
+  await page.click('.deck-like');
+  await page.waitForTimeout(500);
+  assert.ok(await page.evaluate(() => document.documentElement.classList.contains('is-offline')));
+  step('opens and works with no connection');
+  await context.setOffline(false);
+
+  // Simulate a new deploy: the server now has a service worker with a different version.
+  // (Browsers fetch service worker updates outside the page, so this edits the served file and restores it.)
+  const swPath = path.join(__dirname, '..', '..', 'sw.js');
+  const original = fs.readFileSync(swPath, 'utf8');
+  restoreSw = () => fs.writeFileSync(swPath, original);
+  fs.writeFileSync(swPath, original.replace(/const VERSION = '[^']+';/, "const VERSION = 'next-deploy';"));
+  await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
+  await page.waitForFunction(() => /new version of Gabangi/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
+  await Promise.all([page.waitForEvent('load'), page.click('#toast [data-act=pwa-update]')]);
+  await page.waitForSelector('.hero, .swipe-card');
+  const active = await page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('gabangi-shell-')));
+  restoreSw();
+  assert.deepEqual(active, ['gabangi-shell-next-deploy']);
+  step('a new deploy shows “Refresh”, reloads into the new version and clears the old cache');
+
+  // iPhone: no install prompt API, so Gabangi explains Share → Add to Home Screen.
+  const phone = await browser.newContext({ ...devices['iPhone 13'] });
+  const ios = await phone.newPage();
+  ios.on('pageerror', (e) => errors.push(e.message));
+  await ios.goto(BASE + '#profile');
+  await ios.waitForSelector('.install-card');
+  await ios.click('.install-card [data-act=pwa-install]');
+  await ios.waitForSelector('.install-guide .steps li');
+  assert.equal(await ios.locator('.install-guide .steps li').count(), 3);
+  await ios.screenshot({ path: process.env.SHOT_DIR ? `${process.env.SHOT_DIR}/ios-install.png` : '/dev/null' }).catch(() => {});
+  step('iPhone shows the Add to Home Screen guide');
+
+  // Installed (standalone) mode: no install prompts.
+  const installed = await browser.newContext({ ...devices['iPhone 13'] });
+  await installed.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { get: () => true }); });
+  const app = await installed.newPage();
+  await app.goto(BASE + '#profile');
+  await app.waitForSelector('.profile');
+  assert.equal(await app.locator('.install-card').count(), 0);
+  assert.ok(await app.evaluate(() => document.documentElement.classList.contains('is-standalone')));
+  step('installed app hides install prompts');
+
+  assert.deepEqual(errors, []);
+  console.log('All app e2e checks passed');
+  await browser.close();
+})().catch((e) => { restoreSw(); console.error(e); process.exit(1); }).finally(() => restoreSw());
