@@ -96,6 +96,35 @@ const step = (name) => console.log(`✓ ${name}`);
   assert.deepEqual(keys, [null, 'Old Friend']);
   step('data saved under the old name moves to Abremi');
 
+  // The old address (gabangi.vercel.app) retires its offline copy so the redirect can work.
+  // Simulated on 127.0.0.1 (always a secure context), since the switch only compares hostnames.
+  const swPath2 = path.join(__dirname, '..', '..', 'sw.js');
+  const current = fs.readFileSync(swPath2, 'utf8');
+  assert.match(current, /const RETIRED_HOSTS = \['gabangi\.vercel\.app'\];/);
+  const asInstalled = current.replace(/const RETIRED_HOSTS = \[[^\]]*\];/, 'const RETIRED_HOSTS = [];');
+  const retiring = current.replace(/const RETIRED_HOSTS = \[[^\]]*\];/, "const RETIRED_HOSTS = ['127.0.0.1'];");
+  restoreSw = () => fs.writeFileSync(swPath2, current);
+  fs.writeFileSync(swPath2, asInstalled); // what phones on the old address installed before
+  const oldSite = await (await browser.newContext()).newPage();
+  const oldBase = BASE.replace('localhost', '127.0.0.1');
+  await oldSite.goto(oldBase);
+  await oldSite.waitForSelector('.hero');
+  await oldSite.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 10000 });
+  assert.ok((await oldSite.evaluate(() => caches.keys())).length > 0);
+  fs.writeFileSync(swPath2, retiring); // the deploy that ships the retire switch
+  await oldSite.evaluate(async () => (await navigator.serviceWorker.getRegistration())?.update());
+  // Let the retirement settle (in production the reload then hits the redirect and leaves this address).
+  await oldSite.waitForFunction(async () => (await caches.keys()).length === 0, null, { timeout: 15000, polling: 250 });
+  await oldSite.waitForTimeout(2500);
+  assert.deepEqual(await oldSite.evaluate(() => caches.keys()), []);
+  // With no connection, the old address no longer opens a stale offline copy: visitors must reach the server.
+  await oldSite.context().setOffline(true);
+  const staleCopy = await oldSite.goto(oldBase).then(() => true, () => false);
+  await oldSite.context().setOffline(false);
+  assert.equal(staleCopy, false, 'no offline copy is served on the retired address');
+  restoreSw();
+  step('the old address drops its offline copy and service worker');
+
   assert.deepEqual(errors, []);
   console.log('All app e2e checks passed');
   await browser.close();
