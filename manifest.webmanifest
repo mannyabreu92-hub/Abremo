@@ -1,0 +1,29 @@
+{
+  "id": "/",
+  "name": "Gabangi — Art Discovery",
+  "short_name": "Gabangi",
+  "description": "Swipe, discover and rank contemporary art. Every work, ranked by taste.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/#home",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#08090B",
+  "theme_color": "#08090B",
+  "categories": ["entertainment", "lifestyle", "social"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [
+    { "src": "icons/screenshot-narrow.jpg", "sizes": "780x1688", "type": "image/jpeg", "form_factor": "narrow", "label": "Swipe through art made for your eye" },
+    { "src": "icons/screenshot-wide.jpg", "sizes": "1920x1200", "type": "image/jpeg", "form_factor": "wide", "label": "Discover, collect and rank contemporary art" }
+  ],
+  "shortcuts": [
+    { "name": "Discover", "short_name": "Discover", "url": "/#discover", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Art Battles", "short_name": "Battles", "url": "/#battle", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Rankings", "short_name": "Rankings", "url": "/#charts", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Scan artwork", "short_name": "Scan", "url": "/#scan", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

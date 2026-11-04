@@ -11,6 +11,7 @@ import { mulberry32 } from '../core/random.js';
 import { artSVG } from './art.js';
 import { loadState, saveState, resetState } from './store.js';
 import { createSupabaseCloud } from './cloud.js';
+import { initPWA } from './pwa.js';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
 import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions } from '../core/community.js';
 import {
@@ -29,6 +30,7 @@ const COMMUNITY = Boolean(window.__gabangiCloud || (SUPABASE_URL && SUPABASE_ANO
 let cloud = null; // backend adapter, once connected
 let me = null; // signed-in account { id, email }
 let pendingWrites = 0;
+let pwa = null; // install + offline support, set up after the first render's helpers exist
 const auth = { stage: 'email', email: '', busy: false, error: '' };
 if (COMMUNITY) state.community ||= emptyCommunity();
 
@@ -154,6 +156,8 @@ function renderView() {
     delete navProfile.dataset.act;
   }
   updateNotificationDot();
+  const menuInstall = $('#menu-install');
+  if (menuInstall) menuInstall.hidden = !pwa?.status().available;
   VIEWS[name]($('#view'));
 }
 
@@ -281,6 +285,7 @@ function renderHome(root) {
           <a class="btn btn-primary btn-lg" href="#discover"><span>Start discovering</span>${Icon('arrow', { size: 18 })}</a>
           <a class="btn btn-secondary btn-lg" href="#battle"><span>Enter an Art Battle</span></a>
         </div>
+        ${pwa?.status().available ? `<button class="link-arrow get-app" data-act="pwa-install">${Icon('download', { size: 16 })} Get the Gabangi app</button>` : ''}
         <dl class="hero-stats">
           <div><dt>Works</dt><dd>${totals.works}</dd></div>
           <div><dt>Artists</dt><dd>${totals.artists}</dd></div>
@@ -944,6 +949,7 @@ function renderProfile(root) {
 
   root.innerHTML = `<div class="shell profile">
     ${accountCardHTML()}
+    ${installCardHTML()}
     <header class="profile-hero">
       <span class="avatar avatar-xl avatar-me">${esc(initials(state.user.name))}</span>
       <div class="profile-id">
@@ -1181,6 +1187,31 @@ function closePopovers() {
   $$('[aria-haspopup]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
 }
 
+// ——— Install as an app ———
+function installCardHTML() {
+  const st = pwa?.status();
+  if (!st?.available) return '';
+  return `<section class="install-card">
+    <img src="icons/icon-192.png" alt="" width="56" height="56" class="install-icon">
+    <div><p class="eyebrow">Gabangi app</p><p><b>Put Gabangi on your home screen</b></p>
+    <p class="muted">Full screen, one tap away, and it works offline.</p></div>
+    ${PremiumButton(st.canPrompt ? 'Install' : 'How to install', { act: 'pwa-install', variant: 'secondary', icon: 'download' })}
+  </section>`;
+}
+
+function iosInstallSheet() {
+  return `<div class="install-guide">
+    <p class="eyebrow">Install Gabangi</p>
+    <h2 class="display-md" id="modal-title">Add it to your Home Screen</h2>
+    <ol class="steps">
+      <li><span class="step-icon">${Icon('share', { size: 22 })}</span><div><b>Tap Share</b><small>The square with an arrow, in Safari’s toolbar. On iPad it’s at the top.</small></div></li>
+      <li><span class="step-icon">${Icon('plusSquare', { size: 22 })}</span><div><b>Choose “Add to Home Screen”</b><small>Scroll down the list if you don’t see it.</small></div></li>
+      <li><span class="step-icon"><img src="icons/icon-192.png" alt="" width="26" height="26"></span><div><b>Tap Add</b><small>Gabangi opens full screen, like any other app.</small></div></li>
+    </ol>
+    <p class="fine">Don’t see Share? Open <b>gabangi.vercel.app</b> in Safari. Apps like Instagram use their own browser, which can’t install apps.</p>
+  </div>`;
+}
+
 // ——— Accounts & community sync ———
 function refreshSheet() {
   if (sheetRenderer) $('#sheet-body').innerHTML = sheetRenderer();
@@ -1200,7 +1231,9 @@ function signInSheet() {
     return `<div class="auth">
       <p class="eyebrow">Check your inbox</p>
       <h2 class="display-md" id="modal-title">One tap to sign in</h2>
-      <p class="muted">We sent a sign-in link to <b>${esc(auth.email)}</b>. Open it on this device and you’re in.</p>
+      ${pwa?.status().standalone
+        ? `<p class="muted">We emailed <b>${esc(auth.email)}</b>. Type the code from the email below. In the home-screen app, the link would open your browser instead.</p>`
+        : `<p class="muted">We sent a sign-in link to <b>${esc(auth.email)}</b>. Open it on this device and you’re in.</p>`}
       <label class="field"><span>Or enter the code from the email</span>
         <input id="auth-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456"></label>
       ${auth.error ? `<p class="form-error" role="alert">${esc(auth.error)}</p>` : ''}
@@ -1525,6 +1558,13 @@ const ACTIONS = {
     renderView();
   },
   'sign-in': () => openSignIn(),
+  'pwa-install': async () => {
+    closePopovers();
+    const result = await pwa.install();
+    if (result === 'ios') openSheet(iosInstallSheet);
+    else if (result === 'unavailable') toast('Use your browser’s menu and choose “Install app” or “Add to Home Screen”.', { duration: 4000 });
+  },
+  'pwa-update': () => pwa.applyUpdate(),
   'send-link': () => sendLink(),
   'verify-code': () => verifyCode(),
   'auth-back': () => { Object.assign(auth, { stage: 'email', error: '' }); refreshSheet(); },
@@ -1578,5 +1618,13 @@ document.addEventListener('focusin', (e) => {
 
 window.addEventListener('scroll', () => $('#nav').classList.toggle('is-scrolled', window.scrollY > 8), { passive: true });
 window.addEventListener('hashchange', navigate);
+pwa = initPWA({
+  toast,
+  onChange: () => {
+    const view = currentView();
+    if (!sheetRenderer && (view === 'home' || view === 'profile')) renderView();
+    else { const m = $('#menu-install'); if (m) m.hidden = !pwa.status().available; }
+  },
+});
 renderView();
 connectCommunity();

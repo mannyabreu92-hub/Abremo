@@ -15,7 +15,7 @@ npm start         # http://localhost:5173  (zero dependencies, Node 18+)
 npm run check     # syntax check of the UI modules + unit tests
 npm test          # unit tests for scoring, Elo, feed, marketplace, badges, charts, recognition, sync
 npm run test:db   # Supabase migration + security rules on a real Postgres (set GABANGI_PG)
-npm run test:e2e  # sign-in and community sync in a browser (needs Playwright and npm start)
+npm run test:e2e  # sign-in/sync and offline/install/update flows in a browser (needs Playwright and npm start)
 ```
 
 ### Accounts and the shared database
@@ -27,6 +27,16 @@ Add a Supabase database and it switches to **community mode**:
 - **Guests:** they can still swipe, and what they liked is added to their account when they sign in.
 
 Setup takes four steps: see [`supabase/README.md`](supabase/README.md).
+
+### Install it as an app
+Gabangi is an installable web app (PWA):
+- **Android and desktop Chrome/Edge:** an **Install** button in Profile, on the home page and in the menu.
+- **iPhone and iPad:** a short Share → *Add to Home Screen* guide.
+
+Once installed it opens full screen with its own icon and shortcuts (Discover, Battles, Rankings, Scan).
+- **Offline:** a service worker (`sw.js`) precaches the app, so it opens and browses with no connection. Live data and sign-in always go to the network.
+- **Updates:** each deploy gets a new cache version, and the app offers **Refresh** when one is ready.
+- After changing app files, run `npm run gen:sw` (the deploy build does this automatically). Run `npm run gen:icons` to redraw the icons and install screenshots.
 
 Any static file server also works. Open it on a phone, or use the browser's mobile emulator.
 
@@ -99,6 +109,12 @@ src/core/community.js server totals ↔ app state mapping, guest → account imp
 supabase/             migration, generated seed, one-file setup, setup guide
 scripts/write-config.js  build step: env vars → src/config.js (refuses secret keys)
 scripts/gen-seed-sql.js  catalog → supabase/seed.sql and setup.sql
+manifest.webmanifest  app name, icons, shortcuts, install screenshots
+sw.js                 service worker: offline app shell, update flow (list + version generated)
+src/ui/pwa.js         registration, install prompts, update prompt, offline indicator
+icons/                app icons (any + maskable), Apple touch icon, install screenshots
+scripts/gen-sw.js     stamps sw.js with the precache list and a content hash version
+scripts/gen-icons.cjs renders icons and screenshots with Playwright
   styles.css          design system: tokens, type scale, components, responsive rules
 tests/                node:test suites
 ```

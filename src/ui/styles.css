@@ -593,6 +593,31 @@ button.tag:hover { color: var(--text); }
 .toast-action { margin-left: 12px; color: var(--gold); font-weight: 600; pointer-events: auto; }
 .toast.has-action { pointer-events: auto; }
 
+/* Installable app */
+.get-app { margin-top: -6px; }
+.get-app .icon { color: var(--gold); }
+.install-card { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 16px; padding: 16px 20px; border: 1px solid var(--line); border-radius: var(--r-lg); background: rgba(21,23,27,.6); }
+.install-card > div { flex: 1; min-width: 180px; display: grid; gap: 2px; }
+.install-card b { font-weight: 500; }
+.install-icon { width: 56px; height: 56px; border-radius: 13px; flex: none; }
+.install-guide { display: grid; gap: 18px; max-width: 480px; }
+.install-guide .eyebrow { color: var(--gold); }
+.steps { display: grid; gap: 14px; counter-reset: step; }
+.steps li { display: flex; gap: 14px; align-items: center; }
+.steps li > div { display: grid; gap: 2px; }
+.steps b { font-weight: 500; }
+.steps small { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.step-icon { width: 44px; height: 44px; flex: none; display: grid; place-items: center; border-radius: 12px; border: 1px solid var(--line-strong); color: #4fa0ff; background: var(--surface); }
+.step-icon img { border-radius: 6px; }
+.popover-menu button { display: block; width: 100%; padding: 10px 12px; border-radius: var(--r-sm); font-size: 14px; color: var(--gold); text-align: left; }
+.popover-menu button:hover { background: var(--surface); }
+
+/* Home-screen app: content flows under the iOS status bar, so the bars respect the safe area. */
+.nav { padding-top: env(safe-area-inset-top); height: calc(var(--nav-h) + env(safe-area-inset-top)); }
+.is-standalone body { overscroll-behavior-y: none; }
+.is-standalone .footer { padding-bottom: env(safe-area-inset-bottom); }
+.is-offline .nav-tools::before { content: 'Offline'; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 4px 10px; margin-right: 4px; }
+
 /* Empty, skeleton, toast */
 .empty-state { display: grid; justify-items: center; text-align: center; gap: 10px; padding: clamp(40px, 6vw, 72px) 24px; border: 1px dashed var(--line); border-radius: var(--r-lg); color: var(--muted); }
 .empty-state h3 { font-family: var(--serif); font-weight: 400; font-size: 22px; color: var(--text); }

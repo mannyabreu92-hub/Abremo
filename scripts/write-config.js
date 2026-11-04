@@ -1,8 +1,9 @@
-// Build step (Vercel "Build Command": node scripts/write-config.js).
+// Build step (Vercel "Build Command": node scripts/write-config.js). Also stamps sw.js.
 // Copies the public Supabase URL and anon/publishable key from the environment into
 // src/config.js. Refuses secret keys: they must never reach the browser.
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { stampServiceWorker } from './gen-sw.js';
 
 const pick = (env, names) => names.map((n) => env[n]).find((v) => v && v.trim())?.trim() || '';
 
@@ -39,4 +40,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const cfg = resolveConfig(process.env);
   writeFileSync(new URL('../src/config.js', import.meta.url), configSource(cfg));
   console.log(cfg.mode === 'community' ? `Gabangi: community mode (${new URL(cfg.url).host})` : 'Gabangi: demo mode (no Supabase environment variables found)');
+  // The config is part of the offline app, so the service worker version must reflect it.
+  console.log(`Gabangi: service worker version ${stampServiceWorker()}`);
 }
