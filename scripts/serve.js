@@ -21,6 +21,11 @@ const types = {
 
 createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  if (path === '/api/badge') { // the badge function, without a database (an unranked badge)
+    const { badgeSVG } = await import('../api/badge.js');
+    res.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'no-store' }).end(badgeSVG(null));
+    return;
+  }
   const file = normalize(join(root, path === '/' ? 'index.html' : path));
   if (!file.startsWith(root)) { res.writeHead(403).end(); return; }
   try {

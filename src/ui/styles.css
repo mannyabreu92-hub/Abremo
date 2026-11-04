@@ -1489,3 +1489,10 @@ div.rank-row:hover { background: transparent; }
 .offer-line { margin: 6px 0 0; color: var(--text-2); font-size: 14px; }
 .offer-line b { color: var(--abremi-gold); }
 .emerging-note { margin: -6px 0 16px; font-size: 13.5px; }
+
+/* The Abremi Index */
+.index-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 22px; }
+.index-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 28px; }
+.rank-score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--abremi-gold); font-size: 14px; }
+.index-badge-preview { display: block; margin: 6px 0 14px; max-width: 100%; height: 58px; }
+.index-badge-card textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }

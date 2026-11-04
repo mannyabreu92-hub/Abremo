@@ -109,6 +109,21 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   assert.match(first, /Harbour/, 'real listed prices first; sample prices aren’t real');
   step('Emerging artists on Home, and price sorting by real listed prices');
 
+  // ——— The Abremi Index ———
+  await cy.goto(BASE + `#art/${ids.Harbour}`);
+  await cy.waitForSelector('.artwork-page [data-act=react][data-v=like]');
+  await cy.click('.artwork-page [data-act=react][data-v=like]');
+  await cy.waitForTimeout(300);
+  await cy.goto(BASE + '#index');
+  await cy.waitForSelector('.index-page');
+  assert.match(await cy.locator('.index-page').textContent(), /The Abremi Index.*Harbour/s);
+  assert.ok(await cy.locator('#index-chart option[value^="medium:"]').count() > 0, 'charts by medium');
+  await ana.goto(BASE + '#studio');
+  await ana.waitForSelector('.index-badge-card');
+  assert.match(await ana.inputValue('#index-embed'), /api\/badge\?artist=m_u-ana%40example\.com/);
+  await ana.waitForFunction(() => document.querySelector('.index-badge-preview')?.naturalWidth > 0);
+  step('the Abremi Index charts real member work, and ranked artists get an embeddable badge');
+
   assert.deepEqual(errors, []);
   console.log('All Phase 8 e2e checks passed');
   await browser.close();

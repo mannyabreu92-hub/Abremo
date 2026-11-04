@@ -50,6 +50,9 @@ export function adminPage(data, { roleLabel, competitionSection, planSearch = { 
     ${plansAdminHTML(data.holders || [], planSearch)}
     ${betaHTML(data.invites, data.feedback || [], data.errors || [])}
     ${guideMetricsHTML(data.guide)}
+    <section class="section section-tight" id="admin-index">${SectionHeader({ eyebrow: 'The Abremi Index', title: 'Weekly chart' })}
+      <p class="muted">Published automatically every Monday. Publish this week’s chart now (for example after excluding a burst of activity); it’s recorded in the audit log.</p>
+      ${PremiumButton('Publish this week’s Index now', { act: 'index-publish', variant: 'secondary' })}</section>
     ${reportsHTML(data.reports || [])}
     ${integrityHTML(data.flags || [])}
     ${auditHTML(data.audit || [])}

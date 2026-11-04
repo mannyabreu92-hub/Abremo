@@ -1191,7 +1191,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
       where n.nspname = 'public' and p.prosecdef and p.prorettype <> 'trigger'::regtype and has_function_privilege('anon', p.oid, 'execute')`).split(',');
     const PUBLIC_FUNCTIONS = ['app_flags', 'arena', 'artist_achievements', 'artist_passport', 'chart_baseline', 'check_invite', 'community_snapshot',
       'competition_detail', 'drop_detail', 'drops_overview', 'gallery_page', 'log_client_error', 'member_leaderboards', 'opportunities_list',
-      'plan_badges', 'public_collection', 'record_events'];
+      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge'];
     const unexpected = anonCan.filter((f) => !PUBLIC_FUNCTIONS.includes(f));
     assert.deepEqual(unexpected, [], 'privileged functions guests can run that aren’t on the public list');
     // Every moderator function checks is_admin() itself (the app hiding a button is not a permission).
@@ -1390,6 +1390,41 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.equal(mine.interests.price_max, 2000);
     assert.equal(mine.personalize, true);
     noRowsFor(C, `select count(*) from profiles where id = '${B}' and discovery_interests ? 'mediums'`);
+  });
+
+  // ——— 0016: the Abremi Index ———
+  await t.test('the Abremi Index: a frozen weekly chart of real member work, overall and by medium and country; badges; never plans', () => {
+    const week = psql(`select (date_trunc('week', now()) + interval '7 days')::date`); // covers this week's activity
+    fails('anon', `select compute_index('${week}')`, /permission denied/);
+    fails(B, `select compute_index('${week}')`, /permission denied/);
+    assert.ok(Number(psql(`select compute_index('${week}')`)) > 0);
+    const chart = JSON.parse(as('anon', `select index_week('${week}', 'overall')`));
+    assert.ok(chart.artworks.length > 0 && chart.artists.length > 0);
+    assert.ok(chart.artworks.every((w) => w.id !== seed.artworks[0].id && !/^w\d+$/.test(w.id)), 'no sample works');
+    assert.ok(chart.artists.every((a) => a.id.startsWith('m_')), 'member artists only');
+    assert.deepEqual(chart.artworks.map((w) => w.rank), chart.artworks.map((_, i) => i + 1));
+    assert.ok(chart.artworks.every((w, i) => i === 0 || w.score <= chart.artworks[i - 1].score), 'ordered by score');
+    assert.ok(chart.charts.some((c) => c.startsWith('medium:')) && chart.charts.some((c) => c.startsWith('country:')));
+    const top = chart.artists[0];
+    const badge = JSON.parse(as('anon', `select artist_index_badge('${top.id}')`));
+    assert.equal(badge.rank, 1);
+    assert.equal(badge.chart, 'overall');
+    assert.equal(as('anon', `select artist_index_badge('${seed.artists[0].id}') is null`), 't', 'no badge for sample artists');
+    const again = psql(`select md5(index_week('${week}', 'overall')::text)`);
+    psql(`select compute_index('${week}')`);
+    assert.equal(psql(`select md5(index_week('${week}', 'overall')::text)`), again, 'recomputing gives the same chart');
+    noRowsFor(B, `with u as (insert into index_weeks (week) values (current_date + 30) returning 1) select count(*) from u`);
+    fails(B, 'select admin_publish_index()', /Admins only|permission denied/);
+    assert.ok(Number(as(P[1], 'select admin_publish_index()')) >= 0);
+    assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname in ('compute_index', 'index_week', 'artist_index_badge') and p.prosrc ~* '(subscriptions|current_plan|plans\\b|plan_badges)'`), '', 'the Index never reads plans');
+  });
+
+  await t.test('0016 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0016_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('index_weeks', 'index_entries')`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('index_weeks', 'index_entries')`), '2');
   });
 
   await t.test('0015 can be undone, and setup.sql re-applies it', () => {
