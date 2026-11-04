@@ -16,6 +16,8 @@ Abremi runs in two modes:
 | `migrations/0004_role_applications.sql` | Critic & Collector applications, the admin list, and the review functions |
 | `migrations/0006_profiles_artworks_collections.sql` | Audit trail, artist profiles, artwork details (description, size, availability), collections; the shared catalog starts every work at the same battle rating |
 | `migrations/down/0006_down.sql` | Undoes 0006 (drops its tables and columns, with their data, and restores the earlier functions). Not part of `setup.sql` |
+| `migrations/0011_coach_passport_opportunities.sql` | Artist Passport (verified exhibitions), Opportunities (listings, suggestions, saves, deadline reminders by pg_cron daily) and the Career Coach's limits and context |
+| `migrations/down/0011_down.sql` | Undoes 0011 (run it before `down/0010_down.sql` if undoing both) |
 | `migrations/0010_radar_drops.sql` | Collector Radar (inquiries, messages, blocks, reports) and Drops (scheduled releases, hidden until release; pg_cron every 5 minutes) |
 | `migrations/down/0010_down.sql` | Undoes 0010 (run it before `down/0009_down.sql` if undoing both) |
 | `migrations/0009_analytics.sql` | Studio analytics (impressions, artwork views, profile visits) and weekly reports (pg_cron on Mondays) |
@@ -62,6 +64,9 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
 - **Analytics (0009):** `analytics_events` has no API access. Events arrive only through `record_events()`, which counts each viewer once per work or page per day, ignores artists' own views and works without an owner, keeps guests (anonymous device key) apart from members, and accepts 2,000 events per viewer per hour. Artists read only their own totals through `studio_analytics()`; country breakdowns group countries with fewer than 3 people as "Other". `weekly_reports` rows are readable only by their artist. Events older than 400 days are deleted.
 - **Inquiries (0010):** `inquiries` and `inquiry_messages` are readable only by the two participants; every write goes through `send_inquiry()`, `reply_inquiry()`, `set_inquiry_status()`, `set_block()` and `report_inquiry()`, which enforce the rules (accounts 3+ days old, never your own work or a sample artist, purchase only when available or on request, one open conversation per subject, 10 new a day, 100 messages a day, blocks). Moderators can read a conversation only through `admin_inquiry_reports()` once it has been reported; resolving is audited. No contact details are ever exposed.
 - **Drops (0010):** works in an upcoming drop are invisible to everyone but their artist (the artworks select policy and `community_snapshot()` both check `release_at`) and can't be liked or reviewed early. `create_drop()` accepts only the caller's own works; `release_due_drops()` notifies followers and subscribers once.
+- **Passport (0011):** `exhibitions` rows are public only once a moderator verifies them; artists see their own pending and rejected rows. Writes go through `submit_exhibition()` (artists only, https source link, 10 pending at most) and `delete_exhibition()`; `review_exhibition()` is moderator-only, audited, and notifies the artist. `artist_passport()` returns only verified exhibitions, finished competition placings, earned achievements and milestones from existing records.
+- **Opportunities (0011):** only approved, open listings are readable. `suggest_opportunity()` publishes directly for moderators (audited) and queues a member's suggestion (accounts 3+ days old, 5 a day). Saves are private; `send_deadline_reminders()` notifies each saver once, 3 days before the deadline.
+- **Career Coach (0011):** the server function calls `begin_coach_request()` with the artist's own session token, so the database decides who may use it (artists only), enforces 20 requests a month per artist and 400 a day overall, and returns only that artist's own data (and a chosen work only if it is theirs). Failed requests don't count. `coach_requests` keeps the tool, time and outcome, never the draft.
 - **Live updates** never broadcast who did what. A trigger bumps a single public counter (`community_pulse`, at most once a second) whenever totals change; apps subscribed through Supabase Realtime then refetch `community_snapshot()`. It's the only table in the `supabase_realtime` publication.
 - **Hourly charts** (`community_history`) keep the same public totals as `community_snapshot()`, without the upload list, for 8 days. `chart_baseline()` returns the latest earlier chart from the past 24 hours, or nothing, in which case the app shows no movement. pg_cron keeps a chart at the top of every hour; without pg_cron, the first visit in each hour keeps it.
 - Battle ratings change only through `cast_battle_vote()`. It applies the same maths as `src/core/elo.js`, allows one vote per second, and allows the same pair once per 10 minutes.
@@ -72,6 +77,15 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
   - `delete_artwork()` works for the owner only, and removes the work's likes, saves, reviews and battle rating along with it.
   - The app resizes photos and strips their metadata (such as GPS location) before upload.
 - **Moderation:** to hide a work from everyone, run `update artworks set hidden = true where id = '…';` in the SQL editor.
+
+## Career Coach (AI)
+
+The Coach runs in a Vercel server function (`api/coach.js`) that calls Claude. To switch it on:
+
+1. Create an API key at console.anthropic.com and set a monthly spend limit there (Settings → Limits).
+2. In Vercel: Project → Settings → Environment Variables, add `ANTHROPIC_API_KEY` for Production (and Preview if you want it there), then redeploy.
+
+Never paste the key into the app, the repository or a chat. Without the key, the Coach says it isn't set up yet and nothing else is affected. Requests use the API's server-side fallback: if the main model declines a request, the API retries on its fallback model. To turn that off, remove `betas` and `fallbacks` from `buildRequest()` in `api/coach.js`.
 
 ## Email
 

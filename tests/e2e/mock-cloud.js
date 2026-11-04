@@ -795,6 +795,117 @@ window.__abremiCloud = async () => {
       return db.uploads.filter((u) => u.owner === user?.id && u.release_at && Date.parse(u.release_at) > Date.now())
         .map((u) => ({ id: u.id, title: u.title, drop_id: u.drop_id, release_at: u.release_at, thumb_path: u.thumb_path, image_path: u.image_path }));
     },
+    // ——— Phase 5 (same rules as 0011; the Coach's model call is stood in by a canned draft) ———
+    async coachUsage() {
+      const db = load();
+      const month = new Date().toISOString().slice(0, 7);
+      return { used: (db.coach || []).filter((c) => c.user === user?.id && c.ok && c.month === month).length, limit: 20 };
+    },
+    async coach(tool, { artworkId = null, opportunityId = null } = {}) {
+      needUser(); await wait();
+      const db = load();
+      if (!db.artists[`m_${user.id}`]) throw new Error('The Coach is for artists: publish a work first');
+      const usage = await this.coachUsage();
+      if (usage.used >= 20) throw new Error('You’ve used this month’s 20 Coach requests. They reset on the 1st.');
+      const w = artworkId ? db.uploads.find((u) => u.id === artworkId && u.owner === user.id) : null;
+      if (['description', 'social'].includes(tool) && !w) throw new Error('Choose one of your own works');
+      const o = opportunityId ? (db.opportunities || []).find((x) => x.id === opportunityId && x.status === 'approved') : null;
+      if (tool === 'application' && !o) throw new Error('Choose a listed opportunity');
+      (db.coach ||= []).push({ user: user.id, tool, ok: true, month: new Date().toISOString().slice(0, 7) });
+      save(db);
+      const works = db.uploads.filter((u) => u.owner === user.id).length;
+      return { tool, text: `[Stand-in draft for ${tool}]${w ? ` about “${w.title}”` : ''}${o ? ` for “${o.title}”` : ''}.\nWritten only from your profile and works. [add: where you studied]`,
+        basedOn: ['your profile', `${works} of your works`, ...(w ? [`“${w.title}”`] : []), ...(o ? [`the listing “${o.title}”`] : [])] };
+    },
+    async passport(artistId) {
+      await wait();
+      const db = load();
+      const owner = artistId.startsWith('m_') ? artistId.slice(2) : null;
+      if (!owner || !db.artists[artistId]) return null;
+      const defs = await this.achievementDefinitions();
+      return {
+        achievements: Object.values((db.achievements || {})[owner] || {}).map((m) => ({ ...defs.find((d) => d.code === m.code), at: m.awarded_at })).filter((a) => a.audience === 'artist'),
+        competitions: (db.competitions || []).filter((c) => c.results).flatMap((c) => c.results.entries.filter((r) => (db.entries || []).find((e) => e.id === r.entry)?.user_id === owner)
+          .map((r) => ({ id: c.id, title: c.title, kind: c.kind, closed_at: c.closed_at, place: r.place, votes: r.votes, artwork: r.artwork }))),
+        exhibitions: (db.exhibitions || []).filter((e) => e.owner === owner && e.status === 'verified'),
+        milestones: { joined: db.artists[artistId].created_at, first_work: db.uploads.filter((u) => u.owner === owner).map((u) => u.created_at).sort()[0] || null, first_drop: null, first_inquiry: null },
+      };
+    },
+    async myExhibitions() {
+      await wait();
+      return (load().exhibitions || []).filter((e) => e.owner === user?.id);
+    },
+    async submitExhibition({ kind, title, venue, city, start, end, link }) {
+      needUser(); await wait();
+      const db = load();
+      if (!db.artists[`m_${user.id}`]) throw new Error('Publish a work first');
+      if (!/^https:\/\/[^\s<>"]+$/.test(link || '')) throw new Error('violates check constraint "exhibitions_link_check"');
+      const e = { id: crypto.randomUUID(), owner: user.id, artist_id: `m_${user.id}`, kind, title, venue, city, start_date: start, end_date: end || null, link, status: 'pending', created_at: new Date().toISOString() };
+      (db.exhibitions ||= []).push(e);
+      save(db);
+      return e.id;
+    },
+    async deleteExhibition(id) {
+      const db = load();
+      db.exhibitions = (db.exhibitions || []).filter((e) => !(e.id === id && e.owner === user?.id));
+      save(db);
+    },
+    async exhibitionQueue() {
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      return (db.exhibitions || []).filter((e) => e.status === 'pending').map((e) => ({ ...e, artist: profileOf(db, e.owner).name }));
+    },
+    async reviewExhibition(id, verify, note) {
+      await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      const e = (db.exhibitions || []).find((x) => x.id === id && x.status === 'pending');
+      if (!e) throw new Error('That exhibition is no longer pending');
+      Object.assign(e, { status: verify ? 'verified' : 'rejected', review_note: note || null });
+      (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: e.owner, kind: 'exhibition_review', title: verify ? `“${e.title}” is verified on your Passport` : `“${e.title}” couldn’t be verified`, link: `artist/${e.artist_id}`, created_at: new Date().toISOString(), read_at: null });
+      save(db);
+    },
+    async opportunities() {
+      await wait();
+      const db = load();
+      const today = new Date().toISOString().slice(0, 10);
+      return (db.opportunities || []).filter((o) => o.status === 'approved' && o.deadline >= today).sort((a, b) => a.deadline.localeCompare(b.deadline))
+        .map((o) => ({ ...o, saved: (db.savedOpps || []).some((x) => x.opp === o.id && x.user === user?.id) }));
+    },
+    async suggestOpportunity(o) {
+      needUser(); await wait();
+      const db = load();
+      const admin = (db.admins || []).includes(user.id);
+      if (!admin && Date.parse(profileOf(db, user.id).created_at) > Date.now() - 3 * 86400e3) throw new Error('New accounts can suggest opportunities after 3 days');
+      if (!/^https:\/\/[^\s<>"]+$/.test(o.link || '')) throw new Error('violates check constraint "opportunities_link_check"');
+      if (o.deadline < new Date().toISOString().slice(0, 10)) throw new Error('The deadline has passed');
+      const row = { id: crypto.randomUUID(), kind: o.kind, title: o.title, organizer: o.organizer, location: o.location, deadline: o.deadline, eligibility: o.eligibility || '',
+        description: o.description || '', fee: Number(o.fee) || 0, fee_currency: o.currency || 'USD', link: o.link, status: admin ? 'approved' : 'pending', submitted_by: user.id };
+      (db.opportunities ||= []).push(row);
+      save(db);
+      return row.id;
+    },
+    async saveOpportunity(id, on) {
+      needUser(); await wait();
+      const db = load();
+      db.savedOpps = (db.savedOpps || []).filter((x) => !(x.opp === id && x.user === user.id));
+      if (on) db.savedOpps.push({ opp: id, user: user.id });
+      save(db);
+    },
+    async opportunityQueue() {
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      return (db.opportunities || []).filter((o) => o.status === 'pending');
+    },
+    async reviewOpportunity(id, approve) {
+      await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');
+      const o = (db.opportunities || []).find((x) => x.id === id && x.status === 'pending');
+      if (!o) throw new Error('That listing is no longer pending');
+      o.status = approve ? 'approved' : 'rejected';
+      save(db);
+    },
     async auditLog() {
       const db = load();
       if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');

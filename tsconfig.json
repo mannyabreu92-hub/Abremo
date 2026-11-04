@@ -13,7 +13,7 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/core/**/*.js", "src/ui/**/*.js", "scripts/gen-seed-sql.js", "scripts/gen-sw.js", "scripts/write-config.js"],
+  "include": ["api/**/*.js", "src/core/**/*.js", "src/ui/**/*.js", "scripts/gen-seed-sql.js", "scripts/gen-sw.js", "scripts/write-config.js"],
   // app.js joins the check as it is split into views (src/ui/views/); most of what remains there is DOM typing.
   "exclude": ["src/vendor/**", "src/ui/app.js", "node_modules"]
 }

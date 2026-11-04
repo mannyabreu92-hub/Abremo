@@ -345,6 +345,61 @@ export async function createSupabaseCloud(url, key) {
     async scheduledWorks() {
       return user ? check(await sb.rpc('my_scheduled_works')) : [];
     },
+    // ——— Phase 5: Career Coach (server function api/coach.js), Passport, Opportunities ———
+    async coachUsage() {
+      return user ? check(await sb.rpc('coach_usage')) : null;
+    },
+    /** Asks the Coach (the AI runs on the server; the database checks limits). Returns { text, basedOn }. */
+    async coach(tool, { artworkId = null, opportunityId = null } = {}) {
+      const { data } = await sb.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in first');
+      const res = await fetch('api/coach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tool, artworkId, opportunityId }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error || 'The Coach is unavailable right now.');
+      return out;
+    },
+    async passport(artistId) {
+      return check(await sb.rpc('artist_passport', { p_artist: artistId }));
+    },
+    async myExhibitions() {
+      if (!user) return [];
+      return check(await sb.from('exhibitions').select('id, kind, title, venue, city, start_date, end_date, link, status, review_note').eq('owner_id', user.id).order('start_date', { ascending: false }));
+    },
+    async submitExhibition({ kind, title, venue, city, country, start, end, link }) {
+      return check(await sb.rpc('submit_exhibition', { p_kind: kind, p_title: title, p_venue: venue, p_city: city || null, p_country: country || null, p_start: start, p_end: end || null, p_link: link }));
+    },
+    async deleteExhibition(id) {
+      check(await sb.rpc('delete_exhibition', { p_id: id }));
+    },
+    async exhibitionQueue() {
+      return check(await sb.rpc('admin_exhibition_queue'));
+    },
+    async reviewExhibition(id, verify, note) {
+      check(await sb.rpc('review_exhibition', { p_id: id, p_verify: verify, p_note: note || null }));
+    },
+    async opportunities() {
+      return check(await sb.rpc('opportunities_list'));
+    },
+    async suggestOpportunity(o) {
+      return check(await sb.rpc('suggest_opportunity', {
+        p_kind: o.kind, p_title: o.title, p_organizer: o.organizer, p_location: o.location, p_deadline: o.deadline,
+        p_eligibility: o.eligibility || '', p_description: o.description || '', p_fee: o.fee || 0, p_fee_currency: o.currency || 'USD', p_link: o.link,
+      }));
+    },
+    async saveOpportunity(id, on) {
+      check(await sb.rpc('save_opportunity', { p_id: id, p_on: on }));
+    },
+    async opportunityQueue() {
+      return check(await sb.rpc('admin_opportunity_queue'));
+    },
+    async reviewOpportunity(id, approve, note) {
+      check(await sb.rpc('review_opportunity', { p_id: id, p_approve: approve, p_note: note || null }));
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },

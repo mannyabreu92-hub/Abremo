@@ -1310,3 +1310,31 @@ div.rank-row:hover { background: transparent; }
 .drop-works legend { color: var(--text-2); margin-bottom: 6px; }
 .art-card.is-scheduled .art-frame { aspect-ratio: 1; overflow: hidden; border-radius: 14px; }
 .art-card.is-scheduled img { width: 100%; height: 100%; object-fit: cover; opacity: .85; }
+
+/* ——— Phase 5: Career Coach, Artist Passport, Opportunities ——— */
+.coach-usage { display: inline-flex; align-items: center; gap: 6px; color: var(--gold); margin-top: 6px; }
+.notice { display: flex; gap: 8px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--abremi-border-gold); border-radius: 14px; background: var(--gold-soft); color: var(--text); }
+.coach-tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: 10px; margin: 16px 0; }
+.coach-tool { display: grid; gap: 4px; text-align: left; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--abremi-surface); color: var(--text); cursor: pointer; }
+.coach-tool small { color: var(--text-2); line-height: 1.4; }
+.coach-tool.is-on { border-color: var(--gold); background: var(--gold-soft); }
+.coach-run { display: grid; gap: 10px; max-width: 480px; margin-bottom: 14px; }
+.coach-result { padding: 18px; border: 1px solid var(--abremi-border-gold); border-radius: 18px; background: var(--abremi-surface); margin-top: 12px; }
+.coach-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; color: var(--text); margin: 8px 0 12px; }
+.passport { display: grid; gap: 26px; margin-top: 10px; }
+.passport-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.passport-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; }
+.passport-list li > div { display: grid; gap: 2px; }
+.passport-list small { color: var(--text-2); }
+.passport-list a { color: var(--gold); font-size: 0.85rem; }
+.passport-mark { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--gold-soft); color: var(--gold); border: 1px solid var(--abremi-border-gold); }
+.exhibition-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.exhibition-row span { display: grid; gap: 2px; min-width: 0; }
+.exhibition-row small { color: var(--text-2); }
+.opportunity-list { display: grid; gap: 14px; margin-top: 14px; }
+@media (min-width: 900px) { .opportunity-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.opportunity { display: grid; gap: 6px; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--abremi-surface); min-width: 0; }
+.opportunity h3 { font-family: 'Playfair Display', Georgia, serif; font-weight: 500; font-size: 1.25rem; margin: 2px 0; }
+.opportunity p { margin: 0; overflow-wrap: anywhere; }
+.opportunity-fee { display: inline-flex; align-items: center; gap: 6px; color: var(--abremi-success); font-weight: 600; font-size: 0.9rem; }
+.opportunity-fee.has-fee { color: var(--abremi-warning, #E0B060); }
