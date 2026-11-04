@@ -122,10 +122,11 @@ export function studioPage(s, reports, { thumb = (_id) => '', days = 30 } = {}) 
       ${lineChart(s.daily, 'followers', 'Followers')}
     </section>
     <section class="section section-tight">${SectionHeader({ eyebrow: 'Per work', title: 'Your works' })}
-      ${works.length ? `<div class="table-wrap"><table class="works-table"><thead><tr><th>Work</th><th>Impressions</th><th>Views</th><th>Likes</th><th>Saves</th><th title="Likes and saves per view">Liked by viewers</th></tr></thead>
+      ${works.length ? `<div class="table-wrap"><table class="works-table"><thead><tr><th>Work</th><th>Impressions</th><th>Views</th><th>Likes</th><th>Saves</th><th title="Likes and saves per view">Liked by viewers</th><th title="Conversations started about this work">Inquiries</th><th title="Verified collectors who saved it">Collector saves</th></tr></thead>
         <tbody>${works.map((w) => `<tr><td><button class="link work-link" data-act="artwork" data-id="${esc(w.id)}">${thumb(w.id)}<span>${esc(w.title)}</span></button></td>
           <td>${fmt(w.impressions)}</td><td>${fmt(w.views)}</td><td>${fmt(w.likes)}</td><td>${fmt(w.saves)}</td>
-          <td>${w.views ? `${Math.min(100, Math.round(((w.likes + w.saves) / w.views) * 100))}%` : '—'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No works yet.</p>'}
+          <td>${w.views ? `${Math.min(100, Math.round(((w.likes + w.saves) / w.views) * 100))}%` : '—'}</td>
+          <td>${w.inquiries == null ? '—' : fmt(w.inquiries)}</td><td>${w.collector_saves == null ? '—' : fmt(w.collector_saves)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No works yet.</p>'}
     </section>
     <section class="section section-tight audience">
       <div>${SectionHeader({ eyebrow: 'Audience', title: 'Who engages, by role' })}

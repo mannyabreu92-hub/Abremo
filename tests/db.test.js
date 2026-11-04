@@ -749,7 +749,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
   let eArt;
   const rec = (who, events, guest = null) => Number(as(who, `select record_events('${JSON.stringify(events)}'::jsonb, ${guest ? `'${guest}'` : 'null'})`));
   await t.test('events: once per viewer per day, never your own, guests separate, sample works ignored, no direct access', () => {
-    eArt = psql(`select id from artworks where owner_id = '${E}' order by created_at limit 1`);
+    eArt = psql(`select id from artworks where owner_id = '${E}' and not hidden order by id limit 1`); // (several share a timestamp)
     const evs = [{ k: 'impression', t: eArt }, { k: 'artwork_view', t: eArt }, { k: 'profile_visit', t: `m_${E}` }];
     assert.equal(rec(B, evs), 3);
     assert.equal(rec(B, evs), 0, 'once per day');
@@ -806,6 +806,131 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     const r = JSON.parse(as(E, `select row_to_json(x) from my_weekly_reports() x limit 1`));
     assert.ok('views' in r.current && 'followers' in r.previous);
     assert.equal(new Date(r.week_start).getUTCDay(), 1, 'weeks start on Monday');
+  });
+
+  // ——— Phase 4 (0010): Collector Radar and Drops ———
+  let inq;
+  await t.test('inquiries: members 3+ days old start real conversations that only the two of them can read', () => {
+    psql(`update artworks set availability = 'available' where id = '${eArt}'; update profiles set created_at = now() where id = '${B}'`);
+    fails(B, `select send_inquiry('${eArt}', null, 'purchase', 'Is this still available?')`, /after 3 days/);
+    psql(`update profiles set created_at = now() - interval '10 days' where id = '${B}'`);
+    fails(B, `select send_inquiry('${seed.artworks[0].id}', null, 'question', 'Hello there, lovely work.')`, /Sample artists can’t be contacted/);
+    fails(E, `select send_inquiry('${eArt}', null, 'purchase', 'Buying my own work?')`, /your own work/);
+    fails(B, `select send_inquiry('${eArt}', null, 'purchase', 'Hi')`, /at least 10 characters/);
+    inq = as(B, `select send_inquiry('${eArt}', null, 'purchase', 'Is this still available? I love the light in it.')`);
+    fails(B, `select send_inquiry('${eArt}', null, 'purchase', 'Asking again about this work.')`, /already have an open conversation/);
+    as(B, `select send_inquiry(null, 'm_${E}', 'commission', 'Would you paint my harbour at dusk?')`);
+    fails(B, `select send_inquiry(null, 'm_${E}', 'purchase', 'Buy something, anything please.')`, /Choose a work/);
+    assert.match(as(E, `select title from notifications where kind = 'inquiry' order by created_at limit 1`), /sent you a purchase inquiry about/);
+    const mine = JSON.parse(as(E, 'select my_inquiries()'));
+    assert.equal(mine.length, 2);
+    assert.equal(mine[0].side, 'artist');
+    assert.equal(mine.find((q) => q.id === inq).unread, true);
+    assert.deepEqual(Object.keys(mine[0]).filter((k) => /email|other_id/.test(k)), [], 'no contact details');
+    for (const who of [A, 'anon']) {
+      noRowsFor(who, `select count(*) from inquiries where id = '${inq}'`);
+      noRowsFor(who, `select count(*) from inquiry_messages where inquiry_id = '${inq}'`);
+    }
+    assert.equal(as(A, `select inquiry_thread('${inq}') is null`), 't');
+    fails(A, `select reply_inquiry('${inq}', 'Butting in')`, /not found/);
+    noRowsFor(B, `with u as (insert into inquiry_messages (inquiry_id, sender_id, body) values ('${inq}', '${E}', 'Forged') returning 1) select count(*) from u`);
+    noRowsFor(B, `with u as (update inquiries set status = 'declined' returning 1) select count(*) from u`);
+  });
+
+  await t.test('inquiries: replies, unread state, one notification per unread stretch, decline and close', () => {
+    as(E, `select reply_inquiry('${inq}', 'Yes, it is. It is 60 by 80 cm.')`);
+    as(E, `select reply_inquiry('${inq}', 'Happy to send more photos.')`);
+    assert.equal(as(B, `select count(*) from notifications where kind = 'inquiry_reply'`), '1', 'not one per message');
+    let th = JSON.parse(as(B, `select inquiry_thread('${inq}')`));
+    assert.deepEqual(th.messages.map((m) => m.mine), [true, false, false]);
+    assert.equal(JSON.parse(as(B, 'select my_inquiries()')).find((q) => q.id === inq).unread, true);
+    as(B, `select mark_inquiry_read('${inq}')`);
+    assert.equal(JSON.parse(as(B, 'select my_inquiries()')).find((q) => q.id === inq).unread, false);
+    fails(B, `select set_inquiry_status('${inq}', 'declined')`, /Only the artist can decline/);
+    as(E, `select set_inquiry_status('${inq}', 'declined')`);
+    fails(B, `select reply_inquiry('${inq}', 'But why?')`, /closed/);
+    th = JSON.parse(as(E, `select inquiry_thread('${inq}')`));
+    assert.equal(th.status, 'declined');
+  });
+
+  await t.test('inquiries: blocking, reporting (moderators see only reported conversations), daily limit, collector interest', () => {
+    const q2 = as(B, `select send_inquiry('${eArt}', null, 'question', 'One more question about the framing?')`);
+    as(B, `select report_inquiry('${q2}', 'Testing the report flow')`);
+    fails(A, 'select admin_inquiry_reports()', /Admins only|permission denied/);
+    const reports = JSON.parse(as(P[1], 'select admin_inquiry_reports()'));
+    assert.equal(reports.length, 1);
+    assert.match(reports[0].messages[0].body, /framing/);
+    as(P[1], `select resolve_inquiry_report('${reports[0].id}', true, 'Closed after review')`);
+    assert.equal(as(B, `select status from inquiries where id = '${q2}'`), 'closed');
+    assert.match(as(P[1], `select action from admin_audit_log() where action like 'inquiry_report.%' limit 1`), /inquiry_report\.closed/);
+    as(E, `select set_block('${q2}', true)`);
+    fails(B, `select send_inquiry('${eArt}', null, 'question', 'Are you there? Hello again.')`, /can’t contact this member/);
+    as(E, `select set_block('${q2}', false)`);
+    psql(`insert into inquiries (artist_id, artist_user, sender_id, kind) select 'm_${G}', '${G}', '${V[2]}', 'question' from generate_series(1, 10)`);
+    psql(`update profiles set created_at = now() - interval '10 days' where id = '${V[2]}'`);
+    fails(V[2], `select send_inquiry('${eArt}', null, 'question', 'An eleventh conversation today.')`, /10 conversations a day/);
+    psql(`update profiles set role = 'collector' where id = '${V[1]}'`);
+    as(V[1], `insert into reactions (artwork_id, kind) values ('${eArt}', 'super') on conflict (user_id, artwork_id) do update set kind = 'super'`);
+    const ci = JSON.parse(as(E, 'select collector_interest()')).find((x) => x.artwork === eArt);
+    assert.equal(ci.inquiries, 2);
+    assert.ok(ci.collector_saves >= 1);
+    assert.equal(JSON.stringify(ci).includes(V[1]), false, 'counts only');
+  });
+
+  let drop, dropWork;
+  await t.test('drops: scheduled works stay hidden until release; followers and subscribers are notified once', () => {
+    psql(`update artworks set created_at = now() - interval '2 days' where owner_id = '${E}'`);
+    put(E, `${E}/d1.webp`); put(E, `${E}/d1-thumb.webp`);
+    [dropWork] = publish(E, { image: `${E}/d1.webp`, thumb: `${E}/d1-thumb.webp`, title: 'Night Swim' }).split('|');
+    as(V[0], `insert into follows (artist_id) values ('m_${E}') on conflict do nothing`);
+    fails(E, `select create_drop('Too soon', '', now() + interval '1 minute', array['${dropWork}'])`, /10 minutes and 60 days/);
+    fails(E, `select create_drop('Not mine', '', now() + interval '1 hour', array['${gWork}'])`, /only your own works/);
+    fails(B, `select create_drop('No works', '', now() + interval '1 hour', array['${dropWork}'])`, /Publish a work first/);
+    drop = as(E, `select create_drop('Summer Night', 'Three new paintings.', now() + interval '1 hour', array['${dropWork}'])`);
+    assert.match(as(V[0], `select title from notifications where kind = 'drop_announced'`), /announced a drop: “Summer Night”/);
+    for (const who of ['anon', A]) assert.equal(as(who, `select count(*) from artworks where id = '${dropWork}'`), '0', 'hidden before release');
+    assert.equal(as(E, `select count(*) from artworks where id = '${dropWork}'`), '1', 'the artist still sees it');
+    assert.equal(JSON.parse(as('anon', 'select community_snapshot()')).uploads.some((u) => u.id === dropWork), false);
+    fails(A, `insert into reactions (artwork_id, kind) values ('${dropWork}', 'like')`, /hasn’t been released/);
+    const d = JSON.parse(as('anon', `select drop_detail('${drop}')`));
+    assert.equal(d.phase, 'upcoming');
+    assert.deepEqual(d.works, [], 'works stay secret');
+    assert.ok(d.teaser_thumb, 'a teaser');
+    assert.deepEqual(JSON.parse(as(E, `select drop_detail('${drop}')`)).works, [dropWork]);
+    as(A, `select subscribe_drop('${drop}', true)`);
+    fails(A, `select cancel_drop('${drop}')`, /Only the artist or a moderator/);
+    psql(`update drops set release_at = now() - interval '1 second' where id = '${drop}'; update artworks set release_at = now() - interval '1 second' where id = '${dropWork}'`);
+    const overview = JSON.parse(as('anon', 'select drops_overview()'));
+    assert.equal(overview.find((x) => x.id === drop).phase, 'released');
+    as('anon', 'select drops_overview()');
+    assert.equal(as(A, `select count(*) from notifications where kind = 'drop_released'`), '1', 'subscribers, once');
+    assert.equal(as(V[0], `select count(*) from notifications where kind = 'drop_released'`), '1', 'followers, once');
+    assert.equal(as('anon', `select count(*) from artworks where id = '${dropWork}'`), '1', 'visible after release');
+    as(A, `insert into reactions (artwork_id, kind) values ('${dropWork}', 'like')`);
+  });
+
+  await t.test('drops: at most 3 upcoming; moderators can cancel (recorded), which makes the works visible', () => {
+    const works = [];
+    for (let i = 0; i < 4; i++) {
+      put(E, `${E}/x${i}.webp`); put(E, `${E}/x${i}-thumb.webp`);
+      [works[i]] = publish(E, { image: `${E}/x${i}.webp`, thumb: `${E}/x${i}-thumb.webp`, title: `Lot ${i}` }).split('|');
+    }
+    const ids = works.slice(0, 3).map((w, i) => as(E, `select create_drop('Drop ${i}', '', now() + interval '2 hours', array['${w}'])`));
+    fails(E, `select create_drop('Drop 4', '', now() + interval '2 hours', array['${works[3]}'])`, /3 upcoming drops/);
+    fails(E, `select create_drop('Twice', '', now() + interval '2 hours', array['${works[0]}'])`, /another upcoming drop|3 upcoming/);
+    as(P[1], `select cancel_drop('${ids[0]}', 'Duplicate')`);
+    assert.equal(as('anon', `select count(*) from artworks where id = '${works[0]}'`), '1');
+    assert.match(as(P[1], `select details->>'note' from admin_audit_log() where action = 'drop.cancelled' limit 1`), /Duplicate/);
+    as(E, `select cancel_drop('${ids[1]}')`);
+    fails(E, `select cancel_drop('${ids[1]}')`, /already been released or cancelled/);
+  });
+
+  await t.test('0010 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0010_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('inquiries', 'inquiry_messages', 'drops', 'drop_subscriptions')`), '0');
+    assert.ok(JSON.parse(as('anon', 'select community_snapshot()')).uploads.length > 0);
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('inquiries', 'inquiry_messages', 'drops', 'drop_subscriptions')`), '4');
   });
 
   await t.test('0009 can be undone, and setup.sql re-applies it', () => {

@@ -1270,3 +1270,43 @@ div.rank-row:hover { background: transparent; }
 /* ——— About ——— */
 .about .about-lede { font-family: 'Playfair Display', Georgia, serif; font-style: italic; font-size: 1.3rem; line-height: 1.45; color: var(--text); }
 .about .about-sign { margin-top: 10px; padding-top: 16px; border-top: 1px solid var(--abremi-border-gold); font-family: 'Playfair Display', Georgia, serif; font-style: italic; color: var(--gold); }
+
+/* ——— Phase 4: Collector Radar and Drops ——— */
+.inquiry-subject { display: flex; align-items: center; gap: 10px; color: var(--text-2); margin-bottom: 8px; }
+.inquiry-subject .rank-thumb { width: 44px; height: 44px; }
+.inquiry-list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+.inquiry-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--abremi-surface); color: var(--text); text-decoration: none; }
+.inquiry-row.is-unread { border-color: var(--abremi-border-gold); }
+.inquiry-row.is-unread b::after { content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--gold); vertical-align: middle; }
+.inquiry-thumb { width: 52px; height: 52px; border-radius: 12px; overflow: hidden; display: grid; place-items: center; background: var(--abremi-surface-elevated); color: var(--gold); border: 0; padding: 0; }
+.inquiry-thumb img, .inquiry-thumb svg:not(.icon) { width: 100%; height: 100%; object-fit: cover; }
+.inquiry-text { display: grid; gap: 2px; min-width: 0; }
+.inquiry-text small, .inquiry-when { color: var(--muted); font-size: 0.78rem; }
+.inquiry-about { color: var(--gold); font-size: 0.82rem; }
+.inquiry-last { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-head { display: flex; gap: 14px; align-items: center; margin: 10px 0 16px; }
+.thread-head h1 small { font-family: Inter, system-ui, sans-serif; font-size: 0.85rem; }
+.messages { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 10px; }
+.message { max-width: min(85%, 560px); padding: 12px 14px; border-radius: 16px 16px 16px 4px; background: var(--abremi-surface-elevated); border: 1px solid var(--line); }
+.message p { margin: 0 0 4px; white-space: pre-line; overflow-wrap: anywhere; color: var(--text); }
+.message small { color: var(--muted); font-size: 0.75rem; }
+.message.is-mine { justify-self: end; border-radius: 16px 16px 4px 16px; background: var(--gold-soft); border-color: var(--abremi-border-gold); }
+.messages-compact .message { max-width: 100%; }
+.thread-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.drop-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 280px); gap: 14px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x mandatory; }
+.drop-card { display: grid; gap: 10px; color: var(--text); text-decoration: none; scroll-snap-align: start; }
+.drop-teaser { position: relative; display: block; aspect-ratio: 4 / 5; border-radius: 18px; overflow: hidden; background: var(--abremi-surface-elevated); border: 1px solid var(--abremi-border-gold); }
+.drop-teaser img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.drop-teaser.is-veiled img { filter: blur(18px) saturate(.8) brightness(.8); transform: scale(1.15); }
+.drop-teaser.is-veiled::after { content: 'Coming soon'; position: absolute; inset: auto 0 14px; text-align: center; font-family: 'Playfair Display', Georgia, serif; font-style: italic; color: var(--gold-hi); letter-spacing: .02em; }
+.drop-text { display: grid; gap: 2px; }
+.drop-text b { font-family: 'Playfair Display', Georgia, serif; font-weight: 500; font-size: 1.1rem; }
+.drop-text small { color: var(--text-2); }
+.drop-hero { display: grid; gap: 22px; margin: 18px 0 26px; }
+@media (min-width: 900px) { .drop-hero { grid-template-columns: minmax(0, 380px) minmax(0, 1fr); align-items: center; } }
+.drop-teaser-lg { max-width: 420px; }
+.drop-countdown { display: inline-flex; align-items: center; gap: 8px; color: var(--gold); font-size: 1.05rem; margin: 6px 0; }
+.drop-works { display: grid; gap: 6px; border: 0; padding: 0; margin: 8px 0; }
+.drop-works legend { color: var(--text-2); margin-bottom: 6px; }
+.art-card.is-scheduled .art-frame { aspect-ratio: 1; overflow: hidden; border-radius: 14px; }
+.art-card.is-scheduled img { width: 100%; height: 100%; object-fit: cover; opacity: .85; }

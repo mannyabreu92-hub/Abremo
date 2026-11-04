@@ -17,10 +17,11 @@ import { credibility, dailyMasterpiece, dayKey, momentum, percentiles, artistSig
 import { tasteScore, personalInfluence, dailyActivity, earnedAchievements, ACHIEVEMENTS, COLLECTION_PRESETS, MIN_DISCOVERIES } from '../core/taste.js';
 import { initPWA } from './pwa.js';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
-import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, sampleCatalog, collectionsToState, AVAILABILITY } from '../core/community.js';
+import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, sampleCatalog, collectionsToState, AVAILABILITY, imageURL } from '../core/community.js';
 import { artistProfileForm, validateArtistProfile, artworkEditForm, collectionEditForm } from './views/forms.js';
 import { howRankedSheet } from './views/explainers.js';
 import { studioPage } from './views/studio.js';
+import { inquirySheet, inboxPage, threadPage, dropsSection, dropPage, createDropForm, reportsHTML } from './views/radar.js';
 import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, createCompetitionForm, competitionCard } from './views/arena.js';
 import {
   esc, fmt, money, flag, countryName, initials, Icon, ArtImage, Avatar, PremiumButton, IconButton, AbremiSymbol,
@@ -153,7 +154,8 @@ function closeSheet() {
 
 function refresh() {
   renderView();
-  if (sheetRenderer) $('#sheet-body').innerHTML = sheetRenderer();
+  // A sheet holding a form (inquiry, profile, drop…) keeps what's being typed; other sheets redraw.
+  if (sheetRenderer && !$('#sheet-body form')) $('#sheet-body').innerHTML = sheetRenderer();
 }
 
 // ——— Router ———
@@ -161,6 +163,7 @@ const VIEWS = {
   home: renderHome, discover: renderDiscover, explore: renderExplore, battle: renderBattle, artists: renderArtists,
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
   art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition, studio: renderStudio,
+  inbox: renderInbox, inquiry: renderInquiry, drop: renderDrop,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -168,7 +171,7 @@ function route() {
   return VIEWS[name] ? { name, param: decodeURIComponent(rest.join('/')) } : { name: 'home', param: '' };
 }
 const currentView = () => route().name;
-const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections', competition: 'battle', studio: 'profile' };
+const NAV_SECTION = { artist: 'artists', art: 'explore', collection: 'collections', competition: 'battle', studio: 'profile', inbox: 'profile', inquiry: 'profile', drop: 'home' };
 
 function renderView() {
   const name = currentView();
@@ -191,6 +194,12 @@ function renderView() {
   if (menuInstall) menuInstall.hidden = !pwa?.status().available;
   const menuAdmin = $('#menu-admin');
   if (menuAdmin) menuAdmin.hidden = !(COMMUNITY && me && isAdmin);
+  const menuInbox = $('#menu-inbox');
+  if (menuInbox) {
+    menuInbox.hidden = !(COMMUNITY && me);
+    const unread = (radar.list || []).filter((q) => q.unread).length;
+    menuInbox.textContent = unread ? `Inbox (${unread})` : 'Inbox';
+  }
   VIEWS[name]($('#view'));
   observeImpressions();
 }
@@ -599,6 +608,7 @@ function renderHome(root) {
 
     <div class="shell">
       ${masterpieceHTML(mp)}
+      ${COMMUNITY ? (radar.drops ? dropsSection(radar.drops, { image: storageImage }) : (loadDrops(), '')) : ''}
 
       ${rising.length ? `<section class="section">
         ${SectionHeader({ eyebrow: 'Discover them first', title: 'Rising artists', action: `<a class="link-arrow" href="#artists">All artists ${Icon('arrow', { size: 16 })}</a>` })}
@@ -1044,6 +1054,87 @@ function renderBattle(root) {
   </div>`;
 }
 
+// ——— Collector Radar and Drops (community mode) ———
+const radar = { list: null, tab: 'received', drops: null, dropsAt: 0, scheduled: [], inquiryFor: null };
+async function loadInbox() {
+  if (!cloud?.inquiries || !me) return;
+  try { radar.list = await cloud.inquiries(); } catch { return; }
+  if (currentView() === 'inbox' && !sheetRenderer) renderView();
+  else { const m = $('#menu-inbox'); const n = radar.list.filter((q) => q.unread).length; if (m) m.textContent = n ? `Inbox (${n})` : 'Inbox'; }
+}
+async function loadDrops(force = false) {
+  if (!cloud?.drops || (!force && Date.now() - radar.dropsAt < 30_000)) return;
+  radar.dropsAt = Date.now();
+  try {
+    const [list, scheduled] = await Promise.all([cloud.drops(), me && cloud.scheduledWorks ? cloud.scheduledWorks() : []]);
+    radar.drops = list; radar.scheduled = scheduled || [];
+  } catch { radar.drops ||= []; }
+  if (currentView() === 'home' && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
+}
+const storageImage = (path) => imageURL(path, cloud?.storageBase || '');
+/** A card for a drop's work: from the catalog once released, or the artist's own scheduled copy. */
+function dropWorkCard(id) {
+  const w = world.artworkById[id];
+  if (w) return card(w);
+  const x = radar.scheduled.find((s) => s.id === id);
+  return x ? `<article class="art-card is-scheduled"><div class="art-frame"><img src="${esc(storageImage(x.thumb_path))}" alt="" loading="lazy"></div>
+    <div class="art-caption"><div class="art-caption-main"><h3 class="art-title">${esc(x.title)}</h3><p class="art-meta">Scheduled · only you can see it</p></div></div></article>` : '';
+}
+
+/** Open the inquiry form for a work or an artist (community mode). */
+function openInquiry({ artworkId = null, artistId = null, kind }) {
+  if (!me) return openSignIn();
+  const w = artworkId ? world.artworkById[artworkId] : null;
+  const a = w ? artistOf(w) : world.artistById[artistId];
+  if (!a || a.sample || w?.sample) return toast('Sample works and artists can’t be contacted.');
+  if (a.isMe) return toast('That’s your own work.');
+  radar.inquiryFor = { artworkId: w?.id || null, artistId: a.id };
+  openSheet(() => inquirySheet({ artwork: w ? { id: w.id, title: w.title, available: forSale(w) } : null, artist: { id: a.id, name: a.name },
+    kind: kind || (w && forSale(w) ? 'purchase' : w ? 'question' : 'commission'), thumb: w ? `<span class="rank-thumb">${ArtImage(w)}</span>` : '' }));
+}
+
+function renderInbox(root) {
+  if (!COMMUNITY || !me) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'mail', title: COMMUNITY ? 'Sign in to see your inbox' : 'Inquiries run with accounts', action: COMMUNITY ? PremiumButton('Sign in', { act: 'sign-in' }) : '' })}</div>`; return; }
+  if (radar.list == null) loadInbox();
+  root.innerHTML = inboxPage(radar.list, { tab: radar.tab, thumb: (id) => (world.artworkById[id] ? ArtImage(world.artworkById[id]) : ''), title: (id) => world.artworkById[id]?.title || 'A work' });
+}
+
+const threads = new Map();
+function renderInquiry(root) {
+  const id = route().param;
+  if (!COMMUNITY || !me) { renderInbox(root); return; }
+  const entry = threads.get(id);
+  if (cloud && (!entry || (!entry.loading && Date.now() - entry.at > 10_000))) {
+    threads.set(id, { loading: true, data: entry?.data });
+    cloud.inquiryThread(id)
+      .then((data) => { threads.set(id, { data, at: Date.now() }); if (data) cloud.markInquiryRead(id).then(loadInbox).catch(() => {}); })
+      .catch(() => threads.set(id, { data: entry?.data || null, at: Date.now() }))
+      .finally(() => { if (route().name === 'inquiry' && route().param === id && !sheetRenderer && !document.activeElement?.matches('textarea')) renderView(); });
+  }
+  const d = threads.get(id)?.data;
+  if (d === undefined) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 3, variant: 'list' })}</div>`; return; }
+  if (!d) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'mail', title: 'Conversation not found', action: '<a class="btn btn-secondary" href="#inbox"><span>Inbox</span></a>' })}</div>`; return; }
+  root.innerHTML = threadPage(d, { thumb: (aid) => (world.artworkById[aid] ? ArtImage(world.artworkById[aid]) : ''), title: (aid) => world.artworkById[aid]?.title || 'A work' });
+}
+
+const dropDetails = new Map();
+function renderDrop(root) {
+  const id = route().param;
+  if (!COMMUNITY) { root.innerHTML = `<div class="shell">${EmptyState({ title: 'Drops run with accounts' })}</div>`; return; }
+  const entry = dropDetails.get(id);
+  if (cloud && (!entry || (!entry.loading && Date.now() - entry.at > 15_000))) {
+    dropDetails.set(id, { loading: true, data: entry?.data });
+    Promise.all([cloud.drop(id), me && cloud.scheduledWorks ? cloud.scheduledWorks() : radar.scheduled])
+      .then(([data, scheduled]) => { radar.scheduled = scheduled || []; dropDetails.set(id, { data, at: Date.now() }); })
+      .catch(() => dropDetails.set(id, { data: entry?.data || null, at: Date.now() }))
+      .finally(() => { if (route().name === 'drop' && route().param === id && !sheetRenderer) renderView(); });
+  }
+  const d = dropDetails.get(id)?.data;
+  if (d === undefined) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 3 })}</div>`; return; }
+  if (!d) { root.innerHTML = `<div class="shell">${EmptyState({ title: 'Drop not found', action: '<a class="btn btn-secondary" href="#home"><span>Home</span></a>' })}</div>`; return; }
+  root.innerHTML = dropPage(d, { image: storageImage, card: dropWorkCard, signedIn: Boolean(me) });
+}
+
 // ——— Artist Studio analytics (#studio) ———
 const studio = { days: 30, data: undefined, reports: null, at: 0, loading: false };
 function renderStudio(root) {
@@ -1051,8 +1142,11 @@ function renderStudio(root) {
   if (!me) { root.innerHTML = `<div class="shell">${EmptyState({ icon: 'lock', title: 'Sign in to see your Studio', action: PremiumButton('Sign in', { act: 'sign-in' }) })}</div>`; return; }
   if (cloud && !studio.loading && (studio.data === undefined || Date.now() - studio.at > 60_000)) {
     studio.loading = true;
-    Promise.all([cloud.studio(studio.days), cloud.weeklyReports().catch(() => [])])
-      .then(([data, reports]) => Object.assign(studio, { data, reports, at: Date.now() }))
+    Promise.all([cloud.studio(studio.days), cloud.weeklyReports().catch(() => []), cloud.collectorInterest ? cloud.collectorInterest().catch(() => []) : []])
+      .then(([data, reports, interest]) => {
+        if (data?.works) for (const w of data.works) Object.assign(w, interest.find((x) => x.artwork === w.id) || {});
+        Object.assign(studio, { data, reports, at: Date.now() });
+      })
       .catch(() => Object.assign(studio, { data: studio.data ?? null, at: Date.now() }))
       .finally(() => { studio.loading = false; if (currentView() === 'studio' && !sheetRenderer) renderView(); });
   }
@@ -1811,7 +1905,7 @@ let uploading = false;
 function studioHTML(myWorks, canAnalyze) {
   const where = COMMUNITY ? 'Published works are visible to everyone and enter the rankings and Art Battles straight away.' : 'Demo mode: your works are saved on this device only.';
   return `<section class="section section-tight" id="studio">
-    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work', action: COMMUNITY && me ? `<div class="studio-links"><a class="link-arrow" href="#studio">${Icon('chart', { size: 14 })} Analytics</a><button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Artist profile</button>${world.artistById[myArtistId()] ? `<a class="link-arrow" href="#artist/${encodeURIComponent(myArtistId())}">Your page ${Icon('arrow', { size: 14 })}</a>` : ''}</div>` : '' })}
+    ${SectionHeader({ eyebrow: 'Studio', title: 'Your work', action: COMMUNITY && me ? `<div class="studio-links"><a class="link-arrow" href="#studio">${Icon('chart', { size: 14 })} Analytics</a><a class="link-arrow" href="#inbox">${Icon('mail', { size: 14 })} Inbox</a><button class="link-arrow" data-act="open-drop-form">${Icon('clock', { size: 14 })} Schedule a drop</button><button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Artist profile</button>${world.artistById[myArtistId()] ? `<a class="link-arrow" href="#artist/${encodeURIComponent(myArtistId())}">Your page ${Icon('arrow', { size: 14 })}</a>` : ''}</div>` : '' })}
     <div class="profile-grid">
       <form id="upload" class="panel upload" novalidate>
         <label class="dropzone dropzone-sm">
@@ -2150,13 +2244,14 @@ async function sendApplication(role) {
 let adminData = null;
 async function loadAdmin() {
   try {
-    const [queue, verified, flags, audit] = await Promise.all([
+    const [queue, verified, flags, audit, , reports] = await Promise.all([
       cloud.adminQueue(), cloud.verifiedMembers(),
       cloud.integrityQueue ? cloud.integrityQueue().catch(() => []) : [],
       cloud.auditLog ? cloud.auditLog().catch(() => []) : [],
       loadArena(true),
+      cloud.inquiryReports ? cloud.inquiryReports().catch(() => []) : [],
     ]);
-    adminData = { queue, verified, flags, audit, at: Date.now() };
+    adminData = { queue, verified, flags, audit, reports, at: Date.now() };
   } catch (e) {
     adminData = { error: e?.message || 'Could not load applications.' };
   }
@@ -2197,6 +2292,7 @@ function renderAdmin(root) {
       ${createCompetitionForm(arena.adminKind)}
       ${(arena.list || []).filter((c) => ['upcoming', 'entries', 'voting'].includes(c.phase)).length ? `<h3 class="sub-head">Running now</h3><div class="competition-list">${(arena.list || []).filter((c) => ['upcoming', 'entries', 'voting'].includes(c.phase)).map((c) => `<div class="admin-competition">${competitionCard(c, { cover: coverThumb })}${PremiumButton('Cancel', { act: 'cancel-competition', variant: 'ghost', attrs: `data-v="${c.id}" data-danger` })}</div>`).join('')}</div>` : ''}
     </section>
+    ${reportsHTML(adminData.reports || [])}
     ${integrityHTML(adminData.flags || [])}
     ${auditHTML(adminData.audit || [])}
   </div>`;
@@ -2369,6 +2465,8 @@ function signedOut() {
   sharedCollections.clear();
   serverAchievements.earned = [];
   serverNotifications = [];
+  Object.assign(radar, { list: null, scheduled: [] });
+  threads.clear();
   Object.assign(studio, { data: undefined, reports: null, at: 0 });
   Object.assign(state, { interactions: {}, interactionRoles: {}, follows: {}, reviews: [], account: null });
   state.user = { ...state.user, role: 'fan', name: 'You' };
@@ -2399,7 +2497,7 @@ async function syncAccount({ importGuest = false } = {}) {
   memberCache.clear();
   // Critic & Collector applications (older databases without the feature simply return none).
   await syncCollections();
-  await Promise.all([loadAchievements(), loadNotifications()]);
+  await Promise.all([loadAchievements(), loadNotifications(), loadInbox()]);
   const [apps, admin] = await Promise.all([cloud.myApplications().catch(() => []), cloud.isAdmin().catch(() => false)]);
   const before = new Map((state.applications || []).map((a) => [a.id, a.status]));
   state.applications = apps;
@@ -2541,7 +2639,7 @@ async function connectCommunity() {
 function quietRefresh() {
   if (document.hidden || !cloud) return;
   const waiting = me && state.applications?.some((a) => a.status === 'pending');
-  Promise.all([waiting ? syncAccount() : refreshCommunity(), loadChartBaseline(), waiting ? null : loadAchievements(), waiting ? null : loadNotifications(), loadArena()])
+  Promise.all([waiting ? syncAccount() : refreshCommunity(), loadChartBaseline(), waiting ? null : loadAchievements(), waiting ? null : loadNotifications(), loadArena(), waiting ? null : loadInbox(), loadDrops(true)])
     .then(() => {
       // A decided application changes the member's role, so every view (and the nav badge) must redraw.
       if (waiting) commit();
@@ -2593,6 +2691,85 @@ const ACTIONS = {
   back: () => (history.length > 1 ? history.back() : (location.hash = 'artists')),
   'artist-tab': (el) => { artistTab = el.dataset.v; renderView(); },
   'how-ranked': () => openSheet(howRankedSheet),
+  'inquiry-kind': (el) => {
+    $$('#inquiry-form [data-act=inquiry-kind]').forEach((b) => { const on = b === el; b.classList.toggle('is-on', on); b.setAttribute('aria-checked', String(on)); });
+    $('#inquiry-kind').value = el.dataset.v;
+  },
+  'send-inquiry': async (el) => {
+    const f = radar.inquiryFor;
+    const message = ($('#inquiry-message')?.value || '').trim();
+    const fail = (msg) => { const e = $('#inquiry-error'); e.textContent = msg; e.hidden = false; };
+    if (message.length < 10) return fail('Write a little more (at least 10 characters).');
+    el.disabled = true;
+    try {
+      const id = await cloud.sendInquiry({ artworkId: f.artworkId, artistId: f.artworkId ? null : f.artistId, kind: $('#inquiry-kind').value, message });
+      closeSheet();
+      toast('Sent. The artist has been notified.', { force: true });
+      loadInbox();
+      location.hash = `inquiry/${id}`;
+    } catch (e) { el.disabled = false; fail(e?.message || 'Could not send. Try again.'); }
+  },
+  'inbox-tab': (el) => { radar.tab = el.dataset.v; renderView(); },
+  'send-reply': async (el) => {
+    const id = $('#reply-form')?.dataset.id;
+    const body = ($('#reply-body')?.value || '').trim();
+    if (!body) return;
+    el.disabled = true;
+    try { await cloud.replyInquiry(id, body); threads.delete(id); renderView(); loadInbox(); }
+    catch (e) { el.disabled = false; toast(e?.message || 'Could not send.', { force: true }); }
+  },
+  'inquiry-status': async (el) => {
+    if (!confirm(el.dataset.v === 'declined' ? 'Decline this inquiry? They’ll see that you declined.' : 'Close this conversation?')) return;
+    try { await cloud.setInquiryStatus(el.dataset.id, el.dataset.v); threads.delete(el.dataset.id); renderView(); loadInbox(); }
+    catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
+  },
+  'inquiry-block': async (el) => {
+    const on = el.dataset.v === 'on';
+    if (on && !confirm('Block this member? Your open conversations with them are closed and they can’t contact you.')) return;
+    try { await cloud.setBlock(el.dataset.id, on); toast(on ? 'Blocked.' : 'Unblocked.', { force: true }); threads.delete(el.dataset.id); renderView(); loadInbox(); }
+    catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
+  },
+  'inquiry-report': async (el) => {
+    const reason = prompt('What’s wrong? A moderator will read this conversation.');
+    if (!reason || reason.trim().length < 3) return;
+    try { await cloud.reportInquiry(el.dataset.id, reason.trim()); toast('Reported. A moderator will review it.', { force: true }); }
+    catch (e) { toast(e?.message || 'Could not report.', { force: true }); }
+  },
+  'report-resolve': async (el) => {
+    try { await cloud.resolveInquiryReport(el.dataset.id, el.dataset.v === 'close', null); toast('Done.', { force: true }); await loadAdmin(); }
+    catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
+  },
+  'open-drop-form': () => {
+    if (!me) return openSignIn();
+    const works = (world.worksByArtist[myArtistId()] || []).filter((w) => w.member);
+    openSheet(() => createDropForm(works.map((w) => ({ id: w.id, title: w.title }))));
+  },
+  'create-drop': async (el) => {
+    const v = (k) => ($(`#drop-${k}`)?.value || '').trim();
+    const ids = $$('#drop-form input[name=drop-work]:checked').map((x) => x.value);
+    const fail = (msg) => { const e = $('#drop-error'); e.textContent = msg; e.hidden = false; };
+    if (v('title').length < 3) return fail('Give the drop a title.');
+    if (!ids.length) return fail('Choose at least one work.');
+    if (!v('release')) return fail('Choose a release time.');
+    el.disabled = true;
+    try {
+      const id = await cloud.createDrop({ title: v('title'), description: v('description'), releaseAt: new Date(v('release')).toISOString(), artworkIds: ids });
+      closeSheet();
+      toast('Drop scheduled. Your followers have been notified.', { force: true });
+      await refreshCommunity();
+      loadDrops(true);
+      location.hash = `drop/${id}`;
+    } catch (e) { el.disabled = false; fail(e?.message || 'Could not schedule the drop.'); }
+  },
+  'drop-subscribe': async (el) => {
+    try { await cloud.subscribeDrop(el.dataset.id, el.dataset.v === 'on'); dropDetails.delete(el.dataset.id); toast(el.dataset.v === 'on' ? 'We’ll notify you at the release.' : 'Notification removed.', { force: true }); renderView(); }
+    catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
+  },
+  'drop-cancel': async (el) => {
+    if (!confirm('Cancel this drop? Its works become visible now, without a release announcement.')) return;
+    try { await cloud.cancelDrop(el.dataset.id, null); dropDetails.delete(el.dataset.id); await refreshCommunity(); loadDrops(true); toast('Drop cancelled.', { force: true }); renderView(); }
+    catch (e) { toast(e?.message || 'Could not cancel.', { force: true }); }
+  },
   'studio-days': (el) => { studio.days = Number(el.dataset.v) || 30; studio.data = undefined; renderView(); },
   'open-link': (el) => { closePopovers(); if (el.dataset.id) location.hash = el.dataset.id; },
   'arena-tab': (el) => {
@@ -2857,9 +3034,11 @@ const ACTIONS = {
     const w = world.artworkById[el.dataset.id];
     if (!w) return;
     if (w.sample) return toast('Sample works aren’t for sale.');
+    if (COMMUNITY) return openInquiry({ artworkId: w.id }); // no simulated purchases with real accounts
     openSheet(() => buySheet(w.id));
   },
-  contact: (el) => (world.artistById[el.dataset.id]?.sample ? toast('Sample artists can’t be contacted.') : openSheet(() => contactSheet(el.dataset.id))),
+  contact: (el) => (world.artistById[el.dataset.id]?.sample ? toast('Sample artists can’t be contacted.')
+    : COMMUNITY ? openInquiry({ artistId: el.dataset.id, kind: 'commission' }) : openSheet(() => contactSheet(el.dataset.id))),
   review: (el) => {
     const id = el.dataset.id;
     if (state.reviews.some((r) => r.artworkId === id)) return toast('You have already reviewed this work.');
@@ -2906,6 +3085,7 @@ const ACTIONS = {
   },
   sponsor: (el) => {
     if (world.artistById[el.dataset.id]?.sample) return toast('Sample artists can’t be sponsored.');
+    if (COMMUNITY) return openInquiry({ artistId: el.dataset.id, kind: 'sponsorship' });
     state.messages.push({ artistId: el.dataset.id, text: '[sponsorship request]', at: Date.now() });
     commit();
     updateNotificationDot();

@@ -81,6 +81,22 @@ window.__abremiCloud = async () => {
     }
     if (changed) save(db);
   };
+  // Drops (0010): announced once released, to followers and subscribers.
+  const dropView = (db, d) => ({ id: d.id, title: d.title, description: d.description, release_at: d.release_at, artist_id: d.artist_id,
+    artist_name: profileOf(db, d.owner).name, phase: d.cancelled ? 'cancelled' : Date.parse(d.release_at) > Date.now() ? 'upcoming' : 'released',
+    teaser_thumb: db.uploads.find((u) => u.id === d.teaser)?.thumb_path || null, works: db.uploads.filter((u) => u.drop_id === d.id).length,
+    subscribed: (db.dropSubs || []).some((x) => x.drop === d.id && x.user === user?.id), mine: d.owner === user?.id });
+  const releaseDue = (db) => {
+    let changed = false;
+    for (const d of db.drops || []) {
+      if (d.released || d.cancelled || Date.parse(d.release_at) > Date.now()) continue;
+      d.released = true; changed = true;
+      const who = new Set([...countedFollows(db).filter((f) => f.artist_id === d.artist_id).map((f) => f.user_id), ...(db.dropSubs || []).filter((x) => x.drop === d.id).map((x) => x.user)]);
+      who.delete(d.owner);
+      for (const u of who) (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: u, kind: 'drop_released', title: `${profileOf(db, d.owner).name}’s drop “${d.title}” is live`, link: `drop/${d.id}`, created_at: new Date().toISOString(), read_at: null });
+    }
+    if (changed) save(db);
+  };
   const snapshotOf = (db) => ({
     ...scoresOf(db),
     reactions: group(counted(db).filter((r) => r.kind !== 'pass'), (r) => ({ key: `${r.artwork_id}|${r.kind}|${r.role}`, out: { a: r.artwork_id, k: r.kind, r: r.role } })),
@@ -89,7 +105,7 @@ window.__abremiCloud = async () => {
     ratings: Object.entries(db.ratings).map(([a, v]) => ({ a, v })),
     members: Object.keys(db.profiles).length,
     artists: Object.values(db.artists),
-    uploads: db.uploads.slice().reverse().map(({ owner, image_type, image_bytes, ...u }) => u),
+    uploads: db.uploads.filter((u) => !u.release_at || Date.parse(u.release_at) <= Date.now()).reverse().map(({ owner, image_type, image_bytes, ...u }) => u),
   });
 
   return {
@@ -617,6 +633,167 @@ window.__abremiCloud = async () => {
       await wait();
       needUser();
       return (load().weeklyReports || []).filter((r) => r.user_id === user.id);
+    },
+    // ——— Phase 4 (same rules as supabase/migrations/0010_radar_drops.sql) ———
+    async sendInquiry({ artworkId = null, artistId = null, kind, message = '' }) {
+      needUser(); await wait();
+      const db = load();
+      if (Date.parse(profileOf(db, user.id).created_at) > Date.now() - 3 * 86400e3) throw new Error('New accounts can send inquiries after 3 days');
+      const w = artworkId ? db.uploads.find((u) => u.id === artworkId) : null;
+      if (artworkId && !w && !catalogArtist[artworkId]) throw new Error('Artwork not found');
+      const aid = w ? w.artist_id : artworkId ? catalogArtist[artworkId] : artistId;
+      const owner = aid?.startsWith('m_') ? aid.slice(2) : null;
+      if (!owner) throw new Error('Sample artists can’t be contacted');
+      if (owner === user.id) throw new Error('That’s your own work');
+      if (kind === 'purchase' && !w) throw new Error('Choose a work to ask about buying it');
+      if (kind === 'purchase' && !['available', 'on_request', undefined, null].includes(w.availability)) throw new Error('This work isn’t available');
+      db.inquiries ||= []; db.blocks ||= [];
+      if (db.blocks.some((b) => (b.user === user.id && b.blocked === owner) || (b.user === owner && b.blocked === user.id))) throw new Error('You can’t contact this member');
+      if (db.inquiries.some((q) => q.sender === user.id && q.artist_id === aid && q.status === 'open' && q.artwork === (w?.id || null))) throw new Error('You already have an open conversation about this');
+      if (message.trim().length < 10) throw new Error('Write a little more (at least 10 characters)');
+      const q = { id: crypto.randomUUID(), artwork: w?.id || null, artist_id: aid, artist_user: owner, sender: user.id, kind, status: 'open', artist_unread: true, sender_unread: false,
+        messages: [{ from: user.id, body: message.trim(), at: new Date().toISOString() }], last: Date.now() };
+      db.inquiries.push(q);
+      (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: owner, kind: 'inquiry', title: `${profileOf(db, user.id).name} sent you ${kind === 'purchase' ? 'a purchase inquiry' : kind === 'commission' ? 'a commission request' : kind === 'sponsorship' ? 'a sponsorship request' : 'a question'}${w ? ` about “${w.title}”` : ''}`, link: `inquiry/${q.id}`, created_at: new Date().toISOString(), read_at: null });
+      save(db);
+      return q.id;
+    },
+    async inquiries() {
+      await wait();
+      if (!user) return [];
+      const db = load();
+      return (db.inquiries || []).filter((q) => [q.artist_user, q.sender].includes(user.id)).sort((a, b) => b.last - a.last).map((q) => {
+        const artistSide = q.artist_user === user.id;
+        const other = profileOf(db, artistSide ? q.sender : q.artist_user);
+        return { id: q.id, kind: q.kind, status: q.status, artwork: q.artwork, artist: q.artist_id, side: artistSide ? 'artist' : 'sender', other_name: other.name, other_role: other.role,
+          unread: artistSide ? q.artist_unread : q.sender_unread, last_message: q.messages.at(-1).body.slice(0, 140), last_message_at: new Date(q.last).toISOString() };
+      });
+    },
+    async inquiryThread(id) {
+      await wait();
+      const db = load();
+      const q = (db.inquiries || []).find((x) => x.id === id && [x.artist_user, x.sender].includes(user?.id));
+      if (!q) return null;
+      const artistSide = q.artist_user === user.id;
+      const otherId = artistSide ? q.sender : q.artist_user;
+      const other = profileOf(db, otherId);
+      return { id: q.id, kind: q.kind, status: q.status, artwork: q.artwork, artist: q.artist_id, side: artistSide ? 'artist' : 'sender', other_name: other.name, other_role: other.role,
+        blocked: (db.blocks || []).some((b) => b.user === user.id && b.blocked === otherId), messages: q.messages.map((m) => ({ mine: m.from === user.id, body: m.body, at: m.at })) };
+    },
+    async replyInquiry(id, body) {
+      needUser(); await wait();
+      const db = load();
+      const q = (db.inquiries || []).find((x) => x.id === id && [x.artist_user, x.sender].includes(user.id));
+      if (!q) throw new Error('Conversation not found');
+      if (q.status !== 'open') throw new Error('This conversation is closed');
+      const artistSide = q.artist_user === user.id;
+      const other = artistSide ? q.sender : q.artist_user;
+      if (!body.trim()) throw new Error('violates check constraint');
+      q.messages.push({ from: user.id, body: body.trim(), at: new Date().toISOString() });
+      if (!(artistSide ? q.sender_unread : q.artist_unread)) (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: other, kind: 'inquiry_reply', title: `${profileOf(db, user.id).name} replied to your conversation`, link: `inquiry/${q.id}`, created_at: new Date().toISOString(), read_at: null });
+      if (artistSide) q.sender_unread = true; else q.artist_unread = true;
+      q.last = Date.now();
+      save(db);
+    },
+    async setInquiryStatus(id, status) {
+      needUser(); await wait();
+      const db = load();
+      const q = (db.inquiries || []).find((x) => x.id === id && [x.artist_user, x.sender].includes(user.id));
+      if (!q) throw new Error('Conversation not found');
+      if (status === 'declined' && q.artist_user !== user.id) throw new Error('Only the artist can decline; either of you can close');
+      q.status = status;
+      save(db);
+    },
+    async markInquiryRead(id) {
+      const db = load();
+      const q = (db.inquiries || []).find((x) => x.id === id);
+      if (!q || ![q.artist_user, q.sender].includes(user?.id)) return;
+      const key = q.artist_user === user.id ? 'artist_unread' : 'sender_unread';
+      if (q[key]) { q[key] = false; save(db); }
+    },
+    async setBlock(id, on) {
+      needUser(); await wait();
+      const db = load();
+      const q = (db.inquiries || []).find((x) => x.id === id && [x.artist_user, x.sender].includes(user.id));
+      if (!q) throw new Error('Conversation not found');
+      const other = q.artist_user === user.id ? q.sender : q.artist_user;
+      db.blocks = (db.blocks || []).filter((b) => !(b.user === user.id && b.blocked === other));
+      if (on) {
+        db.blocks.push({ user: user.id, blocked: other });
+        for (const x of db.inquiries) if (x.status === 'open' && [x.artist_user, x.sender].includes(other) && [x.artist_user, x.sender].includes(user.id)) x.status = 'closed';
+      }
+      save(db);
+    },
+    async reportInquiry(id, reason) {
+      needUser(); await wait();
+      const db = load();
+      (db.inquiryReports ||= []).push({ id: crypto.randomUUID(), inquiry: id, reporter: user.id, reason, status: 'open', created_at: new Date().toISOString() });
+      save(db);
+    },
+    async inquiryReports() { return []; },
+    async collectorInterest() {
+      await wait();
+      const db = load();
+      return db.uploads.filter((u) => u.owner === user?.id).map((u) => ({ artwork: u.id,
+        inquiries: (db.inquiries || []).filter((q) => q.artwork === u.id).length,
+        open_inquiries: (db.inquiries || []).filter((q) => q.artwork === u.id && q.status === 'open').length,
+        collector_saves: counted(db).filter((r) => r.artwork_id === u.id && r.kind === 'super' && r.role === 'collector').length }));
+    },
+    async drops() {
+      await wait();
+      const db = load();
+      releaseDue(db);
+      return (db.drops || []).filter((d) => !d.cancelled).map((d) => dropView(db, d)).sort((a, b) => (a.phase === 'upcoming' ? 0 : 1) - (b.phase === 'upcoming' ? 0 : 1) || Date.parse(a.release_at) - Date.parse(b.release_at));
+    },
+    async drop(id) {
+      await wait();
+      const db = load();
+      releaseDue(db);
+      const d = (db.drops || []).find((x) => x.id === id);
+      if (!d) return null;
+      const v = dropView(db, d);
+      const ids = db.uploads.filter((u) => u.drop_id === id).map((u) => u.id);
+      return { ...v, work_count: ids.length, works: v.phase !== 'upcoming' || v.mine ? ids : [] };
+    },
+    async createDrop({ title, description = '', releaseAt, artworkIds }) {
+      needUser(); await wait();
+      const db = load();
+      const t = Date.parse(releaseAt);
+      if (!(t >= Date.now() + 10 * 60e3 && t <= Date.now() + 60 * 86400e3)) throw new Error('Release between 10 minutes and 60 days from now');
+      if (!artworkIds.length || artworkIds.length > 12) throw new Error('A drop has 1 to 12 works');
+      const works = db.uploads.filter((u) => artworkIds.includes(u.id) && u.owner === user.id);
+      if (works.length !== artworkIds.length) throw new Error('A drop can include only your own works that aren’t in another upcoming drop');
+      db.drops ||= [];
+      if (db.drops.filter((d) => d.owner === user.id && !d.released && !d.cancelled).length >= 3) throw new Error('You can have 3 upcoming drops at a time');
+      const d = { id: crypto.randomUUID(), owner: user.id, artist_id: `m_${user.id}`, title: title.trim(), description, release_at: new Date(t).toISOString(), teaser: artworkIds[0] };
+      db.drops.push(d);
+      for (const w of works) Object.assign(w, { drop_id: d.id, release_at: d.release_at });
+      for (const f of countedFollows(db).filter((x) => x.artist_id === d.artist_id)) (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: f.user_id, kind: 'drop_announced', title: `${profileOf(db, user.id).name} announced a drop: “${d.title}”`, link: `drop/${d.id}`, created_at: new Date().toISOString(), read_at: null });
+      save(db);
+      return d.id;
+    },
+    async cancelDrop(id) {
+      needUser(); await wait();
+      const db = load();
+      const d = (db.drops || []).find((x) => x.id === id && !x.released && !x.cancelled);
+      if (!d) throw new Error('That drop has already been released or cancelled');
+      if (d.owner !== user.id && !(db.admins || []).includes(user.id)) throw new Error('Only the artist or a moderator can cancel a drop');
+      d.cancelled = true;
+      for (const w of db.uploads) if (w.drop_id === id) w.release_at = null;
+      save(db);
+    },
+    async subscribeDrop(id, on) {
+      needUser(); await wait();
+      const db = load();
+      db.dropSubs = (db.dropSubs || []).filter((x) => !(x.drop === id && x.user === user.id));
+      if (on) db.dropSubs.push({ drop: id, user: user.id });
+      save(db);
+    },
+    async scheduledWorks() {
+      await wait();
+      const db = load();
+      return db.uploads.filter((u) => u.owner === user?.id && u.release_at && Date.parse(u.release_at) > Date.now())
+        .map((u) => ({ id: u.id, title: u.title, drop_id: u.drop_id, release_at: u.release_at, thumb_path: u.thumb_path, image_path: u.image_path }));
     },
     async auditLog() {
       const db = load();
