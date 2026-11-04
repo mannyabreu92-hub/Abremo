@@ -30,7 +30,7 @@ export function resolveConfig(env) {
 
 export function configSource({ url, key }) {
   return `// Written at deploy time by scripts/write-config.js from the project's environment variables.
-// Empty values run Gabangi in demo mode: everything stays on the visitor's device.
+// Empty values run Abremi in demo mode: everything stays on the visitor's device.
 export const SUPABASE_URL = ${JSON.stringify(url)};
 export const SUPABASE_ANON_KEY = ${JSON.stringify(key)};
 `;
@@ -39,7 +39,7 @@ export const SUPABASE_ANON_KEY = ${JSON.stringify(key)};
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const cfg = resolveConfig(process.env);
   writeFileSync(new URL('../src/config.js', import.meta.url), configSource(cfg));
-  console.log(cfg.mode === 'community' ? `Gabangi: community mode (${new URL(cfg.url).host})` : 'Gabangi: demo mode (no Supabase environment variables found)');
+  console.log(cfg.mode === 'community' ? `Abremi: community mode (${new URL(cfg.url).host})` : 'Abremi: demo mode (no Supabase environment variables found)');
   // The config is part of the offline app, so the service worker version must reflect it.
-  console.log(`Gabangi: service worker version ${stampServiceWorker()}`);
+  console.log(`Abremi: service worker version ${stampServiceWorker()}`);
 }

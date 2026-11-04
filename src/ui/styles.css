@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Gabangi design system
+   Abremi design system
    Dark, quiet, editorial. The artwork provides the colour.
    ========================================================================== */
 
@@ -138,7 +138,7 @@ ol, ul { padding: 0; list-style: none; }
 .nav-inner { height: 100%; max-width: 1280px; margin: 0 auto; padding: 0 var(--gutter); display: flex; align-items: center; gap: 32px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; }
 .brand-mark { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; border: 1px solid var(--gold-line);
-  font-family: var(--serif); font-style: italic; font-size: 19px; line-height: 1; color: var(--gold); padding-bottom: 3px; }
+  font-family: var(--serif); font-style: italic; font-size: 17px; line-height: 1; color: var(--gold); padding: 1px 1px 0 0; }
 .brand-word { font-family: var(--serif); font-size: 21px; letter-spacing: -0.01em; }
 .nav-links { display: flex; gap: 4px; }
 .nav-links a { position: relative; padding: 8px 12px; font-size: 14px; color: var(--text-2); border-radius: var(--r-pill); transition: color var(--dur) var(--ease); }

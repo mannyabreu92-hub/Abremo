@@ -3,7 +3,9 @@
 
 import { emptyTaste } from '../core/feed.js';
 
-const KEY = 'gabangi:v1';
+const KEY = 'abremi:v1';
+// Saved before the rename to Abremi; moved over on first load so nobody loses their data.
+const LEGACY_KEYS = ['gabangi:v1'];
 
 export function defaultState() {
   return {
@@ -26,7 +28,15 @@ export function defaultState() {
 
 export function loadState() {
   try {
-    const raw = localStorage.getItem(KEY);
+    let raw = localStorage.getItem(KEY);
+    if (!raw) {
+      const legacy = LEGACY_KEYS.find((k) => localStorage.getItem(k));
+      if (legacy) {
+        raw = localStorage.getItem(legacy);
+        localStorage.setItem(KEY, raw);
+        localStorage.removeItem(legacy);
+      }
+    }
     if (!raw) return defaultState();
     return { ...defaultState(), ...JSON.parse(raw) };
   } catch {

@@ -2,7 +2,7 @@
 // Same methods as src/ui/cloud.js; enforces the same rules as the SQL migration
 // (server-stamped roles, critic-only reviews, admin-only Critic/Collector, Elo maths).
 // Data lives in localStorage under "mockcloud" so it survives reloads and is shared by tabs.
-window.__gabangiCloud = async () => {
+window.__abremiCloud = async () => {
   const { buildSeedWorld } = await import('/src/core/seed.js');
   const { battleResult, expectedScore } = await import('/src/core/elo.js');
   const seed = buildSeedWorld();

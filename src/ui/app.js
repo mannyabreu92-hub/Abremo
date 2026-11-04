@@ -26,7 +26,7 @@ let state = loadState();
 
 // Community mode: everyone's likes, follows and votes are shared through Supabase.
 // Demo mode (no configuration): everything stays on this device, exactly as before.
-const COMMUNITY = Boolean(window.__gabangiCloud || (SUPABASE_URL && SUPABASE_ANON_KEY));
+const COMMUNITY = Boolean(window.__abremiCloud || (SUPABASE_URL && SUPABASE_ANON_KEY));
 let cloud = null; // backend adapter, once connected
 let me = null; // signed-in account { id, email }
 let pendingWrites = 0;
@@ -280,12 +280,12 @@ function renderHome(root) {
       <div class="hero-copy">
         <p class="eyebrow">Art discovery, ranked by taste</p>
         <h1 class="display-xl">Find the work<br><em>that stops you.</em></h1>
-        <p class="lede">Gabangi is a private view of the world's emerging art. Swipe through paintings, photography, sculpture and new media. Collectors, critics and artists shape the rankings, so what rises has earned it.</p>
+        <p class="lede">Abremi is a private view of the world's emerging art. Swipe through paintings, photography, sculpture and new media. Collectors, critics and artists shape the rankings, so what rises has earned it.</p>
         <div class="hero-actions">
           <a class="btn btn-primary btn-lg" href="#discover"><span>Start discovering</span>${Icon('arrow', { size: 18 })}</a>
           <a class="btn btn-secondary btn-lg" href="#battle"><span>Enter an Art Battle</span></a>
         </div>
-        ${pwa?.status().available ? `<button class="link-arrow get-app" data-act="pwa-install">${Icon('download', { size: 16 })} Get the Gabangi app</button>` : ''}
+        ${pwa?.status().available ? `<button class="link-arrow get-app" data-act="pwa-install">${Icon('download', { size: 16 })} Get the Abremi app</button>` : ''}
         <dl class="hero-stats">
           <div><dt>Works</dt><dd>${totals.works}</dd></div>
           <div><dt>Artists</dt><dd>${totals.artists}</dd></div>
@@ -331,7 +331,7 @@ function renderHome(root) {
 }
 
 function footerHTML() {
-  return `<footer class="footer"><span class="brand-word">Gabangi</span><span>Every work, ranked by taste.</span><button class="link" data-act="about">About</button></footer>`;
+  return `<footer class="footer"><span class="brand-word">Abremi</span><span>Every work, ranked by taste.</span><button class="link" data-act="about">About</button></footer>`;
 }
 
 // ——— Discover (swipe) ———
@@ -567,7 +567,7 @@ function buySheet(id) {
       <p class="eyebrow">Acquire</p><h2 class="display-sm" id="modal-title">${esc(w.title)}</h2><p class="muted">${esc(a.name)} · ${esc(w.medium)}</p></div></header>
     <table class="receipt">
       <tr><td>Artwork</td><td>${money(b.price)}</td></tr>
-      <tr><td>Gabangi commission (${(b.rate * 100).toFixed(1).replace('.0', '')}%)</td><td>${money(b.fee)}</td></tr>
+      <tr><td>Abremi commission (${(b.rate * 100).toFixed(1).replace('.0', '')}%)</td><td>${money(b.fee)}</td></tr>
       <tr class="total"><td>Artist receives</td><td>${money(b.artistPayout)}</td></tr>
     </table>
     <p class="fine">The commission slides from 10% to 5% as the price rises. Buyers pay the listed price.</p>
@@ -858,7 +858,7 @@ function renderCollections(root) {
 function renderScan(root) {
   root.innerHTML = `<div class="shell scan">
     <header class="page-head page-head-center"><p class="eyebrow">Artwork recognition</p><h1 class="display-lg">Point. Identify. Discover.</h1>
-      <p class="lede">Photograph any artwork, in a gallery, on a wall or on a screen. Gabangi reads its style and medium, then finds artists working in the same vein.</p></header>
+      <p class="lede">Photograph any artwork, in a gallery, on a wall or on a screen. Abremi reads its style and medium, then finds artists working in the same vein.</p></header>
     <div class="scan-actions">
       <label class="dropzone"><input type="file" id="scan-file" accept="image/*" capture="environment">${Icon('scan', { size: 28 })}<b>Take or upload a photo</b><small>JPG, PNG or HEIC</small></label>
       ${PremiumButton('Try it on a random artwork', { act: 'scan-sample', variant: 'secondary', icon: 'spark' })}
@@ -1026,10 +1026,10 @@ function renderProfile(root) {
         <p class="plan-name">${p.name}</p><p class="plan-price">${p.price ? `${money(p.price)}<small>/month</small>` : 'Free'}</p>
         <ul>${p.features.map((x) => `<li>${Icon('check', { size: 16 })}${esc(x)}</li>`).join('')}</ul>
         ${p.id === state.user.plan ? '<span class="tag tag-gold">Current plan</span>' : PremiumButton(`Choose ${p.name}`, { act: 'set-plan', variant: p.id === 'pro' ? 'primary' : 'secondary', attrs: `data-v="${p.id}"` })}</div>`).join('')}</div>
-      <p class="fine">Artists pay nothing to start. Gabangi earns from memberships and a 5–10% marketplace commission.</p>
+      <p class="fine">Artists pay nothing to start. Abremi earns from memberships and a 5–10% marketplace commission.</p>
     </section>
 
-    <div class="profile-foot">${PremiumButton('About Gabangi', { act: 'about', variant: 'ghost' })}${PremiumButton('Reset demo data', { act: 'reset', variant: 'ghost', attrs: 'data-danger' })}</div>
+    <div class="profile-foot">${PremiumButton('About Abremi', { act: 'about', variant: 'ghost' })}${PremiumButton('Reset demo data', { act: 'reset', variant: 'ghost', attrs: 'data-danger' })}</div>
   </div>`;
 
   $('#name', root).addEventListener('change', (e) => {
@@ -1094,9 +1094,9 @@ async function onUpload(e) {
 
 function aboutSheet() {
   return `<div class="about">
-    <p class="eyebrow">About</p><h2 class="display-md" id="modal-title">Gabangi</h2>
+    <p class="eyebrow">About</p><h2 class="display-md" id="modal-title">Abremi</h2>
     <p class="lede">The Tinder and TikTok of art, curated like a private gallery.</p>
-    <p>People don't wake up saying “I want to upload art.” They wake up saying <em>“Show me something amazing.”</em> Gabangi makes finding art addictive. You swipe through paintings, photography, sculpture, street art, NFTs and AI art, discover emerging artists, and your taste moves the rankings.</p>
+    <p>People don't wake up saying “I want to upload art.” They wake up saying <em>“Show me something amazing.”</em> Abremi makes finding art addictive. You swipe through paintings, photography, sculpture, street art, NFTs and AI art, discover emerging artists, and your taste moves the rankings.</p>
     <h3 class="sub-head">Weighted influence</h3>
     <p>100 fan likes (100) + 20 artist likes (60) + 10 critic likes (50) + 5 collector likes (45) = <b>255 influence</b>. Collectors and critics shape the rankings, so throwaway accounts barely move them.</p>
     <h3 class="sub-head">Artwork first</h3>
@@ -1193,7 +1193,7 @@ function installCardHTML() {
   if (!st?.available) return '';
   return `<section class="install-card">
     <img src="icons/icon-192.png" alt="" width="56" height="56" class="install-icon">
-    <div><p class="eyebrow">Gabangi app</p><p><b>Put Gabangi on your home screen</b></p>
+    <div><p class="eyebrow">Abremi app</p><p><b>Put Abremi on your home screen</b></p>
     <p class="muted">Full screen, one tap away, and it works offline.</p></div>
     ${PremiumButton(st.canPrompt ? 'Install' : 'How to install', { act: 'pwa-install', variant: 'secondary', icon: 'download' })}
   </section>`;
@@ -1201,14 +1201,14 @@ function installCardHTML() {
 
 function iosInstallSheet() {
   return `<div class="install-guide">
-    <p class="eyebrow">Install Gabangi</p>
+    <p class="eyebrow">Install Abremi</p>
     <h2 class="display-md" id="modal-title">Add it to your Home Screen</h2>
     <ol class="steps">
       <li><span class="step-icon">${Icon('share', { size: 22 })}</span><div><b>Tap Share</b><small>The square with an arrow, in Safari’s toolbar. On iPad it’s at the top.</small></div></li>
       <li><span class="step-icon">${Icon('plusSquare', { size: 22 })}</span><div><b>Choose “Add to Home Screen”</b><small>Scroll down the list if you don’t see it.</small></div></li>
-      <li><span class="step-icon"><img src="icons/icon-192.png" alt="" width="26" height="26"></span><div><b>Tap Add</b><small>Gabangi opens full screen, like any other app.</small></div></li>
+      <li><span class="step-icon"><img src="icons/icon-192.png" alt="" width="26" height="26"></span><div><b>Tap Add</b><small>Abremi opens full screen, like any other app.</small></div></li>
     </ol>
-    <p class="fine">Don’t see Share? Open <b>gabangi.vercel.app</b> in Safari. Apps like Instagram use their own browser, which can’t install apps.</p>
+    <p class="fine">Don’t see Share? Open <b>${esc(location.host)}</b> in Safari. Apps like Instagram use their own browser, which can’t install apps.</p>
   </div>`;
 }
 
@@ -1219,7 +1219,7 @@ function refreshSheet() {
 
 function openSignIn() {
   if (!COMMUNITY) return;
-  if (!cloud) return toast('Connecting to Gabangi… try again in a moment.');
+  if (!cloud) return toast('Connecting to Abremi… try again in a moment.');
   if (me) { location.hash = 'profile'; return; }
   Object.assign(auth, { error: '', busy: false });
   if (auth.stage !== 'sent') auth.stage = 'email';
@@ -1246,7 +1246,7 @@ function signInSheet() {
   }
   const local = Object.values(state.interactions).filter((k) => k === 'like' || k === 'super').length;
   return `<div class="auth">
-    <p class="eyebrow">Join Gabangi</p>
+    <p class="eyebrow">Join Abremi</p>
     <h2 class="display-md" id="modal-title">Make your taste count</h2>
     <p class="muted">Members’ likes, saves, follows and battle votes shape the global rankings. Sign in with your email. There’s no password to remember.</p>
     <label class="field"><span>Email</span>
@@ -1298,7 +1298,7 @@ async function signedIn(user) {
   closeSheet();
   try {
     const imported = await syncAccount({ importGuest: true });
-    toast(imported ? `Welcome. ${imported} item${imported === 1 ? '' : 's'} from this device added to your account.` : 'Welcome to Gabangi. Your votes now count.', { force: true, duration: 3500 });
+    toast(imported ? `Welcome. ${imported} item${imported === 1 ? '' : 's'} from this device added to your account.` : 'Welcome to Abremi. Your votes now count.', { force: true, duration: 3500 });
   } catch {
     toast('Signed in, but your account could not be loaded. Reload to try again.', { force: true });
   }
@@ -1366,7 +1366,7 @@ async function resync() {
 async function connectCommunity() {
   if (!COMMUNITY) return;
   try {
-    cloud = window.__gabangiCloud ? await window.__gabangiCloud() : await createSupabaseCloud(SUPABASE_URL, SUPABASE_ANON_KEY);
+    cloud = window.__abremiCloud ? await window.__abremiCloud() : await createSupabaseCloud(SUPABASE_URL, SUPABASE_ANON_KEY);
     const hadTokens = /access_token|error_description/.test(location.hash);
     const errorText = hadTokens ? new URLSearchParams(location.hash.slice(1)).get('error_description') : null;
     const user = await cloud.init();
@@ -1376,7 +1376,7 @@ async function connectCommunity() {
       const switched = state.account && state.account.id !== user.id;
       me = user;
       await syncAccount({ importGuest: !state.account || switched });
-      if (hadTokens) toast('Welcome to Gabangi. Your votes now count.');
+      if (hadTokens) toast('Welcome to Abremi. Your votes now count.');
     } else {
       if (state.account) signedOut(); // session expired elsewhere
       await refreshCommunity();
@@ -1386,7 +1386,7 @@ async function connectCommunity() {
       else if (u && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && me?.id !== u.id) signedIn(u);
     });
   } catch (e) {
-    console.warn('Gabangi community unavailable', e);
+    console.warn('Abremi community unavailable', e);
     toast('Community rankings are offline. Showing the last ones saved.', { duration: 4000 });
   }
   if (!sheetRenderer) renderView();

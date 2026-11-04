@@ -1,6 +1,6 @@
-# Gabangi community backend (Supabase)
+# Abremi community backend (Supabase)
 
-Gabangi runs in two modes:
+Abremi runs in two modes:
 
 - **Demo mode** (no configuration): everything a visitor does stays on their device.
 - **Community mode**: accounts plus one shared database, so everyone's likes, saves, follows,
@@ -21,8 +21,8 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
 
 1. **Create the database.** In the Vercel dashboard, open the project and go to **Storage → Create Database → Supabase**, then connect it to the project. Vercel adds `SUPABASE_URL` and `SUPABASE_ANON_KEY` (or their `NEXT_PUBLIC_` variants) to the environment. You can also add those two variables yourself from an existing Supabase project.
 2. **Create the tables.** In Supabase, open **SQL Editor**, paste all of `setup.sql`, and **Run**.
-3. **Allow sign-in links back to the site.** In Supabase, go to **Authentication → URL Configuration**. Set **Site URL** to `https://gabangi.vercel.app` and add `https://gabangi.vercel.app/**` under **Redirect URLs**.
-4. **Build with the keys.** Set the Vercel project's **Build Command** to `node scripts/write-config.js`, then redeploy. The build log should say `Gabangi: community mode`.
+3. **Allow sign-in links back to the site.** In Supabase, go to **Authentication → URL Configuration**. Set **Site URL** to `https://abremi.vercel.app` and add `https://abremi.vercel.app/**` under **Redirect URLs**.
+4. **Build with the keys.** Set the Vercel project's **Build Command** to `node scripts/write-config.js`, then redeploy. The build log should say `Abremi: community mode`.
 
 `scripts/write-config.js` publishes only the public URL and the anon (publishable) key. It refuses to publish a `service_role` or `sb_secret_` key.
 
@@ -47,6 +47,6 @@ To let people type a code instead of tapping the link (handy when the link opens
 
 ```bash
 npm test                                                     # unit tests
-GABANGI_PG="-h <host> -p <port> -U postgres" npm run test:db  # migration + security rules on a real Postgres
+ABREMI_PG="-h <host> -p <port> -U postgres" npm run test:db  # migration + security rules on a real Postgres
 npm start & npm run test:e2e                                 # sign-in and sync flows in a browser (needs Playwright)
 ```

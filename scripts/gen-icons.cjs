@@ -10,15 +10,15 @@ const FONT = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wgh
 // mode: 'rounded' (transparent corners), 'full' (edge to edge, for iOS), 'maskable' (glyph inside Android's safe zone)
 function iconHTML(mode) {
   const radius = mode === 'rounded' ? '22.5%' : '0';
-  const glyph = mode === 'maskable' ? 50 : 64; // % of the icon height
+  const glyph = mode === 'maskable' ? 46 : 58; // % of the icon height
   const ring = mode === 'rounded' ? 'box-shadow: inset 0 0 0 calc(var(--s) * .012) rgba(200,169,107,.45);' : '';
   return `<!doctype html><html><head><link rel="stylesheet" href="${FONT}"><style>
     html,body{margin:0;background:transparent}
     .i{--s:100vmin;width:100vmin;height:100vmin;border-radius:${radius};overflow:hidden;position:relative;${ring}
       background:radial-gradient(ellipse at 30% 18%,rgba(200,169,107,.26),transparent 55%),radial-gradient(ellipse at 85% 90%,rgba(100,110,150,.18),transparent 50%),#08090B}
     .g{position:absolute;inset:0;display:grid;place-items:center;font-family:'Playfair Display',serif;font-style:italic;font-weight:500;
-      font-size:calc(var(--s) * ${glyph / 100});line-height:1;color:#C8A96B;padding-bottom:calc(var(--s) * ${mode === 'maskable' ? 0.09 : 0.12})}
-  </style></head><body><div class="i"><span class="g">g</span></div></body></html>`;
+      font-size:calc(var(--s) * ${glyph / 100});line-height:1;color:#C8A96B;padding-right:calc(var(--s) * .02)}
+  </style></head><body><div class="i"><span class="g">A</span></div></body></html>`;
 }
 
 (async () => {
