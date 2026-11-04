@@ -925,6 +925,91 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     fails(E, `select cancel_drop('${ids[1]}')`, /already been released or cancelled/);
   });
 
+  // ——— Phase 5 (0011): Career Coach, Artist Passport, Gallery Opportunities ———
+  let opp;
+  await t.test('opportunities: moderators publish; members suggest for review; only approved listings are public; saves and reminders', () => {
+    const args = (title, deadline = "current_date + 10", fee = 0) => `'open_call', '${title}', 'Galeria Norte', 'Lisbon, Portugal', ${deadline}, 'Painters under 35', 'Group show in spring.', ${fee}, 'EUR', 'https://galerianorte.example/call'`;
+    opp = as(P[1], `select suggest_opportunity(${args('Spring Open Call')})`);
+    assert.equal(as('anon', `select count(*) from opportunities where id = '${opp}'`), '1', 'moderator listings are published directly');
+    psql(`update profiles set created_at = now() where id = '${C}'`);
+    fails(C, `select suggest_opportunity(${args('Too new')})`, /after 3 days/);
+    psql(`update profiles set created_at = now() - interval '10 days' where id = '${C}'`);
+    fails(C, `select suggest_opportunity(${args('Past', 'current_date - 1')})`, /deadline has passed/);
+    fails(C, `select suggest_opportunity('open_call', 'Bad link', 'X', 'Y', current_date + 5, '', '', 0, 'USD', 'http://insecure.example')`, /opportunities_link_check|check constraint/);
+    const sug = as(C, `select suggest_opportunity(${args('Members Suggest', 'current_date + 20', 25)})`);
+    assert.equal(as('anon', `select count(*) from opportunities where id = '${sug}'`), '0', 'pending suggestions are not public');
+    assert.equal(as(C, `select count(*) from opportunities where id = '${sug}'`), '1', 'the suggester sees their own');
+    fails(C, `select review_opportunity('${sug}', true)`, /Admins only|permission denied/);
+    assert.equal(JSON.parse(as(P[1], 'select admin_opportunity_queue()')).some((o) => o.id === sug), true);
+    as(P[1], `select review_opportunity('${sug}', true, 'Checked with the gallery')`);
+    const list = JSON.parse(as('anon', 'select opportunities_list()'));
+    assert.equal(list.find((o) => o.id === sug).fee, 25, 'fees are shown');
+    noRowsFor(C, `with u as (insert into opportunities (kind, title, organizer, location, deadline, link, status) values ('prize', 'Forged', 'X', 'Y', current_date + 3, 'https://x.example', 'approved') returning 1) select count(*) from u`);
+    as(B, `select save_opportunity('${opp}', true)`);
+    assert.equal(JSON.parse(as(B, 'select opportunities_list()')).find((o) => o.id === opp).saved, true);
+    psql(`update opportunities set deadline = current_date + 2 where id = '${opp}'`);
+    assert.equal(psql('select send_deadline_reminders()'), '1');
+    assert.equal(psql('select send_deadline_reminders()'), '0', 'once');
+    assert.match(as(B, `select title from notifications where kind = 'opportunity_deadline'`), /Spring Open Call” closes/);
+    fails(B, 'select send_deadline_reminders()', /permission denied/);
+    assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log() where action like 'opportunity.%'`), /opportunity\.approved/);
+  });
+
+  await t.test('coach: artists only, their own data as context, 20 a month (failed requests don’t count), no direct writes', () => {
+    fails(B, `select begin_coach_request('bio')`, /for artists/);
+    fails('anon', `select begin_coach_request('bio')`, /permission denied|Sign in/);
+    fails(E, `select begin_coach_request('hack')`, /Unknown Coach tool/);
+    fails(E, `select begin_coach_request('description', '${gWork}')`, /your own works/);
+    fails(E, `select begin_coach_request('application', null, gen_random_uuid())`, /listed opportunity/);
+    const ctx = JSON.parse(as(E, `select begin_coach_request('description', '${eArt}')`));
+    assert.equal(ctx.artwork.id, eArt);
+    assert.ok(ctx.works.length > 0 && ctx.works.every((w) => w.title));
+    assert.equal(JSON.stringify(ctx).includes(G), false, 'no one else’s data');
+    as(E, `select finish_coach_request('${ctx.request_id}', false)`);
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).used, 0, 'failed requests don’t count');
+    const eng = JSON.parse(as(E, `select begin_coach_request('engagement')`));
+    assert.ok('views' in eng.stats.last_30_days);
+    as(E, `select finish_coach_request('${eng.request_id}', true)`);
+    const app = JSON.parse(as(E, `select begin_coach_request('application', null, '${opp}')`));
+    assert.equal(app.opportunity.title, 'Spring Open Call');
+    psql(`insert into coach_requests (user_id, tool, status) select '${E}', 'bio', 'done' from generate_series(1, 18)`);
+    fails(E, `select begin_coach_request('bio')`, /20 Coach requests/);
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).used, 20);
+    noRowsFor(E, `with u as (delete from coach_requests returning 1) select count(*) from u`);
+    noRowsFor(B, `select count(*) from coach_requests where user_id = '${E}'`);
+  });
+
+  await t.test('passport: exhibitions show only once a moderator verifies them; history and milestones come from records', () => {
+    fails(B, `select submit_exhibition('solo', 'Tides', 'Galeria Norte', 'Lisbon', 'PT', current_date - 30, current_date - 1, 'https://galerianorte.example/tides')`, /Publish a work first/);
+    fails(E, `select submit_exhibition('solo', 'Tides', 'Galeria Norte', 'Lisbon', 'PT', current_date - 30, current_date - 1, 'http://insecure.example')`, /check constraint/);
+    const ex = as(E, `select submit_exhibition('solo', 'Tides', 'Galeria Norte', 'Lisbon', 'PT', current_date - 30, current_date - 1, 'https://galerianorte.example/tides')`);
+    let pass = JSON.parse(as('anon', `select artist_passport('m_${E}')`));
+    assert.equal(pass.exhibitions.length, 0, 'pending exhibitions aren’t shown');
+    assert.equal(as(E, `select count(*) from exhibitions where id = '${ex}'`), '1', 'the artist sees their own');
+    fails(E, `select review_exhibition('${ex}', true)`, /Admins only|permission denied/);
+    noRowsFor(E, `with u as (update exhibitions set status = 'verified' returning 1) select count(*) from u`);
+    as(P[1], `select review_exhibition('${ex}', true, 'Confirmed on the gallery site')`);
+    pass = JSON.parse(as('anon', `select artist_passport('m_${E}')`));
+    assert.equal(pass.exhibitions[0].title, 'Tides');
+    assert.ok(pass.achievements.some((a) => a.label === 'First Work'));
+    assert.ok(pass.competitions.some((c) => c.place === 2), 'Blue Hour, 2nd');
+    assert.ok(pass.milestones.joined && pass.milestones.first_work && pass.milestones.first_inquiry);
+    assert.match(as(E, `select title from notifications where kind = 'exhibition_review'`), /verified on your Passport/);
+    assert.equal(as('anon', `select artist_passport('${seed.artists[0].id}') is null`), 't', 'sample artists have no Passport');
+    const ex2 = as(E, `select submit_exhibition('group', 'Unverifiable', 'Nowhere', null, null, current_date - 10, null, 'https://example.org/x')`);
+    as(P[1], `select review_exhibition('${ex2}', false, 'No record found')`);
+    assert.match(as(E, `select title from notifications where kind = 'exhibition_review' order by created_at desc limit 1`), /couldn’t be verified: No record found/);
+    as(E, `select delete_exhibition('${ex2}')`);
+    fails(B, `select delete_exhibition('${ex}')`, /Not your exhibition/);
+  });
+
+  await t.test('0011 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0011_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('coach_requests', 'exhibitions', 'opportunities', 'saved_opportunities')`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('coach_requests', 'exhibitions', 'opportunities', 'saved_opportunities')`), '4');
+  });
+
   await t.test('0010 can be undone, and setup.sql re-applies it', () => {
     psql(file('supabase/migrations/down/0010_down.sql'));
     assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('inquiries', 'inquiry_messages', 'drops', 'drop_subscriptions')`), '0');
