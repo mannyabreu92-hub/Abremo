@@ -26,6 +26,7 @@ import { inquirySheet, inboxPage, threadPage, dropsSection, dropPage, createDrop
 import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, createCompetitionForm, competitionCard } from './views/arena.js';
 import { plansPage, galleryForm, galleryPageHTML, feedbackSheet, membershipCardHTML } from './views/membership.js';
 import { adminPage } from './views/admin.js';
+import { guidePanelHTML, replyHTML, GUIDE_COPY } from './views/assistant.js';
 import { aboutHTML, installCardHTML, iosInstallHTML, signInHTML, accountCardHTML } from './views/account.js';
 import {
   esc, fmt, money, flag, countryName, initials, Icon, ArtImage, Avatar, PremiumButton, IconButton, AbremiSymbol,
@@ -151,6 +152,7 @@ function closeSheet() {
   if (sheet.hidden) return;
   sheet.classList.remove('open');
   sheetRenderer = null;
+  sheetArtworkId = null;
   document.body.classList.remove('modal-open');
   setTimeout(() => { if (!sheetRenderer) sheet.hidden = true; }, 240);
   lastFocus?.focus?.({ preventScroll: true });
@@ -207,6 +209,7 @@ function renderView() {
   }
   VIEWS[name]($('#view'));
   observeImpressions();
+  renderGuide();
 }
 
 // ——— Analytics (community mode): impressions, artwork views and profile visits of member work ———
@@ -816,6 +819,7 @@ function applySwipe(art, action) {
 
 // ——— Artwork & artist modals ———
 function artworkSheet(id) {
+  sheetArtworkId = id;
   const w = world.artworkById[id];
   const a = artistOf(w);
   const counts = world.countsOf(w);
@@ -1233,6 +1237,154 @@ function reportError(message, source) {
 }
 window.addEventListener('error', (e) => reportError(e.message, e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : null));
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack?.split('\n')[1]?.trim()));
+
+// ——— Phase 7: the Abremi Guide ———
+// One assistant, three modes. Conversations live only in this tab's memory (never saved); the
+// server decides what the Guide may see and counts only that a request happened.
+let sheetArtworkId = null;
+const guide = {
+  open: false, mode: 'visitor', view: 'chat', threads: { visitor: [], artist: [], collector: [] },
+  busy: false, error: null, input: '', usage: null, prefs: null, prefsBusy: false, pendingAdd: null, loaded: false,
+};
+
+/** What the member is looking at, for the Guide (the server looks up the details itself). */
+function guidePage() {
+  if (sheetArtworkId) return { type: 'artwork', id: sheetArtworkId };
+  const r = route();
+  if (r.name === 'art' && r.param) return { type: 'artwork', id: r.param };
+  if (r.name === 'artist' && r.param) return { type: 'artist', id: r.param };
+  if (r.name === 'collection' && r.param) return { type: 'collection', id: r.param };
+  if (r.name === 'competition' && r.param) return { type: 'competition', id: r.param };
+  if (r.name === 'charts') return { type: 'ranking', id: charts.tab || 'artworks' };
+  if (r.name === 'battle' && battlePair) return { type: 'battle', id: battlePair.map((w) => w.id).join(',') };
+  return null;
+}
+
+function guideEvent(kind, target) {
+  if (cloud?.guideEvent && me) cloud.guideEvent(kind, target).catch(() => {});
+}
+
+function guideRef(ref, reason) {
+  const why = reason ? `<p class="guide-why">${esc(reason)}</p>` : '';
+  if (ref.type === 'artwork') {
+    const w = world.artworkById[ref.id];
+    if (!w) return '';
+    const a = artistOf(w);
+    return `<article class="guide-card" data-guide-ref="artwork" data-id="${esc(w.id)}">
+      <button class="guide-card-art" data-act="artwork" data-id="${esc(w.id)}" aria-label="View ${esc(w.title)}">${ArtImage(w)}</button>
+      <div class="guide-card-body"><b>${esc(w.title)}</b><small>${esc(a?.name || '')}${w.style ? ` · ${esc(w.style)}` : ''}</small>${why}
+        <div class="guide-card-actions"><button class="link" data-act="artwork" data-id="${esc(w.id)}">${esc(GUIDE_COPY.view)}</button>
+        ${me ? `<button class="link" data-act="add-to-collection" data-id="${esc(w.id)}">${esc(GUIDE_COPY.save)}</button>` : ''}</div></div></article>`;
+  }
+  if (ref.type === 'artist') {
+    const a = world.artistById[ref.id];
+    if (!a) return '';
+    const following = Boolean(state.follows[a.id]);
+    return `<article class="guide-card" data-guide-ref="artist" data-id="${esc(a.id)}">
+      <button class="guide-card-avatar" data-act="artist" data-id="${esc(a.id)}" aria-label="Open ${esc(a.name)}">${Avatar(a, 'md')}</button>
+      <div class="guide-card-body"><b>${esc(a.name)}</b><small>${esc(countryName(a.country))}${a.sample ? ' · sample artist' : ''}</small>${why}
+        <div class="guide-card-actions"><button class="link" data-act="artist" data-id="${esc(a.id)}">${esc(GUIDE_COPY.view)}</button>
+        ${a.isMe ? '' : `<button class="link" data-act="follow" data-id="${esc(a.id)}" aria-pressed="${following}">${esc(following ? GUIDE_COPY.following : GUIDE_COPY.follow)}</button>`}</div></div></article>`;
+  }
+  return `<div class="guide-search-row"><button class="chip" data-act="guide-search" data-v="${esc(ref.id)}">${Icon('search', { size: 14 })} ${esc(ref.id)}</button>${reason ? `<small>${esc(reason)}</small>` : ''}</div>`;
+}
+
+function guideInlineRef(ref) {
+  if (ref.type === 'artwork' && world.artworkById[ref.id]) return `<button class="link" data-act="artwork" data-id="${esc(ref.id)}">${esc(world.artworkById[ref.id].title)}</button>`;
+  if (ref.type === 'artist' && world.artistById[ref.id]) return `<button class="link" data-act="artist" data-id="${esc(ref.id)}">${esc(world.artistById[ref.id].name)}</button>`;
+  if (ref.type === 'search') return `<button class="link" data-act="guide-search" data-v="${esc(ref.id)}">${esc(ref.id)}</button>`;
+  return '';
+}
+
+function renderGuide() {
+  const panel = $('#guide');
+  const launcher = $('#guide-launcher');
+  if (!panel || !launcher) return;
+  if (!launcher.dataset.ready) { launcher.innerHTML = `${Icon('spark', { size: 18 })}<span>${esc(GUIDE_COPY.launcher)}</span>`; launcher.dataset.ready = '1'; }
+  launcher.hidden = !COMMUNITY || guide.open || currentView() === 'discover';
+  if (!guide.open) { panel.hidden = true; return; }
+  const input = $('#guide-input');
+  const hadFocus = input && document.activeElement === input;
+  if (input) guide.input = input.value;
+  const log = $('.guide-log', panel);
+  const nearBottom = !log || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  panel.hidden = false;
+  panel.innerHTML = guidePanelHTML({ ...guide, thread: guide.threads[guide.mode] }, {
+    signedIn: Boolean(me), isArtist: Boolean(me && world.artistById[myArtistId()]), page: guidePage(), renderRef: guideRef, inlineRef: guideInlineRef,
+  });
+  const newLog = $('.guide-log', panel);
+  if (newLog && nearBottom) newLog.scrollTop = newLog.scrollHeight;
+  if (hadFocus) { const i = $('#guide-input'); i?.focus(); i?.setSelectionRange(i.value.length, i.value.length); }
+}
+
+/** Updates only the reply being written (fast while it streams). */
+function updateGuideStream() {
+  const el = $('#guide .guide-msg.is-streaming .guide-text');
+  const thread = guide.threads[guide.mode];
+  if (!el) return renderGuide();
+  el.innerHTML = replyHTML(thread.at(-1).content, { renderRef: guideRef, inlineRef: guideInlineRef });
+  const log = $('#guide .guide-log');
+  if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 160) log.scrollTop = log.scrollHeight;
+}
+
+function openGuide() {
+  guide.open = true;
+  guide.error = null;
+  guideEvent('open', null);
+  if (me && cloud?.guideUsage && !guide.loaded) {
+    guide.loaded = true;
+    Promise.all([cloud.guideUsage().catch(() => null), cloud.guidePrefs().catch(() => null)])
+      .then(([usage, prefs]) => { Object.assign(guide, { usage, prefs }); if (guide.open && !guide.busy) renderGuide(); });
+  }
+  renderGuide();
+  setTimeout(() => ($('#guide-input') || $('#guide [data-act=guide-close]'))?.focus(), 30);
+}
+
+function closeGuide() {
+  guide.open = false;
+  renderGuide();
+  $('#guide-launcher')?.focus();
+}
+
+async function guideSend(text) {
+  text = String(text || '').trim();
+  if (!text || guide.busy) return;
+  if (!me) return openSignIn();
+  const thread = guide.threads[guide.mode];
+  if (thread.at(-1)?.role === 'user') thread.pop(); // an unanswered question is replaced
+  thread.push({ role: 'user', content: text });
+  guide.input = '';
+  const input = $('#guide-input');
+  if (input) input.value = '';
+  await guideAsk();
+}
+
+async function guideAsk() {
+  const mode = guide.mode;
+  const thread = guide.threads[mode];
+  const messages = thread.filter((m) => m.content).slice(-12);
+  const reply = { role: 'assistant', content: '' };
+  thread.push(reply);
+  Object.assign(guide, { busy: true, error: null });
+  renderGuide();
+  let failed = null;
+  try {
+    await cloud.guide({ mode, messages, page: guidePage() }, (ev) => {
+      if (ev.type === 'text') { reply.content += ev.text; if (guide.open && guide.mode === mode) updateGuideStream(); }
+      else if (ev.type === 'done') guide.usage = ev.usage || guide.usage;
+      else if (ev.type === 'error') failed = { message: ev.error, retry: ev.retry !== false };
+    });
+  } catch (e) {
+    const msg = e?.message || 'The Guide is unavailable right now.';
+    failed = { message: msg, retry: !/sign in|today’s|for artists|switched on|Choose a mode/i.test(msg) };
+  }
+  if (failed) {
+    thread.splice(thread.indexOf(reply), 1);
+    guide.error = failed;
+  }
+  guide.busy = false;
+  renderGuide();
+}
 
 // ——— Artist Studio analytics (#studio) ———
 const studio = { days: 30, data: undefined, reports: null, at: 0, loading: false };
@@ -2323,7 +2475,7 @@ async function sendApplication(role) {
 let adminData = null;
 async function loadAdmin() {
   try {
-    const [queue, verified, flags, audit, , reports, exQueue, oppQueue, galleries, holders, invites, feedback, errors] = await Promise.all([
+    const [queue, verified, flags, audit, , reports, exQueue, oppQueue, galleries, holders, invites, feedback, errors, guideStats] = await Promise.all([
       cloud.adminQueue(), cloud.verifiedMembers(),
       cloud.integrityQueue ? cloud.integrityQueue().catch(() => []) : [],
       cloud.auditLog ? cloud.auditLog().catch(() => []) : [],
@@ -2336,8 +2488,9 @@ async function loadAdmin() {
       cloud.invites ? cloud.invites().catch(() => null) : null,
       cloud.feedbackQueue ? cloud.feedbackQueue().catch(() => []) : [],
       cloud.clientErrors ? cloud.clientErrors(7).catch(() => []) : [],
+      cloud.guideMetrics ? cloud.guideMetrics(30).catch(() => null) : null,
     ]);
-    adminData = { queue, verified, flags, audit, reports, exQueue, oppQueue, galleries, holders, invites, feedback, errors, at: Date.now() };
+    adminData = { queue, verified, flags, audit, reports, exQueue, oppQueue, galleries, holders, invites, feedback, errors, guide: guideStats, at: Date.now() };
   } catch (e) {
     adminData = { error: e?.message || 'Could not load applications.' };
   }
@@ -2456,6 +2609,7 @@ function signedOut() {
   Object.assign(radar, { list: null, scheduled: [] });
   Object.assign(careers, { usage: null, exhibitions: null });
   Object.assign(member, { mine: undefined, gallery: undefined, busy: '', planSearch: { query: '', results: null } });
+  Object.assign(guide, { threads: { visitor: [], artist: [], collector: [] }, usage: null, prefs: null, error: null, loaded: false, view: 'chat' });
   careers.coach.result = null;
   threads.clear();
   Object.assign(studio, { data: undefined, reports: null, at: 0 });
@@ -2736,6 +2890,52 @@ const ACTIONS = {
   'opportunity-review': async (el) => {
     try { await cloud.reviewOpportunity(el.dataset.id, el.dataset.v === 'approve', null); toast('Done.', { force: true }); await loadAdmin(); loadOpportunities(true); }
     catch (e) { toast(e?.message || 'Could not update.', { force: true }); }
+  },
+  // ——— Phase 7: the Guide ———
+  'guide-open': () => openGuide(),
+  'guide-close': () => closeGuide(),
+  'guide-mode': (el) => {
+    if (guide.busy) return;
+    Object.assign(guide, { mode: el.dataset.v, view: 'chat', error: null });
+    renderGuide();
+  },
+  'guide-settings': () => {
+    guide.view = guide.view === 'settings' ? 'chat' : 'settings';
+    if (guide.view === 'settings' && !guide.prefs && cloud?.guidePrefs) cloud.guidePrefs().then((p) => { guide.prefs = p; renderGuide(); }).catch(() => {});
+    renderGuide();
+  },
+  'guide-prompt': (el) => guideSend(el.dataset.v),
+  'guide-send': () => guideSend($('#guide-input')?.value),
+  'guide-retry': () => { if (!guide.busy && guide.threads[guide.mode].at(-1)?.role === 'user') guideAsk(); },
+  'guide-new': () => { if (guide.busy) return; guide.threads[guide.mode] = []; guide.error = null; renderGuide(); $('#guide-input')?.focus(); },
+  'guide-prefs-save': async () => {
+    const personalize = Boolean($('#guide-personalize')?.checked);
+    const interests = ($('#guide-interests')?.value || '').trim();
+    guide.prefsBusy = true; renderGuide();
+    try {
+      await cloud.setGuidePrefs(personalize, interests);
+      Object.assign(guide, { prefs: { personalize, interests }, view: 'chat' });
+      toast('Saved. Your next suggestions will use this.', { force: true });
+    } catch (e) { toast(e?.message || 'Could not save that.', { force: true }); }
+    guide.prefsBusy = false; renderGuide();
+  },
+  'guide-reset': async () => {
+    if (!confirm('Reset personalization? This clears what you told the Guide you enjoy and what you did with its suggestions. Your follows, likes and collections stay.')) return;
+    try {
+      await cloud.resetGuide();
+      guide.prefs = { personalize: true, interests: '' };
+      guide.threads = { visitor: [], artist: [], collector: [] };
+      guide.view = 'chat';
+      toast('Personalization reset.', { force: true });
+      renderGuide();
+    } catch (e) { toast(e?.message || 'Could not reset it.', { force: true }); }
+  },
+  'guide-search': (el) => {
+    const term = el.dataset.v;
+    if (window.matchMedia('(max-width: 760px)').matches) closeGuide();
+    openSearch();
+    const i = $('#search-input');
+    if (i) { i.value = term; i.dispatchEvent(new Event('input')); }
   },
   // ——— Phase 6 ———
   'plan-checkout': async (el) => {
@@ -3111,6 +3311,7 @@ const ACTIONS = {
         const row = await cloud.createCollection({ name, isPrivate: c.private });
         Object.assign(c, { id: row.id, server: true });
         if (newCollectionFor) await cloud.addToCollection(row.id, newCollectionFor);
+        if (newCollectionFor && guide.pendingAdd === newCollectionFor) { guideEvent('collection_add', newCollectionFor); guide.pendingAdd = null; }
       } catch (e) {
         el.disabled = false;
         return toast(e?.message || 'Could not create the collection.', { force: true });
@@ -3130,6 +3331,7 @@ const ACTIONS = {
     if (!c) return;
     const id = el.dataset.id;
     const adding = !c.ids.includes(id);
+    if (adding && guide.pendingAdd === id) { guideEvent('collection_add', id); guide.pendingAdd = null; }
     c.ids = adding ? [id, ...c.ids] : c.ids.filter((x) => x !== id);
     saveState(state);
     if (c.server) remote(() => (adding ? cloud.addToCollection(c.id, id) : cloud.removeFromCollection(c.id, id)));
@@ -3368,13 +3570,35 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'apply-statement') $('#apply-count').textContent = `${e.target.value.trim().length} / 1500`;
 });
 
+// The Guide: count what people do with its suggestions (before the action runs), and grow the text box.
+$('#guide')?.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  const card = e.target.closest('[data-guide-ref], .guide-search-row, .guide-text');
+  if (!el || !card) return;
+  const id = el.dataset.id || el.dataset.v;
+  const act = el.dataset.act;
+  if (act === 'artwork') guideEvent('artwork_click', id);
+  else if (act === 'artist') guideEvent('artist_visit', id);
+  else if (act === 'follow' && !state.follows[id]) guideEvent('follow', id);
+  else if (act === 'guide-search') guideEvent('search', id);
+  else if (act === 'add-to-collection') guide.pendingAdd = id;
+}, true);
+$('#guide')?.addEventListener('input', (e) => {
+  if (e.target.id !== 'guide-input') return;
+  guide.input = e.target.value;
+  e.target.style.height = 'auto';
+  e.target.style.height = `${Math.min(e.target.scrollHeight, 140)}px`;
+});
+
 document.addEventListener('keydown', (e) => {
   const typing = e.target.matches('input, textarea, select');
   if (e.key === 'Escape') {
     if (!$('#search').hidden) return closeSearch();
     if (sheetRenderer) return closeSheet();
+    if (guide.open) return closeGuide();
     return closePopovers();
   }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target.id === 'guide-input') { e.preventDefault(); return guideSend(e.target.value); }
   if (typing) return;
   if (e.key === '/' || (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey))) { e.preventDefault(); return openSearch(); }
   if (sheetRenderer || !$('#search').hidden) return;

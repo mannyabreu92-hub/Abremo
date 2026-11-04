@@ -1,13 +1,13 @@
-// Abremi Career Coach: a Vercel server function. The Anthropic API key lives only here (the
-// ANTHROPIC_API_KEY environment variable), never in the app.
+// Abremi Career Coach: a Vercel server function. It shares the AI connection with the Abremi Guide
+// (api/_ai.js); the Anthropic API key lives only on the server, never in the app.
 //
 // Flow: the app sends { tool, artworkId?, opportunityId? } with the artist's Supabase session
 // token. The database (begin_coach_request, migration 0011) decides whether this person may use
 // the Coach, enforces the limits, and returns only their own data. Claude drafts from that data
 // alone; the draft goes back to the artist to edit. Nothing is saved or published automatically.
-import Anthropic from '@anthropic-ai/sdk';
+import { MODELS, FALLBACK, aiClient, aiErrorMessage, memberRpc, storageUrl } from './_ai.js';
 
-export const MODEL = 'claude-opus-5-5';
+export const MODEL = MODELS.coach;
 export const TOOLS = ['bio', 'statement', 'description', 'engagement', 'social', 'application'];
 
 export const SYSTEM_PROMPT = `You are the Career Coach inside Abremi, a platform where artists show their work and build their careers. You help one artist at a time with their own writing and with understanding their own numbers.
@@ -33,20 +33,7 @@ const TASKS = {
 
 const json = (status, body) => ({ status, body });
 
-/** Calls a database function as the signed-in artist (their token, the public key). */
-async function rpc(fetchImpl, { supabaseUrl, supabaseKey, token }, name, args) {
-  const res = await fetchImpl(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/${name}`, {
-    method: 'POST',
-    headers: { apikey: supabaseKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(args),
-  });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!res.ok) {
-    throw Object.assign(new Error(data?.message || `Request failed (${res.status})`), { status: res.status });
-  }
-  return data;
-}
+const rpc = (fetchImpl, db, name, args) => memberRpc(fetchImpl, db, name, args);
 
 /** What the draft was based on, shown to the artist under it. */
 export function basedOn(tool, ctx) {
@@ -64,18 +51,14 @@ export function buildRequest(tool, ctx, { supabaseUrl }) {
   const { request_id, ...context } = ctx;
   const content = [];
   if ((tool === 'description' || tool === 'social') && ctx.artwork?.thumb_path) {
-    const path = String(ctx.artwork.thumb_path);
-    const url = /^https:\/\//.test(path) ? path : `${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/public/artworks/${path.split('/').map(encodeURIComponent).join('/')}`;
-    content.push({ type: 'image', source: { type: 'url', url } });
+    content.push({ type: 'image', source: { type: 'url', url: storageUrl(supabaseUrl, ctx.artwork.thumb_path) } });
   }
   content.push({ type: 'text', text: `CONTEXT (the artist's own data from Abremi):\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${TASKS[tool]}` });
   return {
     model: MODEL,
     max_tokens: 4000, // drafts are deliberately short
     output_config: { effort: 'medium' },
-    // If the model declines, the API retries on its server-defined fallback model.
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
+    ...FALLBACK, // if the model declines, the API retries on its fallback model
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content }],
   };
@@ -120,10 +103,8 @@ export function createCoach(deps) {
       return json(200, { tool, text, basedOn: basedOn(tool, ctx) });
     } catch (e) {
       await finish(false);
-      if (e instanceof Anthropic.RateLimitError) return json(503, { error: 'The Coach is busy right now. Please try again in a minute.' });
-      if (e instanceof Anthropic.AuthenticationError) return json(503, { error: 'The Coach isn’t set up correctly yet.' });
-      if (e instanceof Anthropic.APIError) return json(502, { error: 'The Coach is unavailable right now. Please try again.' });
-      return json(502, { error: 'The Coach is unavailable right now. Please try again.' });
+      const { status, error } = aiErrorMessage(e, 'The Coach');
+      return json(status, { error });
     }
   };
 }
@@ -132,7 +113,7 @@ let coach = null;
 /** Vercel entry point. */
 export default async function handler(req, res) {
   coach ||= createCoach({
-    anthropic: process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 55_000 }) : null,
+    anthropic: aiClient(process.env),
     fetchImpl: fetch,
     supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
     supabaseKey: process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,

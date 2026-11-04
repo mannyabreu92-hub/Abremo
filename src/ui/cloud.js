@@ -486,6 +486,61 @@ export async function createSupabaseCloud(url, key) {
     async clientErrors(days = 7) {
       return check(await sb.rpc('admin_client_errors', { p_days: days }));
     },
+    // ——— Phase 7: the Abremi Guide (server function api/assistant.js; rules in migration 0013) ———
+    /**
+     * Asks the Guide. The reply streams in: onEvent gets { type: 'text', text } pieces, then
+     * { type: 'done', usage, refs } or { type: 'error', error, retry }.
+     */
+    async guide({ mode, messages, page }, onEvent, signal) {
+      const { data } = await sb.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in to use the Guide');
+      const res = await fetch('api/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ mode, messages, page }),
+        signal,
+      });
+      if (!res.ok || !res.body) {
+        const out = await res.json().catch(() => ({}));
+        throw Object.assign(new Error(out.error || 'The Guide is unavailable right now.'), { status: res.status });
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) onEvent(JSON.parse(line));
+        }
+      }
+      if (buf.trim()) onEvent(JSON.parse(buf));
+    },
+    async guideUsage() {
+      return user ? check(await sb.rpc('assistant_usage')) : null;
+    },
+    async guidePrefs() {
+      return user ? check(await sb.rpc('assistant_preferences')) : null;
+    },
+    async setGuidePrefs(personalize, interests) {
+      check(await sb.rpc('set_assistant_preferences', { p_personalize: personalize, p_interests: interests || '' }));
+    },
+    async resetGuide() {
+      check(await sb.rpc('reset_assistant_personalization'));
+    },
+    /** Counts what someone did with a suggestion (no conversation text). */
+    async guideEvent(kind, target) {
+      if (!user) return;
+      await sb.rpc('record_assistant_event', { p_kind: kind, p_target: target || null });
+    },
+    async guideMetrics(days = 30) {
+      return check(await sb.rpc('admin_assistant_metrics', { p_days: days }));
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },

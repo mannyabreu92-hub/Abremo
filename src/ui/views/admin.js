@@ -25,7 +25,7 @@ export function adminPage(data, { roleLabel, competitionSection, planSearch = { 
     <header class="page-head page-head-row"><div><p class="eyebrow">Moderation</p><h1 class="display-lg">Applications</h1>
       <p class="muted">${queue.length} pending · ${verified.length} verified members</p></div>
       ${PremiumButton('Refresh', { act: 'admin-reload', variant: 'secondary' })}</header>
-    <nav class="chip-row chip-row-wrap admin-jump" aria-label="Jump to">${[['admin-plans', 'Plans'], ['admin-galleries', 'Galleries'], ['admin-beta', 'Beta'], ['integrity', 'Integrity']]
+    <nav class="chip-row chip-row-wrap admin-jump" aria-label="Jump to">${[['admin-plans', 'Plans'], ['admin-galleries', 'Galleries'], ['admin-beta', 'Beta'], ['admin-guide', 'Guide'], ['integrity', 'Integrity']]
       .map(([id, label]) => `<a class="chip" href="#admin" data-act="admin-jump" data-v="${id}">${label}</a>`).join('')}</nav>
     ${queue.length ? queue.map((a) => `<article class="app-card">
       <header><div><p class="eyebrow">${esc(roleLabel(a.role))} · ${new Date(a.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</p>
@@ -49,6 +49,7 @@ export function adminPage(data, { roleLabel, competitionSection, planSearch = { 
     ${galleriesHTML(data.galleries || [])}
     ${plansAdminHTML(data.holders || [], planSearch)}
     ${betaHTML(data.invites, data.feedback || [], data.errors || [])}
+    ${guideMetricsHTML(data.guide)}
     ${reportsHTML(data.reports || [])}
     ${integrityHTML(data.flags || [])}
     ${auditHTML(data.audit || [])}
@@ -119,6 +120,20 @@ export function betaHTML(invites, feedback, errors) {
     ${errors.length ? `<ul class="error-list">${errors.map((e) => `<li><b>${esc(e.message)}</b><small>${e.count}× · last ${esc(when(e.last_seen))}${e.source ? ` · ${esc(e.source)}` : ''}${e.pages?.length ? ` · ${esc(e.pages.slice(0, 3).join(', '))}` : ''}${e.releases?.length ? ` · release ${esc(e.releases.join(', '))}` : ''}</small></li>`).join('')}</ul>`
       : '<p class="muted">No errors reported.</p>'}
     <p class="fine">Errors are recorded without accounts, emails or IP addresses, and deleted after 30 days.</p>
+  </section>`;
+}
+
+/** How the Abremi Guide is used: counts only, never conversations. */
+export function guideMetricsHTML(m) {
+  if (!m) return '';
+  const ev = m.events || {};
+  const stat = (n, label) => `<div><dt>${label}</dt><dd>${fmt(n || 0)}</dd></div>`;
+  const modes = { visitor: 'Discover', collector: 'Collect', artist: 'For artists' };
+  return `<section class="section section-tight" id="admin-guide">${SectionHeader({ eyebrow: 'Abremi Guide', title: `Last ${m.days} days` })}
+    <dl class="stat-row guide-stats">${stat(m.messages, 'Replies')}${stat(m.members, 'Members who asked')}${stat(m.returning, 'Came back another day')}${stat(ev.open, 'Times opened')}</dl>
+    <h3 class="sub-head">What people did with suggestions</h3>
+    <dl class="stat-row guide-stats">${stat(ev.artwork_click, 'Works opened')}${stat(ev.artist_visit, 'Artist pages visited')}${stat(ev.follow, 'Artists followed')}${stat(ev.collection_add, 'Added to collections')}${stat(ev.search, 'Searches tried')}</dl>
+    <p class="fine">By mode: ${Object.entries(modes).map(([k, v]) => `${v} ${fmt((m.by_mode || {})[k] || 0)}`).join(' · ')}${m.failed ? ` · ${fmt(m.failed)} replies failed` : ''}. Conversations are never stored.</p>
   </section>`;
 }
 

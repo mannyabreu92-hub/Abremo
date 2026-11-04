@@ -1076,6 +1076,91 @@ window.__abremiCloud = async () => {
       }
       return Object.values(groups);
     },
+    // ——— Phase 7 (same rules as 0013; the model is stood in by a canned reply that goes through the
+    // real suggestion and reference-filter code in api/_guide.js) ———
+    async guide({ mode, messages, page }, onEvent) {
+      needUser(); await wait();
+      const db = load();
+      const uid = user.id;
+      const prof = profileOf(db, uid);
+      if (!['visitor', 'artist', 'collector'].includes(mode)) throw new Error('Choose a mode');
+      if (mode === 'artist' && !db.artists[`m_${uid}`]) throw new Error('The artist mode is for artists: publish a work first');
+      const today = new Date().toISOString().slice(0, 10);
+      const limit = planOf(db, uid).assistant_daily;
+      const used = (db.guide || []).filter((r) => r.user === uid && r.ok && r.day === today).length;
+      if (used >= limit) throw new Error(`You’ve used today’s ${limit} messages. They reset at midnight UTC.`);
+      if (window.__guideFail) { const f = window.__guideFail; window.__guideFail = null; onEvent({ type: 'error', error: f, retry: true }); return; }
+      const g = await import('/api/_guide.js');
+      const catalog = g.enrichCatalog({
+        artworks: [...seed.artworks.map((w) => ({ id: w.id, title: w.title, artist_id: w.artistId, sample: true, popularity: 0, trending: 0 })),
+          ...db.uploads.filter((u) => !u.hidden && !(u.release_at && Date.parse(u.release_at) > Date.now())).map((u) => ({ id: u.id, title: u.title, artist_id: u.artist_id, sample: false, category: u.category, style: u.style, medium: u.medium, popularity: 0, trending: 0 }))],
+        artists: [...seed.artists.map((a) => ({ id: a.id, name: a.name, country: a.country, sample: true, followers: 0 })),
+          ...Object.values(db.artists).map((a) => ({ id: a.id, name: a.name, country: a.country, sample: false, followers: 0 }))],
+      });
+      const personal = prof.assistant_personalize === false ? {} : {
+        interests: prof.assistant_interests || '',
+        follows: db.follows.filter((f) => f.user_id === uid).map((f) => f.artist_id),
+        saved: db.reactions.filter((r) => r.user_id === uid && r.kind === 'super').map((r) => r.artwork_id),
+      };
+      const pageCtx = page?.type === 'artwork' ? { type: 'artwork', artwork: { id: page.id } } : page;
+      const picks = g.selectCandidates({ catalog, page: pageCtx, personal, messages, mode });
+      const w = picks.artworks[0], a = picks.artists[0];
+      const reply = `[Stand-in reply for ${mode}]${page?.type ? ` about this ${page.type}` : ''}: ${messages.at(-1).content}\n`
+        + `[[art:${w.id}]] — ${w.why}\n[[art:w99999]] — an invented work\n[[artist:${a.id}]] — ${a.you_follow ? 'you follow them' : 'worth following'}\n[[search:${w.style || 'Abstract'}]] — more in this style\n`;
+      const filter = g.referenceFilter({ artworkIds: new Set(catalog.artworks.map((x) => x.id)), artistIds: new Set(catalog.artists.map((x) => x.id)) });
+      for (const piece of reply.match(/[\s\S]{1,24}/g)) {
+        await new Promise((r) => setTimeout(r, 15));
+        const safe = filter.push(piece);
+        if (safe) onEvent({ type: 'text', text: safe });
+      }
+      const rest = filter.end();
+      if (rest) onEvent({ type: 'text', text: rest });
+      (db.guide ||= []).push({ user: uid, mode, ok: true, day: today, at: new Date().toISOString() });
+      save(db);
+      onEvent({ type: 'done', usage: { used: used + 1, limit }, refs: filter.refs });
+    },
+    async guideUsage() {
+      if (!user) return null;
+      const db = load();
+      const today = new Date().toISOString().slice(0, 10);
+      return { used: (db.guide || []).filter((r) => r.user === user.id && r.ok && r.day === today).length, limit: planOf(db, user.id).assistant_daily };
+    },
+    async guidePrefs() {
+      if (!user) return null;
+      const p = profileOf(load(), user.id);
+      return { personalize: p.assistant_personalize !== false, interests: p.assistant_interests || '' };
+    },
+    async setGuidePrefs(personalize, interests) {
+      needUser();
+      const db = load();
+      Object.assign(profileOf(db, user.id), { assistant_personalize: personalize, assistant_interests: String(interests || '').slice(0, 300) });
+      save(db);
+    },
+    async resetGuide() {
+      needUser();
+      const db = load();
+      Object.assign(profileOf(db, user.id), { assistant_personalize: true, assistant_interests: '' });
+      db.guideEvents = (db.guideEvents || []).filter((e) => e.user !== user.id);
+      save(db);
+    },
+    async guideEvent(kind, target) {
+      if (!user) return;
+      const db = load();
+      (db.guideEvents ||= []).push({ user: user.id, kind, target: target || null, at: new Date().toISOString() });
+      save(db);
+    },
+    async guideMetrics() {
+      const db = load(); needAdmin(db);
+      const reqs = db.guide || [];
+      const events = {};
+      for (const e of db.guideEvents || []) events[e.kind] = (events[e.kind] || 0) + 1;
+      const days = {};
+      for (const r of reqs) (days[r.user] ||= new Set()).add(r.day);
+      const byMode = {};
+      for (const r of reqs) byMode[r.mode] = (byMode[r.mode] || 0) + 1;
+      return { days: 30, messages: reqs.filter((r) => r.ok).length, failed: 0, members: Object.keys(days).length,
+        returning: Object.values(days).filter((s) => s.size >= 2).length, by_mode: byMode, events };
+    },
     async auditLog() {
       const db = load();
       if (!(db.admins || []).includes(user?.id)) throw new Error('Admins only');

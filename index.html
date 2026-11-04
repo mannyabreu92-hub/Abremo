@@ -44,6 +44,7 @@
   <link rel="modulepreload" href="src/ui/views/account.js">
   <link rel="modulepreload" href="src/ui/views/admin.js">
   <link rel="modulepreload" href="src/ui/views/arena.js">
+  <link rel="modulepreload" href="src/ui/views/assistant.js">
   <link rel="modulepreload" href="src/ui/views/careers.js">
   <link rel="modulepreload" href="src/ui/views/explainers.js">
   <link rel="modulepreload" href="src/ui/views/forms.js">
@@ -119,6 +120,9 @@
     <a href="#collections" data-view="collections"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z"/></svg><span>Collections</span></a>
     <a href="#profile" data-view="profile"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/></svg><span>Profile</span></a>
   </nav>
+
+  <button class="guide-launcher" id="guide-launcher" data-act="guide-open" aria-haspopup="dialog" aria-controls="guide" hidden></button>
+  <aside class="guide" id="guide" role="dialog" aria-modal="false" aria-labelledby="guide-title" hidden></aside>
 
   <div class="modal" id="sheet" hidden>
     <div class="modal-backdrop" data-act="close-sheet"></div>
