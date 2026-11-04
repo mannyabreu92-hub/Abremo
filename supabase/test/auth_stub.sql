@@ -1,7 +1,7 @@
 -- Minimal stand-in for Supabase's auth schema and API roles, for testing the migration on
 -- plain Postgres. Not used in production: Supabase provides the real thing.
 create schema if not exists auth;
-create table if not exists auth.users (id uuid primary key, email text);
+create table if not exists auth.users (id uuid primary key, email text, raw_user_meta_data jsonb);
 create or replace function auth.uid() returns uuid language sql stable as
   $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create or replace function auth.role() returns text language sql stable as

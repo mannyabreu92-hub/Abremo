@@ -11,6 +11,7 @@ import { seedSQL, setupSQL } from '../scripts/gen-seed-sql.js';
 import { memberBoards } from '../src/core/leaderboards.js';
 import { sampleCatalog, snapshotToCommunity } from '../src/core/community.js';
 import { artworkInfluence } from '../src/core/scoring.js';
+import { PLANS } from '../src/core/plans.js';
 
 const flags = process.env.ABREMI_PG?.split(/\s+/).filter(Boolean);
 const skip = !flags && 'set ABREMI_PG to run database tests';
@@ -909,15 +910,19 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     as(A, `insert into reactions (artwork_id, kind) values ('${dropWork}', 'like')`);
   });
 
-  await t.test('drops: at most 3 upcoming; moderators can cancel (recorded), which makes the works visible', () => {
+  await t.test('drops: upcoming drops are limited by plan (Free 1, Pro 3); moderators can cancel (recorded), which makes the works visible', () => {
     const works = [];
     for (let i = 0; i < 4; i++) {
       put(E, `${E}/x${i}.webp`); put(E, `${E}/x${i}-thumb.webp`);
       [works[i]] = publish(E, { image: `${E}/x${i}.webp`, thumb: `${E}/x${i}-thumb.webp`, title: `Lot ${i}` }).split('|');
     }
-    const ids = works.slice(0, 3).map((w, i) => as(E, `select create_drop('Drop ${i}', '', now() + interval '2 hours', array['${w}'])`));
-    fails(E, `select create_drop('Drop 4', '', now() + interval '2 hours', array['${works[3]}'])`, /3 upcoming drops/);
-    fails(E, `select create_drop('Twice', '', now() + interval '2 hours', array['${works[0]}'])`, /another upcoming drop|3 upcoming/);
+    const first = as(E, `select create_drop('Drop 0', '', now() + interval '2 hours', array['${works[0]}'])`);
+    fails(E, `select create_drop('Drop 1', '', now() + interval '2 hours', array['${works[1]}'])`, /allows 1 upcoming drop at a time/);
+    as(P[1], `select admin_grant_plan('${E}', 'pro', current_date + 30, 'Beta tester')`);
+    const ids = [first, ...works.slice(1, 3).map((w, i) => as(E, `select create_drop('Drop ${i + 1}', '', now() + interval '2 hours', array['${w}'])`))];
+    fails(E, `select create_drop('Drop 4', '', now() + interval '2 hours', array['${works[3]}'])`, /allows 3 upcoming drops/);
+    as(P[1], `select admin_revoke_plan('${E}')`);
+    fails(E, `select create_drop('Twice', '', now() + interval '2 hours', array['${works[0]}'])`, /another upcoming drop|upcoming drop/);
     as(P[1], `select cancel_drop('${ids[0]}', 'Duplicate')`);
     assert.equal(as('anon', `select count(*) from artworks where id = '${works[0]}'`), '1');
     assert.match(as(P[1], `select details->>'note' from admin_audit_log() where action = 'drop.cancelled' limit 1`), /Duplicate/);
@@ -1001,6 +1006,198 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.match(as(E, `select title from notifications where kind = 'exhibition_review' order by created_at desc limit 1`), /couldn’t be verified: No record found/);
     as(E, `select delete_exhibition('${ex2}')`);
     fails(B, `select delete_exhibition('${ex}')`, /Not your exhibition/);
+  });
+
+  // ——— Phase 6 (0012): plans, galleries, beta tools, billing hooks ———
+  await t.test('plans: the catalog matches the app; Free by default; moderator grants are audited, end-dated and lift the limits', () => {
+    const plans = JSON.parse(as('anon', `select json_agg(row_to_json(p) order by p.sort) from plans p`));
+    assert.deepEqual(plans, PLANS, 'supabase plans = src/core/plans.js');
+    assert.equal(JSON.parse(as(E, 'select my_plan()')).plan.code, 'free');
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 20);
+    fails(E, `select begin_coach_request('bio')`, /20 Coach requests/);
+    fails(E, 'select studio_analytics(365)', /Artist Pro and Elite/);
+    fails(E, `select admin_grant_plan('${E}', 'elite', current_date + 30)`, /Admins only|permission denied/);
+    fails(P[1], `select admin_grant_plan('${E}', 'pro', current_date)`, /between tomorrow and a year/);
+    fails(P[1], `select admin_grant_plan('${E}', 'pro', current_date + 400)`, /between tomorrow and a year/);
+    fails(P[1], `select admin_grant_plan('${E}', 'gallery', current_date + 30)`, /verified galleries/);
+    fails(P[1], `select admin_grant_plan('${E}', 'free', current_date + 30)`, /Pro, Elite or Gallery/);
+    noRowsFor(E, `with u as (insert into subscriptions (user_id, plan, status, source, current_period_end) values ('${E}', 'elite', 'active', 'grant', now() + interval '1 year') returning 1) select count(*) from u`);
+    as(P[1], `select admin_grant_plan('${E}', 'pro', current_date + 30, 'Beta tester')`);
+    const mine = JSON.parse(as(E, 'select my_plan()'));
+    assert.equal(mine.plan.code, 'pro');
+    assert.equal(mine.source, 'grant');
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 60);
+    const ctx = JSON.parse(as(E, `select begin_coach_request('bio')`));
+    as(E, `select finish_coach_request('${ctx.request_id}', true)`);
+    const year = JSON.parse(as(E, 'select studio_analytics(365)'));
+    assert.equal(year.days, 365);
+    assert.equal(year.daily.length, 365);
+    noRowsFor(E, `with u as (update subscriptions set plan = 'elite' returning 1) select count(*) from u`);
+    noRowsFor(B, `select count(*) from subscriptions where user_id = '${E}'`);
+    assert.equal(JSON.parse(as('anon', 'select plan_badges()'))[`m_${E}`], 'Pro', 'the badge is public');
+    assert.match(as(E, `select title from notifications where kind = 'plan_granted'`), /Artist Pro until/);
+    assert.match(as(P[1], `select details->>'plan' from admin_audit_log() where action = 'plan.granted' limit 1`), /pro/);
+    assert.ok(JSON.parse(as(P[1], 'select admin_plan_holders()')).some((h) => h.name && h.plan === 'pro'));
+    assert.ok(JSON.parse(as(P[1], `select admin_find_members('${psql(`select name from profiles where id = '${E}'`).slice(0, 4)}')`)).length > 0);
+    psql(`update subscriptions set current_period_end = now() - interval '1 second' where user_id = '${E}'`);
+    assert.equal(JSON.parse(as(E, 'select my_plan()')).plan.code, 'free', 'grants lapse on their end date');
+    assert.equal(JSON.parse(as('anon', 'select plan_badges()'))[`m_${E}`], undefined);
+    as(P[1], `select admin_grant_plan('${E}', 'elite', current_date + 7)`);
+    as(P[1], `select admin_revoke_plan('${E}', 'Test over')`);
+    assert.equal(JSON.parse(as(E, 'select my_plan()')).plan.code, 'free');
+    fails(P[1], `select admin_revoke_plan('${E}')`, /No granted plan/);
+  });
+
+  await t.test('plans never change rankings: scores are identical before and after a plan, and no ranking function reads plans', () => {
+    const scores = `select md5(coalesce((select json_agg(x order by x.artwork_id)::text from artwork_scores() x), '')) || md5(coalesce((select json_agg(x order by x.artist_id)::text from artist_scores() x), '')) || md5(community_snapshot()::text) || md5(member_leaderboards()::text)`;
+    // One transaction (one clock), so time-decayed scores are comparable; rolled back afterwards.
+    const [before, after] = psql(`begin; ${scores}; insert into subscriptions (user_id, plan, status, source, current_period_end)
+      values ('${E}', 'elite', 'active', 'grant', now() + interval '30 days'), ('${G}', 'elite', 'active', 'grant', now() + interval '30 days'); ${scores}; rollback;`).split('\n');
+    assert.ok(before.length === 128 && before === after, 'same scores, snapshot and boards');
+    const readers = psql(`select string_agg(p.proname, ',') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname in ('artwork_scores', 'artist_scores', 'community_snapshot', 'member_leaderboards', 'cast_battle_vote',
+        'cast_competition_vote', 'finalize_competition', 'award_achievements', 'detect_suspicious_activity')
+        and p.prosrc ~* '(subscriptions|current_plan|plans\\b|plan_badges)'`);
+    assert.equal(readers, '', 'ranking functions must not read plans');
+  });
+
+  await t.test('exhibitions from Elite artists are reviewed first; the checks are the same', () => {
+    const plain = as(E, `select submit_exhibition('group', 'Plain', 'Room 1', null, null, current_date - 5, null, 'https://example.org/plain')`);
+    as(P[1], `select admin_grant_plan('${E}', 'elite', current_date + 30)`);
+    const q = JSON.parse(as(P[1], 'select admin_exhibition_queue()'));
+    assert.equal(q[0].priority, true);
+    as(P[1], `select admin_revoke_plan('${E}')`);
+    as(E, `select delete_exhibition('${plain}')`);
+  });
+
+  let gal;
+  await t.test('galleries: members apply, moderators verify (audited, notified); verified galleries are public; the Gallery plan posts directly', () => {
+    psql(`update profiles set created_at = now() where id = '${B}'`);
+    fails(B, `select apply_gallery('New Space', 'Porto', 'PT', 'https://newspace.example', '')`, /after 3 days/);
+    psql(`update profiles set created_at = now() - interval '30 days' where id = '${B}'`);
+    fails(C, `select apply_gallery('Casa do Mar', 'Porto', 'PT', 'http://insecure.example', '')`, /check constraint/);
+    gal = as(C, `select apply_gallery('Casa do Mar', 'Porto', 'pt', 'https://casadomar.example', 'A gallery by the sea.')`);
+    assert.equal(as('anon', `select count(*) from galleries where id = '${gal}'`), '0', 'pending galleries are not public');
+    assert.equal(as('anon', `select gallery_page('${gal}') is null`), 't');
+    assert.equal(JSON.parse(as(C, 'select my_gallery()')).status, 'pending');
+    noRowsFor(C, `with u as (update galleries set status = 'verified' returning 1) select count(*) from u`);
+    fails(C, `select review_gallery('${gal}', true)`, /Admins only|permission denied/);
+    assert.ok(JSON.parse(as(P[1], 'select admin_gallery_queue()')).some((g) => g.id === gal && g.member));
+    as(P[1], `select review_gallery('${gal}', true, 'Checked the website')`);
+    assert.equal(JSON.parse(as('anon', `select gallery_page('${gal}')`)).name, 'Casa do Mar');
+    assert.match(as(C, `select title from notifications where kind = 'gallery_review'`), /now a verified gallery/);
+    assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log() where action like 'gallery.%'`), /gallery\.verified/);
+    const args = (title) => `'residency', '${title}', 'ignored', 'Porto', current_date + 20, '', '', 0, 'EUR', 'https://casadomar.example/${title.length}'`;
+    const pending = as(C, `select suggest_opportunity(${args('Sea Studio')})`);
+    assert.equal(as('anon', `select count(*) from opportunities where id = '${pending}'`), '0', 'without the Gallery plan, listings wait for review');
+    assert.equal(psql(`select organizer || '|' || (gallery_id = '${gal}') from opportunities where id = '${pending}'`), 'Casa do Mar|true');
+    as(P[1], `select admin_grant_plan('${C}', 'gallery', current_date + 60)`);
+    const direct = as(C, `select suggest_opportunity(${args('Winter Residency')})`);
+    assert.equal(as('anon', `select count(*) from opportunities where id = '${direct}'`), '1', 'the Gallery plan publishes directly');
+    assert.equal(JSON.parse(as('anon', 'select opportunities_list()')).find((o) => o.id === direct).gallery_id, gal);
+    assert.equal(JSON.parse(as('anon', `select gallery_page('${gal}')`)).opportunities[0].title, 'Winter Residency');
+    assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log()`), /opportunity\.published_by_gallery/);
+    as(C, `select apply_gallery('Casa do Mar', 'Porto', 'PT', 'https://casadomar.example', 'New text.')`);
+    assert.equal(JSON.parse(as('anon', `select gallery_page('${gal}')`)).bio, 'New text.', 'edits keep verification');
+    as(C, `select apply_gallery('Casa Nova', 'Porto', 'PT', 'https://casadomar.example', 'New text.')`);
+    assert.equal(as('anon', `select gallery_page('${gal}') is null`), 't', 'a new name goes back for review');
+    as(P[1], `select review_gallery('${gal}', true)`);
+  });
+
+  await t.test('invites: optional by default; when required, new accounts need a valid code; codes are limited and revocable', () => {
+    const newUser = (n, invite) => psql(`insert into auth.users (id, email, raw_user_meta_data) values ('00000000-0000-0000-0000-0000000009${n}', 'beta${n}@example.com', ${invite ? `'{"invite": "${invite}"}'` : 'null'})`);
+    newUser('01');
+    fails(B, 'select admin_create_invite(2)', /Admins only|permission denied/);
+    const code = as(P[1], `select admin_create_invite(2, 30, 'Wave 1')`);
+    assert.match(code, /^[A-HJKMNP-Z2-9]{10}$/);
+    assert.equal(as('anon', `select check_invite('${code.toLowerCase()}')`), 't');
+    assert.equal(as('anon', `select check_invite('NOPE')`), 'f');
+    noRowsFor('anon', 'select count(*) from invite_codes');
+    noRowsFor(B, 'select count(*) from invite_codes');
+    as(P[1], 'select admin_set_invite_required(true)');
+    assert.equal(JSON.parse(as('anon', 'select app_flags()')).invite_required, true);
+    assert.throws(() => newUser('02'), /invite-only/);
+    assert.throws(() => newUser('03', 'WRONGCODE1'), /invite-only/);
+    newUser('04', code.toLowerCase());
+    assert.equal(psql(`select count(*) from profiles where id = '00000000-0000-0000-0000-000000000904'`), '1', 'invitees get a profile');
+    newUser('05', code);
+    assert.throws(() => newUser('06', code), /invite-only/, 'two uses only');
+    const fresh = as(P[1], 'select admin_create_invite(5)');
+    as(P[1], `select admin_revoke_invite('${fresh}')`);
+    assert.throws(() => newUser('07', fresh), /invite-only/, 'revoked');
+    assert.equal(JSON.parse(as(P[1], 'select admin_invites()')).codes.find((c) => c.code === code).uses, 2);
+    as(P[1], 'select admin_set_invite_required(false)');
+    newUser('08');
+    assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log()`), /beta\.invites_required/);
+  });
+
+  await t.test('feedback and app errors: members send feedback, moderators resolve it; errors are logged without personal data and capped', () => {
+    fails('anon', `select submit_feedback('bug', 'Something broke')`, /Sign in|permission denied/);
+    fails(B, `select submit_feedback('bug', 'no')`, /check constraint/);
+    const f = as(B, `select submit_feedback('idea', 'Let me sort my collections by date.', '#collections', 'Test browser')`);
+    assert.equal(as(B, 'select count(*) from feedback'), '1');
+    noRowsFor(C, `select count(*) from feedback where id = '${f}'`);
+    fails(B, 'select admin_feedback()', /Admins only|permission denied/);
+    assert.equal(JSON.parse(as(P[1], 'select admin_feedback()'))[0].message, 'Let me sort my collections by date.');
+    as(P[1], `select resolve_feedback('${f}', 'Planned')`);
+    fails(P[1], `select resolve_feedback('${f}')`, /already resolved/);
+    as('anon', `select log_client_error('TypeError: x is undefined', 'app.js:10:5', '#art/abc?token=secret', 'abc123', 'Test browser')`);
+    as(B, `select log_client_error('TypeError: x is undefined', 'app.js:10:5', '#home', 'abc123', 'Test browser')`);
+    noRowsFor('anon', 'select count(*) from client_errors');
+    noRowsFor(B, 'select count(*) from client_errors');
+    const errs = JSON.parse(as(P[1], 'select admin_client_errors(7)'));
+    assert.equal(errs[0].count, 2);
+    assert.equal(errs[0].pages.some((p) => p.includes('secret')), false, 'query strings are dropped');
+    assert.equal(psql(`select count(*) from information_schema.columns where table_name = 'client_errors' and column_name in ('user_id', 'ip', 'email')`), '0');
+    psql(`insert into client_errors (message, created_at) select 'flood', now() from generate_series(1, 500)`);
+    as('anon', `select log_client_error('one too many')`);
+    assert.equal(psql(`select count(*) from client_errors where message = 'one too many'`), '0', 'capped at 500 an hour');
+    psql(`update client_errors set created_at = now() - interval '31 days' where message = 'flood'`);
+    fails(B, 'select prune_client_errors()', /permission denied/);
+    assert.equal(psql('select prune_client_errors()'), '500');
+  });
+
+  await t.test('billing: inactive while payments are off; only the service role applies events, each once; paid plans can’t be overwritten by grants', () => {
+    const ev = (id, status, plan = 'pro') => `select apply_billing_event('${id}', 'customer.subscription.updated', '${B}', '${plan}', '${status}', now() + interval '30 days', 'cus_1', 'sub_1')`;
+    fails('service_role', ev('evt_1', 'active'), /switched off/);
+    fails(B, ev('evt_1', 'active'), /permission denied/);
+    fails('anon', ev('evt_1', 'active'), /permission denied/);
+    psql('update app_settings set payments_enabled = true');
+    assert.equal(as('service_role', ev('evt_1', 'active')), 'applied');
+    assert.equal(as('service_role', ev('evt_1', 'active')), 'duplicate');
+    const mine = JSON.parse(as(B, 'select my_plan()'));
+    assert.equal(mine.plan.code, 'pro');
+    assert.equal(mine.manage, true);
+    fails(P[1], `select admin_grant_plan('${B}', 'elite', current_date + 30)`, /paid subscription/);
+    assert.equal(as('service_role', ev('evt_2', 'active', 'gallery')), 'not a verified gallery');
+    assert.equal(as('service_role', ev('evt_3', 'canceled')), 'applied');
+    assert.equal(JSON.parse(as(B, 'select my_plan()')).plan.code, 'free');
+    psql('update app_settings set payments_enabled = false');
+    assert.equal(JSON.parse(as('anon', 'select app_flags()')).payments_enabled, false);
+  });
+
+  await t.test('security: every table has row-level security, every privileged function pins its search path, and guests reach only public functions', () => {
+    assert.equal(psql(`select coalesce(string_agg(c.relname, ','), '') from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity`), '', 'tables without RLS');
+    assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.prosecdef and not exists (select 1 from unnest(coalesce(p.proconfig, '{}')) c where c like 'search_path=%')`), '', 'security definer functions without a search path');
+    // Functions a guest (anon) may run. Trigger functions are excluded: they can't be called directly.
+    const anonCan = psql(`select string_agg(distinct p.proname, ',' order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.prosecdef and p.prorettype <> 'trigger'::regtype and has_function_privilege('anon', p.oid, 'execute')`).split(',');
+    const PUBLIC_FUNCTIONS = ['app_flags', 'arena', 'artist_achievements', 'artist_passport', 'chart_baseline', 'check_invite', 'community_snapshot',
+      'competition_detail', 'drop_detail', 'drops_overview', 'gallery_page', 'log_client_error', 'member_leaderboards', 'opportunities_list',
+      'plan_badges', 'public_collection', 'record_events'];
+    const unexpected = anonCan.filter((f) => !PUBLIC_FUNCTIONS.includes(f));
+    assert.deepEqual(unexpected, [], 'privileged functions guests can run that aren’t on the public list');
+  });
+
+  await t.test('0012 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0012_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('plans', 'subscriptions', 'galleries', 'invite_codes', 'feedback', 'client_errors', 'app_settings', 'billing_events')`), '0');
+    assert.equal(JSON.parse(as(E, 'select coach_usage()')).limit, 20, 'the earlier Coach limit is back');
+    psql(`insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000999', 'after-undo@example.com')`);
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('plans', 'subscriptions', 'galleries', 'invite_codes', 'feedback', 'client_errors', 'app_settings', 'billing_events')`), '8');
   });
 
   await t.test('0011 can be undone, and setup.sql re-applies it', () => {
