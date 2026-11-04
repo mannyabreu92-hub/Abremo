@@ -85,6 +85,21 @@ export async function createSupabaseCloud(url, key) {
       return check(await sb.rpc('community_snapshot'));
     },
 
+    /** The earlier hourly chart to compare rankings against: { hour, taken_at, snapshot } or null. */
+    async chartBaseline() {
+      return check(await sb.rpc('chart_baseline'));
+    },
+
+    /**
+     * Live updates: calls onChange when community totals change (the database bumps a public
+     * pulse row; no individual vote is sent), and onStatus(true/false) as the connection comes and goes.
+     */
+    onPulse(onChange, onStatus = () => {}) {
+      sb.channel('abremi-pulse')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'community_pulse' }, () => onChange())
+        .subscribe((status) => onStatus(status === 'SUBSCRIBED'));
+    },
+
     async profile() {
       const row = check(await sb.rpc('ensure_profile'));
       return Array.isArray(row) ? row[0] : row;

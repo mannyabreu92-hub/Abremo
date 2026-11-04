@@ -397,7 +397,7 @@ function syncReactionButtons(id) {
 let insightCache = null;
 function artistInsights() {
   if (insightCache?.world === world) return insightCache;
-  const prev = state.snapshot?.prev?.artist || null;
+  const prev = (COMMUNITY ? baselineRanks()?.artist : state.snapshot?.prev?.artist) || null;
   const influenceOf = {}, cred = {};
   for (const a of world.artists) {
     const works = world.worksByArtist[a.id] || [];
@@ -965,8 +965,40 @@ function vote(i) {
 }
 
 // ——— Rankings ———
+// Community mode: everyone compares with the same server-kept hourly chart (chart_baseline()).
+let chartBase = null; // { key: hour fetched for, at: when that chart was kept, community, ranks, from }
+let live = false;     // true while the Realtime subscription is connected
+
+async function loadChartBaseline() {
+  if (!cloud?.chartBaseline) return;
+  const key = hourKey();
+  if (chartBase?.key === key) return;
+  try {
+    const b = await cloud.chartBaseline();
+    chartBase = { key, at: b ? Date.parse(b.taken_at || b.hour) : null, community: b ? snapshotToCommunity(b.snapshot) : null, ranks: null, from: null };
+    insightCache = null;
+  } catch { /* keep the previous chart; try again on the next refresh */ }
+}
+
+/** Ranks in the earlier chart, scored exactly like the current one. null when there is no earlier chart. */
+function baselineRanks() {
+  if (!chartBase?.community || !state.community) return null;
+  if (chartBase.ranks && chartBase.from === state.community) return chartBase.ranks;
+  const c = state.community, b = chartBase.community;
+  const works = (c.artworks || []).filter((w) => w.createdAt && w.createdAt <= chartBase.at);
+  const artistIds = new Set(works.map((w) => w.artistId));
+  const then = createWorld(seed, {
+    ...viewState(), deltas: b.deltas, elo: b.elo, followerDeltas: b.followerDeltas,
+    memberArtists: (c.artists || []).filter((a) => artistIds.has(a.id)), memberArtworks: works,
+  });
+  chartBase.ranks = { art: rankMap(then.topArtworks()), artist: rankMap(then.topArtists()) };
+  chartBase.from = state.community;
+  return chartBase.ranks;
+}
+
 /** Rank movement compares with the chart from the start of the previous hour. No previous chart, no movement. */
 function chartSnapshot() {
+  if (COMMUNITY) return baselineRanks();
   const current = { art: rankMap(world.topArtworks()), artist: rankMap(world.topArtists()) };
   const stored = state.snapshot || { hour: hourKey(), ranks: current, prev: null };
   const { snapshot, previous } = rollSnapshot(stored, current);
@@ -1067,6 +1099,16 @@ function countryRow(row) {
     <span class="rank-score">${fmt(row.score)}</span></button></li>`;
 }
 
+const clock = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function chartStatusHTML(hour) {
+  if (!COMMUNITY) return `<p class="muted">Updated hourly · ${hour.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>`;
+  const since = chartBase?.at ? ` · <span class="chart-since">Movement since ${clock(chartBase.at)}</span>` : '';
+  const status = live
+    ? '<span class="live-badge is-live"><span class="live-dot" aria-hidden="true"></span>Live</span>'
+    : `<span class="live-badge">Updated ${clock(state.community?.fetchedAt || Date.now())}</span>`;
+  return `<p class="muted chart-status" id="chart-status">${status}${since}</p>`;
+}
+
 function renderCharts(root) {
   const previous = chartSnapshot();
   const hour = new Date();
@@ -1117,7 +1159,7 @@ function renderCharts(root) {
   }
   root.innerHTML = `<div class="shell charts">
     <header class="rank-head">
-      <div><h1 class="display-lg">Rankings</h1><p class="muted">Updated hourly · ${hour.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p></div>
+      <div><h1 class="display-lg">Rankings</h1>${chartStatusHTML(hour)}</div>
       ${Icon('globe', { size: 26, label: 'Worldwide' })}
     </header>
     <div class="seg seg-gold" role="tablist">${tabs}</div>
@@ -2126,22 +2168,42 @@ async function connectCommunity() {
     console.warn('Abremi community unavailable', e);
     toast('Community rankings are offline. Showing the last ones saved.', { duration: 4000 });
   }
+  await loadChartBaseline();
   if (!sheetRenderer) renderView();
   else refresh();
-  const quietRefresh = () => {
-    if (document.hidden || !cloud) return;
-    const waiting = me && state.applications?.some((a) => a.status === 'pending');
-    (waiting ? syncAccount() : refreshCommunity())
-      .then(() => {
-        // A decided application changes the member's role, so every view (and the nav badge) must redraw.
-        if (waiting) commit();
-        const passive = waiting || ['home', 'charts', 'explore', 'artists', 'collections'].includes(currentView());
-        if (passive && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
-      })
-      .catch(() => {});
-  };
   setInterval(quietRefresh, 90_000);
   document.addEventListener('visibilitychange', quietRefresh);
+  // Live updates: the database bumps a public pulse when anything changes; refetch the totals.
+  cloud?.onPulse?.(onPulse, (connected) => {
+    if (live === connected) return;
+    live = connected;
+    const s = $('#chart-status');
+    if (s) s.outerHTML = chartStatusHTML(new Date());
+  });
+}
+
+/** Background refresh: keeps totals (and pending applications) current without interrupting the person. */
+function quietRefresh() {
+  if (document.hidden || !cloud) return;
+  const waiting = me && state.applications?.some((a) => a.status === 'pending');
+  Promise.all([waiting ? syncAccount() : refreshCommunity(), loadChartBaseline()])
+    .then(() => {
+      // A decided application changes the member's role, so every view (and the nav badge) must redraw.
+      if (waiting) commit();
+      const passive = waiting || ['home', 'charts', 'explore', 'artists', 'collections'].includes(currentView());
+      if (passive && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
+    })
+    .catch(() => {});
+}
+
+// Someone, somewhere, liked, followed, voted or uploaded. Wait a moment so a burst arrives as one
+// refresh, and refresh at most every 5 seconds so a busy site doesn't keep redrawing the page.
+let pulseTimer = null;
+let lastPulseRefresh = 0;
+function onPulse() {
+  if (pulseTimer) return;
+  const delay = Math.max(1500, lastPulseRefresh + 5000 - Date.now());
+  pulseTimer = setTimeout(() => { pulseTimer = null; lastPulseRefresh = Date.now(); quietRefresh(); }, delay);
 }
 
 function accountCardHTML() {

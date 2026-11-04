@@ -22,6 +22,16 @@ window.__abremiCloud = async () => {
   // Same neutral default name as the database: never part of the email address.
   const profileOf = (db, id) => (db.profiles[id] ||= { id, name: `Member ${[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(16).toUpperCase().slice(0, 4).padEnd(4, '0')}`, country: 'US', role: 'fan', public_leaderboards: true });
   window.__mockdb = { load, save };
+  const group = (rows, keyFn) => Object.values(rows.reduce((m, r) => { const k = keyFn(r); (m[k.key] ||= { ...k.out, n: 0 }).n++; return m; }, {}));
+  const snapshotOf = (db) => ({
+    reactions: group(db.reactions.filter((r) => r.kind !== 'pass'), (r) => ({ key: `${r.artwork_id}|${r.kind}|${r.role}`, out: { a: r.artwork_id, k: r.kind, r: r.role } })),
+    reviews: Object.values(db.reviews.reduce((m, r) => { (m[r.artwork_id] ||= { a: r.artwork_id, n: 0, s: 0 }); m[r.artwork_id].n++; m[r.artwork_id].s += r.rating; return m; }, {})),
+    follows: group(db.follows, (f) => ({ key: `${f.artist_id}|${f.role}`, out: { a: f.artist_id, r: f.role } })),
+    ratings: Object.entries(db.ratings).map(([a, v]) => ({ a, v })),
+    members: Object.keys(db.profiles).length,
+    artists: Object.values(db.artists),
+    uploads: db.uploads.slice().reverse(),
+  });
 
   return {
     kind: 'mock',
@@ -40,17 +50,28 @@ window.__abremiCloud = async () => {
     async signOut() { user = null; localStorage.removeItem(SESSION); setTimeout(() => listener(null, 'SIGNED_OUT'), 0); },
     async snapshot() {
       await wait();
+      return snapshotOf(load());
+    },
+    // ——— Live updates (same rules as supabase/migrations/0005_live_updates.sql) ———
+    async chartBaseline() {
+      await wait();
       const db = load();
-      const group = (rows, keyFn) => Object.values(rows.reduce((m, r) => { const k = keyFn(r); (m[k.key] ||= { ...k.out, n: 0 }).n++; return m; }, {}));
-      return {
-        reactions: group(db.reactions.filter((r) => r.kind !== 'pass'), (r) => ({ key: `${r.artwork_id}|${r.kind}|${r.role}`, out: { a: r.artwork_id, k: r.kind, r: r.role } })),
-        reviews: Object.values(db.reviews.reduce((m, r) => { (m[r.artwork_id] ||= { a: r.artwork_id, n: 0, s: 0 }); m[r.artwork_id].n++; m[r.artwork_id].s += r.rating; return m; }, {})),
-        follows: group(db.follows, (f) => ({ key: `${f.artist_id}|${f.role}`, out: { a: f.artist_id, r: f.role } })),
-        ratings: Object.entries(db.ratings).map(([a, v]) => ({ a, v })),
-        members: Object.keys(db.profiles).length,
-        artists: Object.values(db.artists),
-        uploads: db.uploads.slice().reverse(),
-      };
+      db.history ||= [];
+      const hour = new Date(); hour.setMinutes(0, 0, 0);
+      const h = hour.getTime();
+      if (!db.history.some((x) => Date.parse(x.hour) === h)) {
+        const { uploads, artists, ...totals } = snapshotOf(db);
+        db.history.push({ hour: hour.toISOString(), taken_at: new Date().toISOString(), snapshot: totals });
+        save(db);
+      }
+      const earlier = db.history.filter((x) => Date.parse(x.hour) < h && Date.parse(x.hour) >= h - 24 * 3600e3)
+        .sort((a, b) => Date.parse(b.hour) - Date.parse(a.hour));
+      return earlier[0] || null;
+    },
+    // Another tab writing the shared data stands in for the database's pulse row.
+    onPulse(onChange, onStatus = () => {}) {
+      window.addEventListener('storage', (e) => { if (e.key === KEY) onChange(); });
+      setTimeout(() => onStatus(true), 0);
     },
     // ——— Critic & Collector applications (same rules as supabase/migrations/0004_role_applications.sql) ———
     async applyForRole(role, statement, links = []) {

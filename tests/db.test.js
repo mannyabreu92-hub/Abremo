@@ -395,6 +395,55 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     fails(P[0], `update profiles set role = 'critic' where id = '${P[0]}'`, /require verification/);
   });
 
+  await t.test('live pulse: public, read-only, bumped by community activity and broadcast by Realtime', () => {
+    const version = () => Number(as('anon', 'select version from community_pulse'));
+    const rewind = () => psql(`update community_pulse set changed_at = now() - interval '1 minute'`);
+    assert.equal(as('anon', 'select count(*) from community_pulse'), '1');
+    rewind();
+    const v0 = version();
+    as(A, `insert into reactions (artwork_id, kind) values ('${seed.artworks[300].id}', 'like')`);
+    const v1 = version();
+    assert.equal(v1, v0 + 1, 'a like bumps the pulse');
+    as(A, `delete from reactions where artwork_id = '${seed.artworks[300].id}'`);
+    assert.equal(version(), v1, 'throttled to one bump per second');
+    rewind();
+    as(B, `insert into follows (artist_id) values ('${seed.artists[40].id}')`);
+    assert.equal(version(), v1 + 1, 'a follow bumps the pulse');
+    rewind();
+    const rival = seed.artworks.find((w) => w.artistId !== seed.artworks[301].artistId);
+    as(C, `select * from cast_battle_vote('${seed.artworks[301].id}', '${rival.id}')`);
+    assert.equal(version(), v1 + 2, 'a battle vote bumps the pulse');
+    for (const who of ['anon', A]) {
+      noRowsFor(who, `with u as (update community_pulse set version = 0 returning 1) select count(*) from u`);
+      fails(who, `select bump_community_pulse()`, /permission denied|trigger functions can only be called/);
+    }
+    assert.equal(psql(`select count(*) from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'community_pulse'`), '1');
+    assert.equal(psql(`select count(*) from pg_publication_tables where pubname = 'supabase_realtime' and tablename <> 'community_pulse'`), '0', 'no other table is broadcast');
+  });
+
+  await t.test('hourly charts: kept once an hour, totals only, baseline from an earlier hour within 24 hours', () => {
+    psql('delete from community_history');
+    assert.equal(as('anon', 'select chart_baseline() is null'), 't', 'no earlier chart → no movement');
+    assert.equal(psql('select count(*) from community_history'), '1', 'this hour is kept');
+    as('anon', 'select chart_baseline()');
+    assert.equal(psql('select count(*) from community_history'), '1', 'once per hour');
+    const keys = psql(`select string_agg(k, ',' order by k) from community_history, jsonb_object_keys(snapshot) k`);
+    assert.equal(keys, 'follows,members,ratings,reactions,reviews', 'totals only: no uploads list, no member details');
+    // An earlier chart, and one too old to compare against.
+    psql(`insert into community_history (hour, taken_at, snapshot) values
+      (date_trunc('hour', now()) - interval '2 hours', date_trunc('hour', now()) - interval '2 hours', '{"members": 1}'),
+      (date_trunc('hour', now()) - interval '30 hours', date_trunc('hour', now()) - interval '30 hours', '{"members": 0}')`);
+    const base = JSON.parse(as(A, 'select chart_baseline()'));
+    assert.equal(base.snapshot.members, 1);
+    assert.equal(Date.parse(base.hour), Date.parse(psql(`select to_json(date_trunc('hour', now()) - interval '2 hours')`).replace(/"/g, '')));
+    psql(`delete from community_history where hour = date_trunc('hour', now()) - interval '2 hours'`);
+    assert.equal(as('anon', 'select chart_baseline() is null'), 't', 'a 30-hour-old chart is too old');
+    for (const who of ['anon', A]) {
+      noRowsFor(who, `with u as (insert into community_history (hour, snapshot) values (now() + interval '1 day', '{}') returning 1) select count(*) from u`);
+      fails(who, `select take_community_history()`, /permission denied/);
+    }
+  });
+
   await t.test('ensure_profile heals a missing profile', () => {
     const D = '00000000-0000-0000-0000-00000000000d';
     psql(`alter table auth.users disable trigger on_auth_user_created; insert into auth.users (id, email) values ('${D}', 'dee@example.com'); alter table auth.users enable trigger on_auth_user_created;`);
