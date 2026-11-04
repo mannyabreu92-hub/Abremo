@@ -1484,3 +1484,8 @@ div.rank-row:hover { background: transparent; }
 .switch span { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--text-2); transition: transform var(--dur) var(--ease), background var(--dur) var(--ease); }
 .switch[aria-pressed="true"] { background: var(--gold-soft); border-color: var(--abremi-border-gold); }
 .switch[aria-pressed="true"] span { transform: translateX(18px); background: var(--abremi-gold); }
+
+/* Phase 8: offers, emerging */
+.offer-line { margin: 6px 0 0; color: var(--text-2); font-size: 14px; }
+.offer-line b { color: var(--abremi-gold); }
+.emerging-note { margin: -6px 0 16px; font-size: 13.5px; }

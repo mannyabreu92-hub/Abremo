@@ -545,6 +545,25 @@ export async function createSupabaseCloud(url, key) {
     async guideMetrics(days = 30) {
       return check(await sb.rpc('admin_assistant_metrics', { p_days: days }));
     },
+    // ——— Phase 8: offers, waitlists, interests (migration 0015) ———
+    async sendOffer(artworkId, amount, currency, message) {
+      return check(await sb.rpc('send_offer', { p_artwork: artworkId, p_amount: amount, p_currency: currency, p_message: message }));
+    },
+    async inquiryOffer(id) {
+      return check(await sb.rpc('inquiry_offer', { p_id: id }));
+    },
+    async watchArtwork(id, on) {
+      check(await sb.rpc('watch_artwork', { p_id: id, p_on: on }));
+    },
+    async myWatches() {
+      return user ? check(await sb.rpc('my_watches')) || [] : [];
+    },
+    async setInterests({ mediums = [], regions = [], priceMax = null }) {
+      check(await sb.rpc('set_discovery_interests', { p_mediums: mediums, p_regions: regions, p_price_max: priceMax }));
+    },
+    async myInterests() {
+      return user ? check(await sb.rpc('my_discovery_interests')) : null;
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },

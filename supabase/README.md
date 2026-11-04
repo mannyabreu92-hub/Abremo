@@ -16,6 +16,8 @@ Abremi runs in two modes:
 | `migrations/0004_role_applications.sql` | Critic & Collector applications, the admin list, and the review functions |
 | `migrations/0006_profiles_artworks_collections.sql` | Audit trail, artist profiles, artwork details (description, size, availability), collections; the shared catalog starts every work at the same battle rating |
 | `migrations/down/0006_down.sql` | Undoes 0006 (drops its tables and columns, with their data, and restores the earlier functions). Not part of `setup.sql` |
+| `migrations/0015_discovery_loop.sql` | Offers on purchase inquiries, waitlists, availability and price alerts, drop alerts for treasurers, collector interests |
+| `migrations/down/0015_down.sql` | Undoes 0015 |
 | `migrations/0014_teasers_badges.sql` | Drop teasers show a colour veil (no image) until release; artists can hide their plan badge |
 | `migrations/down/0014_down.sql` | Undoes 0014 |
 | `migrations/0013_assistant.sql` | The Abremi Guide: who may ask and how often (daily allowance per plan), the context it may see, personalization preferences, request and event counts (pruned after 400 days by pg_cron) |
