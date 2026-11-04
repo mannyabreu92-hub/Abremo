@@ -65,7 +65,7 @@ test('index.html links the manifest and iOS home-screen tags', () => {
   assert.match(html, /<link rel="apple-touch-icon" href="icons\/apple-touch-icon\.png">/);
   assert.match(html, /apple-mobile-web-app-capable" content="yes"/);
   assert.match(html, /viewport-fit=cover/);
-  assert.match(html, /<meta name="theme-color" content="#08090B">/);
+  assert.match(html, /<meta name="theme-color" content="#08090A">/);
 });
 
 test('the service worker never caches live data or sign-in', () => {

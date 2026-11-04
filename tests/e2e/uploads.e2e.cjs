@@ -94,9 +94,10 @@ async function fillStudio(page, { title, category = 'photography', style = 'Mini
   await page.waitForSelector('#sheet.open .detail-grid');
   assert.equal(await page.locator('#sheet [data-act=delete-artwork]').count(), 0, 'no delete on other people’s work');
   await page.click('#sheet .artist-line');
-  await page.waitForSelector('#sheet .artist-profile');
-  assert.match(await page.locator('#sheet .artist-profile').textContent(), /Night Bloom/);
-  await page.keyboard.press('Escape');
+  await page.waitForSelector('.artist-page .art-grid');
+  assert.match(page.url(), /#artist\/m_u-eve%40example\.com$|#artist\/m_u-eve@example\.com$/);
+  assert.match(await page.locator('.artist-page').textContent(), /Night Bloom/);
+  assert.equal(await page.locator('#sheet.open').count(), 0, 'the artwork sheet closes when the artist page opens');
   step('another member sees it, can like it, and finds it on the artist’s page');
 
   await signOut(page);
