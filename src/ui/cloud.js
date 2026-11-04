@@ -281,6 +281,17 @@ export async function createSupabaseCloud(url, key) {
     async markNotificationsRead() {
       if (user) check(await sb.rpc('mark_notifications_read'));
     },
+    // ——— Phase 3: Studio analytics ———
+    /** events: [{ k, t }] (impression | artwork_view | profile_visit). Guests pass their device key. */
+    async recordEvents(events, guestKey) {
+      return check(await sb.rpc('record_events', { p_events: events, p_guest_key: user ? null : guestKey }));
+    },
+    async studio(days) {
+      return check(await sb.rpc('studio_analytics', { p_days: days }));
+    },
+    async weeklyReports() {
+      return check(await sb.rpc('my_weekly_reports'));
+    },
     async auditLog() {
       return check(await sb.rpc('admin_audit_log', { p_limit: 100 }));
     },

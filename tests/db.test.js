@@ -744,6 +744,77 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     fails(P[1], `select cancel_competition('${comp}')`, /already ended/);
   });
 
+  // ——— Phase 3 (0009): Studio analytics and weekly reports ———
+  const GUEST = 'guest-key-0123456789abcdef';
+  let eArt;
+  const rec = (who, events, guest = null) => Number(as(who, `select record_events('${JSON.stringify(events)}'::jsonb, ${guest ? `'${guest}'` : 'null'})`));
+  await t.test('events: once per viewer per day, never your own, guests separate, sample works ignored, no direct access', () => {
+    eArt = psql(`select id from artworks where owner_id = '${E}' order by created_at limit 1`);
+    const evs = [{ k: 'impression', t: eArt }, { k: 'artwork_view', t: eArt }, { k: 'profile_visit', t: `m_${E}` }];
+    assert.equal(rec(B, evs), 3);
+    assert.equal(rec(B, evs), 0, 'once per day');
+    assert.equal(rec(E, evs), 0, 'your own views never count');
+    assert.equal(rec(B, [{ k: 'artwork_view', t: seed.artworks[3].id }]), 0, 'sample works have nobody to report to');
+    assert.equal(rec('anon', evs, GUEST), 3, 'guests count, by device key');
+    assert.equal(rec('anon', evs, 'bad key!'), 0);
+    assert.equal(rec('anon', evs), 0, 'guests need a key');
+    assert.equal(rec(B, [{ k: 'hack', t: eArt }, { k: 'artwork_view', t: 'no-such-work' }]), 0);
+    fails(B, `select record_events('${JSON.stringify(Array.from({ length: 101 }, () => ({ k: 'impression', t: eArt })))}'::jsonb)`, /up to 100/);
+    for (const who of ['anon', B, E]) noRowsFor(who, 'select count(*) from analytics_events');
+    noRowsFor(B, `with u as (insert into analytics_events (kind, target_id, artist_id, viewer_id) values ('artwork_view', '${eArt}', 'm_${E}', '${B}') returning 1) select count(*) from u`);
+    fails(B, `select artist_summary('m_${E}', now() - interval '1 day', now())`, /permission denied/);
+  });
+
+  await t.test('rate limit: 2,000 events an hour per viewer', () => {
+    const key = 'flood-key-0123456789abcd';
+    psql(`insert into analytics_events (kind, target_id, artist_id, guest_key) select 'impression', 'x' || g, 'm_${E}', '${key}' from generate_series(1, 2000) g`);
+    assert.equal(rec('anon', [{ k: 'artwork_view', t: eArt }], key), 0);
+  });
+
+  await t.test('studio: the artist sees their own totals (members and guests apart), never anyone else’s', () => {
+    const st = JSON.parse(as(E, 'select studio_analytics(7)'));
+    assert.equal(st.days, 7);
+    assert.deepEqual(st.current.views, { members: 1, guests: 1 });
+    assert.deepEqual(st.current.visits, { members: 1, guests: 1 });
+    assert.equal(st.daily.length, 7);
+    assert.equal(st.daily.at(-1).views, 2);
+    const w = st.works.find((x) => x.id === eArt);
+    assert.equal(w.views, 2);
+    assert.ok(st.countries.every((c) => c.people >= 3 || c.country === 'Other'), 'small countries are grouped');
+    assert.equal(JSON.stringify(st).includes(B), false, 'never who');
+    assert.equal(as(B, 'select studio_analytics(30) is null'), 't', 'no artist page, no studio');
+    fails('anon', 'select studio_analytics(30)', /permission denied|Sign in/);
+    assert.equal(JSON.parse(as(E, 'select studio_analytics(12345)')).days, 30, 'periods are 7, 30 or 90 days');
+  });
+
+  await t.test('audience by country appears once 3 or more people share it', () => {
+    const CC = ['00000000-0000-0000-0000-000000000601', '00000000-0000-0000-0000-000000000602', '00000000-0000-0000-0000-000000000603'];
+    psql(`insert into auth.users (id, email) values ${CC.map((u, i) => `('${u}', 'jp${i}@example.com')`).join(', ')}; update profiles set country = 'JP' where id in (${CC.map((u) => `'${u}'`).join(', ')})`);
+    for (const u of CC) rec(u, [{ k: 'artwork_view', t: eArt }]);
+    const st = JSON.parse(as(E, 'select studio_analytics(7)'));
+    assert.equal(st.countries.find((c) => c.country === 'JP')?.people, 3);
+  });
+
+  await t.test('weekly reports: last week’s report and a notification, once; private to the artist', () => {
+    psql(`update artworks set created_at = now() - interval '20 days' where id = '${eArt}'`);
+    const first = as(E, `select count(*) from my_weekly_reports()`);
+    assert.equal(first, '1');
+    assert.equal(as(E, `select count(*) from my_weekly_reports()`), '1', 'made once');
+    assert.equal(as(E, `select count(*) from notifications where kind = 'weekly_report'`), '1');
+    assert.equal(as(B, `select count(*) from weekly_reports where user_id = '${E}'`), '0');
+    fails(B, 'select generate_weekly_reports()', /permission denied/);
+    const r = JSON.parse(as(E, `select row_to_json(x) from my_weekly_reports() x limit 1`));
+    assert.ok('views' in r.current && 'followers' in r.previous);
+    assert.equal(new Date(r.week_start).getUTCDay(), 1, 'weeks start on Monday');
+  });
+
+  await t.test('0009 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0009_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('analytics_events', 'weekly_reports')`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('analytics_events', 'weekly_reports')`), '2');
+  });
+
   await t.test('0008 can be undone, and setup.sql re-applies it', () => {
     psql(file('supabase/migrations/down/0008_down.sql'));
     assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('competitions', 'competition_entries', 'competition_votes', 'notifications')`), '0');
