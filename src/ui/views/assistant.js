@@ -14,6 +14,7 @@ export const GUIDE_COPY = {
   send: 'Send',
   sending: 'Thinking…',
   retry: 'Try again',
+  refresh: 'Refresh',
   newChat: 'New conversation',
   left: (n, limit) => `${n} of ${limit} messages left today`,
   disclaimer: 'The Guide uses what’s on Abremi and can be wrong. It never values art or judges authenticity.',
@@ -109,7 +110,7 @@ export function guidePanelHTML(g, { signedIn, isArtist, page, renderRef, inlineR
       <div class="guide-log" role="log" aria-live="polite" aria-relevant="additions text" aria-label="Conversation">
         ${thread.length ? '' : `<div class="guide-intro"><p>${esc(GUIDE_MODES[mode].intro)}</p></div>`}
         ${messages}
-        ${g.error ? `<div class="guide-error" role="alert"><p>${esc(g.error.message)}</p>${g.error.retry ? PremiumButton(GUIDE_COPY.retry, { act: 'guide-retry', variant: 'secondary', size: 'sm' }) : ''}</div>` : ''}
+        ${g.error ? `<div class="guide-error" role="alert"><p>${esc(g.error.message)}</p>${g.error.refresh ? PremiumButton(GUIDE_COPY.refresh, { act: 'pwa-update', variant: 'secondary', size: 'sm' }) : g.error.retry ? PremiumButton(GUIDE_COPY.retry, { act: 'guide-retry', variant: 'secondary', size: 'sm' }) : ''}</div>` : ''}
       </div>
       ${!g.busy && prompts.length && thread.length < 2 ? `<div class="guide-prompts" aria-label="Suggested questions">${prompts.map((p) => `<button class="chip" data-act="guide-prompt" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>` : ''}
     </div>

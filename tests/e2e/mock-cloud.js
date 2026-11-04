@@ -117,7 +117,7 @@ window.__abremiCloud = async () => {
     uploads: db.uploads.filter((u) => !u.release_at || Date.parse(u.release_at) <= Date.now()).reverse().map(({ owner, image_type, image_bytes, ...u }) => u),
   });
 
-  return {
+  const api = {
     kind: 'mock',
     async init() { await wait(); return user; },
     onAuth(cb) { listener = cb; },
@@ -1176,4 +1176,6 @@ window.__abremiCloud = async () => {
       save(db);
     },
   };
+  if (window.__guideMissing) delete api.guide; // a page half-updated from the previous version
+  return api;
 };
