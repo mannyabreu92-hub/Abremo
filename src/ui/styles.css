@@ -1432,3 +1432,46 @@ div.rank-row:hover { background: transparent; }
   .guide-launcher { right: 14px; bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 14px); height: 44px; }
   .guide { inset: 0; width: 100%; height: 100dvh; border-radius: 0; border: 0; padding-bottom: env(safe-area-inset-bottom); }
 }
+
+/* ——— Discover controls: medallions (Pass · Treasure · Admire) ——— */
+.deck-actions { gap: 26px; align-items: flex-start; }
+.deck-act { display: grid; grid-template-rows: 72px auto; justify-items: center; align-items: center; gap: 9px; }
+.deck-act small { font-size: 10.5px; letter-spacing: .22em; text-transform: uppercase; color: var(--muted); }
+.deck-act-treasure small { color: var(--abremi-gold); opacity: .85; }
+.deck-act-admire small { color: var(--abremi-gold); }
+.deck-btn, .deck-pass, .deck-super, .deck-like { position: relative; border-radius: 50%; display: grid; place-items: center;
+  transition: transform 160ms var(--ease), box-shadow 240ms var(--ease), filter 240ms var(--ease); }
+.deck-pass { width: 64px; height: 64px; color: var(--text); background: radial-gradient(circle at 35% 30%, #1f2023, #0c0d0e 70%);
+  border: 1px solid rgba(214,173,104,.32); box-shadow: inset 0 0 0 4px #0c0d0e, inset 0 0 0 5px rgba(214,173,104,.2), 0 10px 24px rgba(0,0,0,.5); }
+.deck-pass:hover { color: var(--text); border-color: rgba(214,173,104,.6); }
+.deck-super { width: 56px; height: 56px; color: var(--abremi-gold); background: radial-gradient(circle at 35% 30%, #1f2023, #0c0d0e 70%);
+  border: 1px solid rgba(214,173,104,.45); box-shadow: inset 0 0 0 4px #0c0d0e, inset 0 0 0 5px rgba(214,173,104,.28), 0 10px 24px rgba(0,0,0,.5); }
+.deck-super:hover { color: var(--abremi-gold-light, #e9c98f); background: radial-gradient(circle at 35% 30%, #26221b, #0c0d0e 70%); }
+.deck-super .icon { fill: none; }
+.deck-like { width: 72px; height: 72px; color: #1a140a; border: 1px solid rgba(255,230,180,.6);
+  background: radial-gradient(circle at 32% 26%, #f6e2b5, #d6ad68 45%, #9c7638 100%);
+  box-shadow: inset 0 0 0 4px rgba(255,240,210,.18), inset 0 0 0 5px rgba(80,55,20,.35), 0 12px 30px rgba(214,173,104,.22); }
+.deck-like:hover { color: #1a140a; background: radial-gradient(circle at 32% 26%, #fbe9c3, #dcb672 45%, #a37c3c 100%); }
+.deck-like .icon { fill: none; stroke-width: 1.8; }
+.deck-pass:active, .deck-super:active, .deck-like:active { transform: scale(.94); }
+.deck-like.pop { animation: admire-shine 620ms var(--ease); }
+.deck-super.pop { animation: treasure-glint 620ms var(--ease); }
+@keyframes admire-shine {
+  0% { box-shadow: inset 0 0 0 4px rgba(255,240,210,.18), inset 0 0 0 5px rgba(80,55,20,.35), 0 0 0 0 rgba(233,201,143,.55); filter: brightness(1); }
+  35% { box-shadow: inset 0 0 0 4px rgba(255,240,210,.35), inset 0 0 0 5px rgba(80,55,20,.35), 0 0 0 14px rgba(233,201,143,0); filter: brightness(1.18); }
+  100% { box-shadow: inset 0 0 0 4px rgba(255,240,210,.18), inset 0 0 0 5px rgba(80,55,20,.35), 0 12px 30px rgba(214,173,104,.22); filter: brightness(1); }
+}
+@keyframes treasure-glint {
+  0% { box-shadow: inset 0 0 0 4px #0c0d0e, inset 0 0 0 5px rgba(214,173,104,.28), 0 0 0 0 rgba(214,173,104,.5); }
+  40% { box-shadow: inset 0 0 0 4px #0c0d0e, inset 0 0 0 5px rgba(233,201,143,.8), 0 0 0 12px rgba(214,173,104,0); }
+  100% { box-shadow: inset 0 0 0 4px #0c0d0e, inset 0 0 0 5px rgba(214,173,104,.28), 0 10px 24px rgba(0,0,0,.5); }
+}
+.stamp-like, .stamp-super { color: var(--abremi-gold); border-color: var(--abremi-border-gold); }
+@media (max-width: 760px) {
+  .deck-actions { gap: 20px; }
+  .deck-act { grid-template-rows: 66px auto; }
+  .deck-pass { width: 58px; height: 58px; }
+  .deck-super { width: 50px; height: 50px; }
+  .deck-like { width: 66px; height: 66px; }
+}
+@media (prefers-reduced-motion: reduce) { .deck-like.pop, .deck-super.pop { animation: none; } }

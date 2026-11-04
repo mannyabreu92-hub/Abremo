@@ -363,7 +363,7 @@ function influenceFeedback(points, before, after, superLike = false) {
   const chip = document.createElement('div');
   chip.className = 'influence-chip';
   const climbed = before.rank - after.rank;
-  chip.innerHTML = `${superLike ? '★ Super Like · ' : ''}<b>+${points}</b> Influence added${climbed > 0 ? `<span>↑ ${climbed} to No. ${after.rank}</span>` : ''}`;
+  chip.innerHTML = `${superLike ? 'Treasured · ' : ''}<b>+${points}</b> Influence added${climbed > 0 ? `<span>↑ ${climbed} to No. ${after.rank}</span>` : ''}`;
   document.body.append(chip);
   setTimeout(() => chip.remove(), 2200);
 }
@@ -565,7 +565,7 @@ function masterpieceHTML(mp, { compact = false } = {}) {
       </ul>
       <p class="mp-note">Chosen each day from the 60 most influential works, favouring those critics and collectors rate highest.</p>
       <div class="mp-actions">
-        <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${w.id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Like">${Icon('heart', { size: 18 })}</button>
+        <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${w.id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Admire">${Icon('admire', { size: 18 })}</button>
         ${PremiumButton('Add to collection', { act: 'add-to-collection', variant: 'secondary', icon: 'folderPlus', attrs: `data-id="${w.id}"` })}
         <span class="mp-next">${Icon('clock', { size: 16 })} Next reveal in ${countdown(mp.revealAt.getTime())}</span>
       </div>
@@ -685,14 +685,14 @@ function swipeCardHTML({ artwork: w, reason }, top) {
   return `<article class="swipe-card${top ? ' is-top' : ''}" data-id="${w.id}" ${top ? 'tabindex="0" aria-label="' + esc(`${w.title} by ${a.name}. Tap for details.`) + '"' : 'aria-hidden="true"'}>
     <div class="swipe-art">${ArtImage(w, { eager: true })}</div>
     ${badge}
-    <span class="stamp stamp-like">Like</span><span class="stamp stamp-nope">Pass</span><span class="stamp stamp-super">Super Like</span>
+    <span class="stamp stamp-like">Admire</span><span class="stamp stamp-nope">Pass</span><span class="stamp stamp-super">Treasure</span>
     ${top ? `<button class="swipe-info icon-btn" data-act="artwork" data-id="${w.id}" aria-label="Artwork details">${Icon('info')}</button>` : ''}
     <div class="swipe-caption">
       <p class="eyebrow swipe-reason">${esc(reason)}</p>
       <h2 class="swipe-title">${esc(w.title)}</h2>
       <div class="swipe-by">
         <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}</b><small>${esc(w.medium)} • ${w.year}</small></span></button>
-        ${top ? `<button class="swipe-heart${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${w.id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Like">${Icon('heart', { size: 22 })}</button>` : ''}
+        ${top ? `<button class="swipe-heart${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${w.id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Admire">${Icon('admire', { size: 22 })}</button>` : ''}
       </div>
     </div>
   </article>`;
@@ -724,7 +724,7 @@ function discoverPanelHTML(entry) {
       ${w.sample ? '' : PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${w.id}"` })}
       ${state.user.role === 'critic' ? PremiumButton('Write review', { act: 'review', variant: 'ghost', icon: 'pen', attrs: `data-id="${w.id}"` }) : ''}
     </div>
-    <p class="fine">${counts() ? `Your ${role().label.toLowerCase()} vote adds ${role().weight} influence (${role().weight * SAVE_MULTIPLIER} for a Super Like).` : '<button class="link" data-act="sign-in">Sign in</button> so your likes count in the rankings.'} Keys: ← pass, → like, ↑ Super Like, Enter for details.</p>`;
+    <p class="fine">${counts() ? `Your ${role().label.toLowerCase()} vote adds ${role().weight} influence (${role().weight * SAVE_MULTIPLIER} for a Treasure).` : '<button class="link" data-act="sign-in">Sign in</button> so your likes count in the rankings.'} Keys: ← pass, → like, ↑ Treasure, Enter for details.</p>`;
 }
 
 function renderDiscover(root) {
@@ -744,10 +744,10 @@ function renderDiscover(root) {
             action: PremiumButton('Start over', { act: 'reset-swipes', variant: 'secondary' }),
           })}
         </div>
-        ${top ? `<div class="deck-actions">
-          <button class="deck-btn deck-pass" data-act="swipe" data-dir="pass" aria-label="Pass">${Icon('x', { size: 26 })}</button>
-          <span class="deck-super-wrap"><button class="deck-btn deck-super" data-act="swipe" data-dir="super" aria-label="Super Like: save as a special favourite">${Icon('star', { size: 24 })}</button><small>Super Like</small></span>
-          <button class="deck-btn deck-like" data-act="swipe" data-dir="like" aria-label="Like">${Icon('heart', { size: 28 })}</button>
+        ${top ? `<div class="deck-actions" role="group" aria-label="Your verdict on this work">
+          <span class="deck-act"><button class="deck-btn deck-pass" data-act="swipe" data-dir="pass" aria-label="Pass">${Icon('brush', { size: 26 })}</button><small aria-hidden="true">Pass</small></span>
+          <span class="deck-act deck-act-treasure"><button class="deck-btn deck-super" data-act="swipe" data-dir="super" aria-label="Treasure: save it to your Treasures (counts twice)">${Icon('treasure', { size: 24 })}</button><small aria-hidden="true">Treasure</small></span>
+          <span class="deck-act deck-act-admire"><button class="deck-btn deck-like" data-act="swipe" data-dir="like" aria-label="Admire">${Icon('admire', { size: 30 })}</button><small aria-hidden="true">Admire</small></span>
         </div>` : ''}
       </div>
       <aside class="discover-panel" aria-live="polite">${discoverPanelHTML(top)}</aside>
@@ -850,7 +850,7 @@ function artworkSheet(id) {
         ${w.sample ? '' : `<div><dt>${forSale(w) ? 'Price' : 'Availability'}</dt><dd>${forSale(w) ? (w.availability === 'on_request' ? 'On request' : money(w.price)) : esc(AVAILABILITY[w.availability])}</dd></div>`}
       </dl>
       <div class="detail-actions">
-        <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Like">${Icon('heart', { size: 18 })}</button>
+        <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Admire">${Icon('admire', { size: 18 })}</button>
         <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="Save to collection">${Icon('bookmark', { size: 18 })}</button>
         ${w.sample || !forSale(w) ? '' : PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : w.availability === 'on_request' ? 'Inquire' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
         ${PremiumButton('Add to collection', { act: 'add-to-collection', variant: 'secondary', icon: 'folderPlus', attrs: `data-id="${id}"` })}
@@ -939,7 +939,7 @@ function reviewSheet(id) {
 
 function collectionSheet(kind) {
   const ids = collectionIds(kind);
-  const titles = { saved: 'Super Likes', liked: 'Liked works', purchased: 'Acquired' };
+  const titles = { saved: 'Treasures', liked: 'Admired works', purchased: 'Acquired' };
   return `<div><p class="eyebrow">Your collection</p><h2 class="display-md" id="modal-title">${titles[kind]}</h2>
     ${ids.length ? ArtworkGrid(ids.map((id) => card(world.artworkById[id])), { className: 'art-grid-tight' }) : EmptyState({ icon: 'bookmark', title: 'Nothing here yet', body: 'Save works from Discover to build your collection.' })}</div>`;
 }
@@ -1715,7 +1715,7 @@ function renderCharts(root) {
     <div class="seg seg-gold" role="tablist">${tabs}</div>
     ${body}
     ${COMMUNITY ? `<button class="link-arrow how-ranked" data-act="how-ranked">${Icon('info', { size: 14 })} How rankings work</button>` : ''}
-    <p class="fine explainer"><b>Score</b> is popularity: every like weighted by who gave it (Fan 1, Artist 3, Critic 5, Collector 9; Super Likes count ×${SAVE_MULTIPLIER}). <b>Credible</b> is the share of that score from critics and collectors. Rankings are organic: nobody can pay to move them.</p>
+    <p class="fine explainer"><b>Score</b> is popularity: every like weighted by who gave it (Fan 1, Artist 3, Critic 5, Collector 9; Treasures count ×${SAVE_MULTIPLIER}). <b>Credible</b> is the share of that score from critics and collectors. Rankings are organic: nobody can pay to move them.</p>
   </div>`;
 }
 
@@ -1865,8 +1865,8 @@ function renderCollections(root) {
   const collectorElite = userBadges({ role: state.user.role, collectedCount: saved.length + state.purchases.length, reviewCount: state.reviews.length }).includes('collectorElite');
   const followed = Object.keys(state.follows).map((id) => world.artistById[id]).filter(Boolean);
   const mineCards = [
-    { k: 'saved', title: 'Super Likes', ids: saved, icon: 'star', empty: 'Your special favourites' },
-    { k: 'liked', title: 'Liked', ids: liked, icon: 'heart', empty: 'Start from Discover' },
+    { k: 'saved', title: 'Treasures', ids: saved, icon: 'treasure', empty: 'The works you treasure' },
+    { k: 'liked', title: 'Admired', ids: liked, icon: 'admire', empty: 'Start from Discover' },
     { k: 'purchased', title: 'Acquired', ids: purchased, icon: 'collection', empty: 'Works you acquire appear here' },
   ];
   const top = world.topArtworks().map((r) => r.item).filter((w) => !isMine(w));
@@ -1932,7 +1932,7 @@ function tasteCardHTML(taste, { compact = false } = {}) {
     return `<section class="taste-card is-locked${compact ? ' is-compact' : ''}">
       <div class="taste-ring" style="--p:${(have / MIN_DISCOVERIES) * 100}%"><b>${have}/${MIN_DISCOVERIES}</b></div>
       <div><p class="eyebrow">Taste Score</p><h3 class="display-sm">Discover ${taste.needed} more</h3>
-      <p class="muted">Like or Super Like ${taste.needed} more work${taste.needed === 1 ? '' : 's'} to reveal how early your eye is.</p></div>
+      <p class="muted">Admire or treasure ${taste.needed} more work${taste.needed === 1 ? '' : 's'} to reveal how early your eye is.</p></div>
     </section>`;
   }
   const p = taste.parts;
@@ -2069,7 +2069,7 @@ function renderProfile(root) {
       <section class="panel influence-panel">
         <p class="eyebrow">Cultural Influence</p>
         <p class="influence-total">${fmt(personalInfluence(state.interactions, state.interactionRoles, state.reviews))}</p>
-        <p class="muted">The weight your likes, Super Likes and reviews add to the rankings. As a ${role().label.toLowerCase()}, each like adds ${role().weight}.</p>
+        <p class="muted">The weight your likes, Treasures and reviews add to the rankings. As a ${role().label.toLowerCase()}, each like adds ${role().weight}.</p>
       </section>
     </div>
 

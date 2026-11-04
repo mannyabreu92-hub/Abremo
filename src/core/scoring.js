@@ -12,7 +12,7 @@ export const ROLES = Object.freeze([
 
 export const ROLE_IDS = Object.freeze(ROLES.map((r) => r.id));
 
-/** A Super Like (collect / save) counts this many times a normal like. */
+/** A Treasure (collect / save) counts this many times a normal like. */
 export const SAVE_MULTIPLIER = 2;
 /** A critic review is worth this many critic likes at a 5★ rating (scaled by stars). */
 export const REVIEW_MULTIPLIER = 2;

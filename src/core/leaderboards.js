@@ -11,7 +11,7 @@ export const BOARDS = ['collectors', 'critics', 'discoverers'];
 
 /**
  * Discovery Score (0–100): credit for liking work before others did.
- * For each like or Super Like: ln(1 + weight of the likes that came after yours) / (1 + weight of those before).
+ * For each like or Treasure: ln(1 + weight of the likes that came after yours) / (1 + weight of those before).
  * Later likes are weighted by role (fan 1 … collector 9), so throwaway accounts barely move it.
  * reactions: [{ user, artwork, kind, role, at }] — `at` orders reactions on the same artwork.
  * Returns Map(user → { score, discoveries }), score null below MIN_DISCOVERIES.

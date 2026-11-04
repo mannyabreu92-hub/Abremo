@@ -33,7 +33,7 @@ export function adminPage(data, { roleLabel, competitionSection, planSearch = { 
         <p class="muted">${esc(a.email || '')} · currently ${esc(a.applicant_role)} · member since ${new Date(a.member_since).toLocaleDateString([], { month: 'short', year: 'numeric' })}${a.previous_declines ? ` · ${a.previous_declines} earlier decline${a.previous_declines === 1 ? '' : 's'}` : ''}</p></div></header>
       <blockquote class="quote app-statement">${esc(a.statement)}</blockquote>
       ${a.links?.length ? `<ul class="app-links">${a.links.map((l) => /^https:\/\//.test(l) ? `<li><a href="${esc(l)}" target="_blank" rel="noopener noreferrer nofollow">${esc(l)}</a></li>` : '').join('')}</ul>` : '<p class="muted">No links provided.</p>'}
-      <dl class="stat-row app-stats">${stat(a.influence_added, 'Influence added')}${stat(a.likes, 'Likes')}${stat(a.saves, 'Super Likes')}${stat(a.reviews, 'Reviews')}</dl>
+      <dl class="stat-row app-stats">${stat(a.influence_added, 'Influence added')}${stat(a.likes, 'Likes')}${stat(a.saves, 'Treasures')}${stat(a.reviews, 'Reviews')}</dl>
       <label class="field"><span>Note to the applicant (optional)</span><textarea id="note-${a.id}" rows="2" maxlength="500"></textarea></label>
       <div class="detail-actions">
         ${PremiumButton(`Approve as ${roleLabel(a.role)}`, { act: 'admin-decide', attrs: `data-id="${a.id}" data-v="approve"` })}
