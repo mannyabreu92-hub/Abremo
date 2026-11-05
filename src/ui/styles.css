@@ -1600,3 +1600,11 @@ div.rank-row:hover { background: transparent; }
   padding: 12px 0; background: linear-gradient(to top, var(--surface, #0b0c0d) 70%, transparent); }
 .batch-open { margin-top: 4px; }
 @media (max-width: 520px) { .batch-row { grid-template-columns: 1fr; } .batch-thumb { width: 100%; height: 180px; } }
+
+/* Language picker (menu and footer) */
+.lang-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted); }
+.lang-btn { border: 1px solid transparent; background: none; color: var(--text-2); font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 999px; cursor: pointer; }
+.lang-btn:hover { color: var(--text-1, #f3efe7); }
+.lang-btn.is-on { border-color: var(--abremi-border-gold); color: var(--abremi-gold); }
+.footer .lang-picker { flex-basis: 100%; justify-content: center; margin-top: 10px; }
+#menu-lang { padding: 8px 10px 4px; border-top: 1px solid var(--line); margin-top: 4px; }

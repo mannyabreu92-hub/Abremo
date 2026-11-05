@@ -25,6 +25,7 @@ import { inquirySheet, inboxPage, threadPage, dropsSection, dropPage, createDrop
 import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, createCompetitionForm, competitionCard } from './views/arena.js';
 import { plansPage, galleryForm, galleryPageHTML, feedbackSheet, membershipCardHTML } from './views/membership.js';
 import { welcomeCardHTML, tourSheet, joinPage, WELCOME_KEY } from './views/launch.js';
+import { t, tn, setLang, detectLang, getLang, LANGS, formatDate } from './i18n.js';
 import { guidePanelHTML, replyHTML, GUIDE_COPY } from './views/assistant.js';
 import { aboutHTML, installCardHTML, iosInstallHTML, signInHTML, accountCardHTML } from './views/account.js';
 import {
@@ -131,8 +132,8 @@ const artistOf = (art) => world.artistById[art.artistId];
 const reactionOf = (id) => state.interactions[id];
 /** Community mode's catalog is sample content; say so wherever a sample work or artist is shown in full. */
 const SampleNote = (kind) => `<p class="sample-note">${Icon('info', { size: 14 })} ${kind === 'artist'
-  ? 'Sample artist: part of Abremi’s starter catalog, not a real person. Their followers and rankings come only from real members.'
-  : 'Sample artwork from Abremi’s starter catalog. Not for sale; its likes, saves and rankings come only from real members.'}</p>`;
+  ? t('Sample artist: part of Abremi’s starter catalog, not a real person. Their followers and rankings come only from real members.')
+  : t('Sample artwork from Abremi’s starter catalog. Not for sale; its likes, saves and rankings come only from real members.')}</p>`;
 const cardCtx = (w, extra = {}) => ({ artist: artistOf(w), reaction: reactionOf(w.id), ...extra });
 const card = (w, extra) => ArtworkCard(w, cardCtx(w, extra));
 const isMine = (w) => w.artistId === myArtistId();
@@ -143,26 +144,26 @@ function toast(msg, { action, act, duration = 2400, force = false } = {}) {
   // A prompt with a button stays readable for a moment instead of being replaced by routine messages.
   if (!action && !force && Date.now() < (toast.holdUntil || 0)) return;
   toast.holdUntil = action ? Date.now() + 2500 : 0;
-  const t = $('#toast');
-  t.textContent = msg;
+  const el = $('#toast');
+  el.textContent = t(msg);
   if (action) {
     const b = document.createElement('button');
     b.className = 'toast-action';
     b.dataset.act = act;
-    b.textContent = action;
-    t.append(b);
+    b.textContent = t(action);
+    el.append(b);
   }
-  t.classList.toggle('has-action', Boolean(action));
-  t.classList.add('show');
+  el.classList.toggle('has-action', Boolean(action));
+  el.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove('show', 'has-action'), action ? Math.max(duration, 5000) : duration);
+  toast.timer = setTimeout(() => el.classList.remove('show', 'has-action'), action ? Math.max(duration, 5000) : duration);
 }
 
 /** Once per visit, remind guests that their votes only count after signing in. */
 function nudgeSignIn(what = 'admirations') {
   if (!COMMUNITY || me || nudgeSignIn.done) return;
   nudgeSignIn.done = true;
-  toast(`Sign in so your ${what} count in the rankings`, { action: 'Sign in', act: 'sign-in' });
+  toast({ admirations: t('Sign in so your admirations count in the rankings'), votes: t('Sign in so your votes count in the rankings'), follows: t('Sign in so your follows count in the rankings') }[what] || t('Sign in so your admirations count in the rankings'), { action: 'Sign in', act: 'sign-in' });
 }
 
 // ——— Modal ———
@@ -580,7 +581,7 @@ function artistInsights() {
 
 function signalChips(artistId, { compact = false } = {}) {
   const list = artistInsights().signals[artistId] || [];
-  return list.map((k) => `<span class="signal signal-${k}" title="${esc(SIGNALS[k].desc)}">${SIGNALS[k].icon}${compact ? '' : ` ${SIGNALS[k].label}`}</span>`).join('');
+  return list.map((k) => `<span class="signal signal-${k}" title="${esc(t(SIGNALS[k].desc))}">${SIGNALS[k].icon}${compact ? '' : ` ${t(SIGNALS[k].label)}`}</span>`).join('');
 }
 
 const credOf = (w) => credibility(world.countsOf(w)).share;
@@ -609,23 +610,23 @@ function masterpieceHTML(mp, { compact = false } = {}) {
   const w = mp.artwork, a = artistOf(w);
   const c = credibility(world.countsOf(w));
   const r = reactionOf(w.id);
-  const date = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
-  return `<section class="masterpiece${compact ? ' is-compact' : ''} spotlight" aria-label="Daily Masterpiece">
-    <button class="mp-frame" data-act="artwork" data-id="${w.id}" aria-label="View ${esc(w.title)}">${ArtImage(w, { full: true })}</button>
+  const date = formatDate(new Date(), { weekday: 'long', month: 'long', day: 'numeric' });
+  return `<section class="masterpiece${compact ? ' is-compact' : ''} spotlight" aria-label="${t('Daily Masterpiece')}">
+    <button class="mp-frame" data-act="artwork" data-id="${w.id}" aria-label="${esc(t('View {title}', { title: w.title }))}">${ArtImage(w, { full: true })}</button>
     <div class="mp-body">
-      <p class="eyebrow mp-eyebrow">${AbremiSymbol(14)} Daily Masterpiece · ${esc(date)}</p>
+      <p class="eyebrow mp-eyebrow">${AbremiSymbol(14)} ${t('Daily Masterpiece')} · ${esc(date)}</p>
       <h2 class="display-md">${esc(w.title)}</h2>
       <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}</b><small>${esc(countryName(a.country))}</small></span></button>
       <ul class="mp-why">
-        <li><span>Standing</span><b>No. ${mp.rank} worldwide</b></li>
-        <li><span>Credibility</span><b>${Math.round(c.share * 100)}% from critics &amp; collectors</b></li>
-        <li><span>Work</span><b>${esc(w.medium)} · ${w.year}</b></li>
+        <li><span>${t('Standing')}</span><b>${t('No. {n} worldwide', { n: mp.rank })}</b></li>
+        <li><span>${t('Credibility')}</span><b>${t('{pct}% from critics & collectors', { pct: Math.round(c.share * 100) })}</b></li>
+        <li><span>${t('Work')}</span><b>${esc(w.medium)} · ${w.year}</b></li>
       </ul>
-      <p class="mp-note">Chosen each day from the 60 most influential works, favouring those critics and collectors rate highest.</p>
+      <p class="mp-note">${t('Chosen each day from the 60 most influential works, favouring those critics and collectors rate highest.')}</p>
       <div class="mp-actions">
-        <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${w.id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Admire">${Icon('admire', { size: 18 })}</button>
+        <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${w.id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="${t('Admire')}">${Icon('admire', { size: 18 })}</button>
         ${PremiumButton('Add to collection', { act: 'add-to-collection', variant: 'secondary', icon: 'folderPlus', attrs: `data-id="${w.id}"` })}
-        <span class="mp-next">${Icon('clock', { size: 16 })} Next reveal in ${countdown(mp.revealAt.getTime())}</span>
+        <span class="mp-next">${Icon('clock', { size: 16 })} ${t('Next reveal in')} ${countdown(mp.revealAt.getTime())}</span>
       </div>
     </div>
   </section>`;
@@ -651,24 +652,24 @@ function renderHome(root) {
   const countries = countryBoard().slice(0, 5);
   const members = COMMUNITY ? state.community?.members || 0 : 0;
   const proof = members
-    ? `${fmt(members)} member${members === 1 ? '' : 's'} shaping the rankings`
-    : `${fmt(world.artists.filter((a) => !a.isMe).length)} artists · ${COUNTRIES.length} countries · ${fmt(catalog().length)} works`;
+    ? tn(members, '{n} member shaping the rankings', '{n} members shaping the rankings').replace(String(members), fmt(members))
+    : t('{artists} artists · {countries} countries · {works} works', { artists: fmt(world.artists.filter((a) => !a.isMe).length), countries: COUNTRIES.length, works: fmt(catalog().length) });
 
   root.innerHTML = `<div class="home">
     <section class="hero landing">
       <div class="landing-art spotlight">
-        <button class="landing-frame" data-act="artwork" data-id="${heroArt.id}" aria-label="View ${esc(heroArt.title)}">${ArtImage(heroArt, { eager: true })}</button>
+        <button class="landing-frame" data-act="artwork" data-id="${heroArt.id}" aria-label="${esc(t('View {title}', { title: heroArt.title }))}">${ArtImage(heroArt, { eager: true })}</button>
       </div>
       <div class="landing-copy shell">
-        <p class="eyebrow">A new generation of art discovery</p>
-        <h1 class="display-hero">Discover Art.<br><span class="gold-serif">Shape Culture.</span></h1>
-        <p class="lede">Swipe. Collect. Support.<br>The global art discovery platform.</p>
+        <p class="eyebrow">${t('A new generation of art discovery')}</p>
+        <h1 class="display-hero">${t('Discover Art.')}<br><span class="gold-serif">${t('Shape Culture.')}</span></h1>
+        <p class="lede">${t('Swipe. Collect. Support.')}<br>${t('The global art discovery platform.')}</p>
         <div class="hero-actions">
-          <a class="btn btn-primary btn-lg" href="#discover"><span>Start Exploring</span>${Icon('arrow', { size: 18 })}</a>
-          <a class="text-link" href="#charts">Explore Rankings</a>
+          <a class="btn btn-primary btn-lg" href="#discover"><span>${t('Start Exploring')}</span>${Icon('arrow', { size: 18 })}</a>
+          <a class="text-link" href="#charts">${t('Explore Rankings')}</a>
         </div>
         <p class="landing-proof">${esc(proof)}</p>
-        ${pwa?.status().available ? `<button class="link-arrow get-app" data-act="pwa-install">${Icon('download', { size: 16 })} Get the Abremi app</button>` : ''}
+        ${pwa?.status().available ? `<button class="link-arrow get-app" data-act="pwa-install">${Icon('download', { size: 16 })} ${t('Get the Abremi app')}</button>` : ''}
       </div>
     </section>
 
@@ -680,34 +681,34 @@ function renderHome(root) {
       ${emergingHTML()}
 
       ${rising.length ? `<section class="section">
-        ${SectionHeader({ eyebrow: 'Discover them first', title: 'Rising artists', action: `<a class="link-arrow" href="#artists">All artists ${Icon('arrow', { size: 16 })}</a>` })}
+        ${SectionHeader({ eyebrow: 'Discover them first', title: 'Rising artists', action: `<a class="link-arrow" href="#artists">${t('All artists')} ${Icon('arrow', { size: 16 })}</a>` })}
         <div class="artist-grid">${rising.map((a) => ArtistCard(a, { cover: coverOf(a.id), following: !!state.follows[a.id], rank: world.globalArtistRanks[a.id], signals: signalChips(a.id) })).join('')}</div>
       </section>` : ''}
 
       <section class="section">
         ${SectionHeader({ eyebrow: 'Discover', title: homeFeed.mode === 'following' ? 'From artists you follow' : homeFeed.mode === 'new' ? 'New discoveries' : nothingRanked ? 'Sample works' : 'Trending now', action: `<div class="seg seg-sm" role="tablist">
-          <button role="tab" class="${homeFeed.mode === 'trending' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'trending'}" data-act="home-mode" data-v="trending">Trending</button>
-          <button role="tab" class="${homeFeed.mode === 'new' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'new'}" data-act="home-mode" data-v="new">New</button>
-          <button role="tab" class="${homeFeed.mode === 'following' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'following'}" data-act="home-mode" data-v="following">Following</button></div>` })}
-        ${CategoryFilter(CATEGORIES, homeFeed.category, { act: 'home-cat', allLabel: 'All', pills: true })}
+          <button role="tab" class="${homeFeed.mode === 'trending' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'trending'}" data-act="home-mode" data-v="trending">${t('Trending')}</button>
+          <button role="tab" class="${homeFeed.mode === 'new' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'new'}" data-act="home-mode" data-v="new">${t('New')}</button>
+          <button role="tab" class="${homeFeed.mode === 'following' ? 'is-on' : ''}" aria-selected="${homeFeed.mode === 'following'}" data-act="home-mode" data-v="following">${t('Following')}</button></div>` })}
+        ${CategoryFilter(CATEGORIES, homeFeed.category, { act: 'home-cat', allLabel: t('All'), pills: true })}
         ${feed.length ? ArtworkGrid(feed.map((w) => card(w))) : homeFeed.mode === 'following'
-          ? EmptyState({ icon: 'user', title: Object.keys(state.follows).length ? 'Nothing from them here yet' : 'Follow artists to see their work here', body: 'Newest works from the artists you follow appear first.', action: '<a class="btn btn-secondary" href="#artists"><span>Find artists</span></a>' })
+          ? EmptyState({ icon: 'user', title: Object.keys(state.follows).length ? 'Nothing from them here yet' : 'Follow artists to see their work here', body: 'Newest works from the artists you follow appear first.', action: `<a class="btn btn-secondary" href="#artists"><span>${t('Find artists')}</span></a>` })
           : EmptyState({ title: 'Nothing here yet', body: 'Try another medium.' })}
-        <div class="section-foot"><a class="link-arrow" href="#explore">Explore all works ${Icon('arrow', { size: 16 })}</a></div>
+        <div class="section-foot"><a class="link-arrow" href="#explore">${t('Explore all works')} ${Icon('arrow', { size: 16 })}</a></div>
       </section>
 
       <section class="section battle-section">
-        ${SectionHeader({ eyebrow: 'Art Battle', title: 'Vote for your favourite masterpiece', action: `<a class="link-arrow" href="#battle">Open the arena ${Icon('arrow', { size: 16 })}</a>` })}
+        ${SectionHeader({ eyebrow: 'Art Battle', title: 'Vote for your favourite masterpiece', action: `<a class="link-arrow" href="#battle">${t('Open the arena')} ${Icon('arrow', { size: 16 })}</a>` })}
         ${battleArenaHTML(true)}
       </section>
 
       <section class="section home-boards">
         <div>
-          ${SectionHeader({ eyebrow: 'Rankings', title: 'Top artworks worldwide', action: `<a class="link-arrow" href="#charts">See all ${Icon('arrow', { size: 16 })}</a>` })}
+          ${SectionHeader({ eyebrow: 'Rankings', title: 'Top artworks worldwide', action: `<a class="link-arrow" href="#charts">${t('See all')} ${Icon('arrow', { size: 16 })}</a>` })}
           <ol class="rank-list">${top.slice(0, 5).map((r) => rankRow(r, 'art', undefined)).join('')}</ol>
         </div>
         <div>
-          ${SectionHeader({ eyebrow: 'Countries', title: 'Cultural influence by country', action: `<button class="link-arrow" data-act="charts-goto" data-v="countries">All countries ${Icon('arrow', { size: 16 })}</button>` })}
+          ${SectionHeader({ eyebrow: 'Countries', title: 'Cultural influence by country', action: `<button class="link-arrow" data-act="charts-goto" data-v="countries">${t('All countries')} ${Icon('arrow', { size: 16 })}</button>` })}
           <ol class="rank-list">${countries.map(countryRow).join('')}</ol>
         </div>
       </section>
@@ -716,9 +717,29 @@ function renderHome(root) {
   </div>`;
 }
 
+// ——— Languages ———
+/** Five language buttons (each named in its own language). */
+function langPickerHTML(id) {
+  const now = getLang();
+  return `<div class="lang-picker" id="${id}" role="group" aria-label="${t('Language')}">${Icon('globe', { size: 14 })}${LANGS.map((l) => `<button class="lang-btn${l.code === now ? ' is-on' : ''}" data-act="set-lang" data-v="${l.code}" lang="${l.code === 'zh' ? 'zh-Hans' : l.code}" aria-pressed="${l.code === now}">${l.label}</button>`).join('')}</div>`;
+}
+/** The page shell (menus, tab bar) is plain HTML: translate the parts marked data-i18n. */
+function applyStaticText() {
+  for (const el of document.querySelectorAll('[data-i18n]')) {
+    el.dataset.en ??= el.textContent.trim();
+    el.textContent = t(el.dataset.en);
+  }
+  for (const attr of ['aria-label', 'title']) {
+    for (const el of document.querySelectorAll(`[data-i18n-${attr}]`)) el.setAttribute(attr, t(el.getAttribute(`data-i18n-${attr}`)));
+  }
+  const menu = $('#menu-lang');
+  if (menu) menu.outerHTML = langPickerHTML('menu-lang');
+}
+
 function footerHTML() {
-  return `<footer class="footer">${AbremiSymbol(18)}<span class="brand-word">Abremi</span><span>Discover art. Shape culture.</span>
-    <nav class="footer-links" aria-label="More"><a href="#join">For artists</a><a href="#index">The Index</a><a href="#opportunities">Opportunities</a><a href="#plans">Plans</a>${COMMUNITY ? '<button class="link" data-act="feedback-open">Send feedback</button>' : ''}<button class="link" data-act="about">About</button></nav></footer>`;
+  return `<footer class="footer">${AbremiSymbol(18)}<span class="brand-word">Abremi</span><span>${t('Discover art. Shape culture.')}</span>
+    <nav class="footer-links" aria-label="${t('More')}"><a href="#join">${t('For artists')}</a><a href="#index">${t('The Index')}</a><a href="#opportunities">${t('Opportunities')}</a><a href="#plans">${t('Plans')}</a>${COMMUNITY ? `<button class="link" data-act="feedback-open">${t('Send feedback')}</button>` : ''}<button class="link" data-act="about">${t('About')}</button></nav>
+    ${langPickerHTML('footer-lang')}</footer>`;
 }
 
 // ——— Discover (swipe) ———
@@ -736,27 +757,27 @@ function fillDeck() {
   }
 }
 
-const DISCOVER_LABELS = { oil: 'Painting', photography: 'Photography', digital: 'Digital Art', sculpture: 'Sculpture', street: 'Street Art', mixed: 'Mixed Media', illustration: 'Illustration', ai: 'AI Art', nft: 'NFT' };
+const DISCOVER_LABELS = { oil: 'Painting', photography: 'Photography', digital: 'Digital Art', sculpture: 'Sculpture', street: 'Street Art', mixed: 'Mixed Media', illustration: 'Illustration', ai: 'AI Art', nft: 'NFT' }; // translated where shown
 
 function swipeCardHTML({ artwork: w, reason }, top) {
   const a = artistOf(w);
   const rankNow = currentRanks()[w.id];
   const sig = artistInsights().signals[a.id] || [];
-  const badge = rankNow <= 50 ? '<span class="trend-badge">🔥 Trending</span>'
-    : sig.includes('rising') ? '<span class="trend-badge">🔥 Rising artist</span>'
-      : sig.includes('collector') ? '<span class="trend-badge">⭐ Collector attention</span>' : '';
+  const badge = rankNow <= 50 ? `<span class="trend-badge">🔥 ${t('Trending')}</span>`
+    : sig.includes('rising') ? `<span class="trend-badge">🔥 ${t('Rising artist')}</span>`
+      : sig.includes('collector') ? `<span class="trend-badge">⭐ ${t('Collector attention')}</span>` : '';
   const r = reactionOf(w.id);
-  return `<article class="swipe-card${top ? ' is-top' : ''}" data-id="${w.id}" ${top ? 'tabindex="0" aria-label="' + esc(`${w.title} by ${a.name}. Tap for details.`) + '"' : 'aria-hidden="true"'}>
+  return `<article class="swipe-card${top ? ' is-top' : ''}" data-id="${w.id}" ${top ? 'tabindex="0" aria-label="' + esc(t('{title} by {name}. Tap for details.', { title: w.title, name: a.name })) + '"' : 'aria-hidden="true"'}>
     <div class="swipe-art">${ArtImage(w, { eager: true })}</div>
     ${badge}
-    <span class="stamp stamp-like">Admire</span><span class="stamp stamp-nope">Pass</span><span class="stamp stamp-super">Treasure</span>
-    ${top ? `<button class="swipe-info icon-btn" data-act="artwork" data-id="${w.id}" aria-label="Artwork details">${Icon('info')}</button>` : ''}
+    <span class="stamp stamp-like">${t('Admire')}</span><span class="stamp stamp-nope">${t('Pass')}</span><span class="stamp stamp-super">${t('Treasure')}</span>
+    ${top ? `<button class="swipe-info icon-btn" data-act="artwork" data-id="${w.id}" aria-label="${t('Artwork details')}">${Icon('info')}</button>` : ''}
     <div class="swipe-caption">
-      <p class="eyebrow swipe-reason">${esc(reason)}</p>
+      <p class="eyebrow swipe-reason">${esc(reason.startsWith('Because you like ') ? t('Because you like {style}', { style: t(reason.slice(17)) }) : t(reason))}</p>
       <h2 class="swipe-title">${esc(w.title)}</h2>
       <div class="swipe-by">
         <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}</b><small>${esc(w.medium)} • ${w.year}</small></span></button>
-        ${top ? `<button class="swipe-heart${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${w.id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Admire">${Icon('admire', { size: 22 })}</button>` : ''}
+        ${top ? `<button class="swipe-heart${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${w.id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="${t('Admire')}">${Icon('admire', { size: 22 })}</button>` : ''}
       </div>
     </div>
   </article>`;
@@ -768,37 +789,37 @@ function discoverPanelHTML(entry) {
   const following = !!state.follows[a.id];
   const rankNow = currentRanks()[w.id];
   const c = credibility(world.countsOf(w));
-  return `<p class="eyebrow">Now viewing</p>
+  return `<p class="eyebrow">${t('Now viewing')}</p>
     <h2 class="display-sm">${esc(w.title)}</h2>
     <div class="panel-artist">
       <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}</b><small>${esc(countryName(a.country))}</small></span></button>
-      <button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${a.id}" aria-pressed="${following}">${following ? 'Following' : 'Follow'}</button>
+      <button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${a.id}" aria-pressed="${following}">${following ? t('Following') : t('Follow')}</button>
     </div>
     <div class="signal-row">${signalChips(a.id)}</div>
     <dl class="spec spec-stack">
-      <div><dt>Medium</dt><dd>${esc(w.medium)}</dd></div>
-      <div><dt>Movement</dt><dd>${esc(w.style)}</dd></div>
-      <div><dt>Ranking</dt><dd>No. ${rankNow} worldwide</dd></div>
-      <div><dt>Influence</dt><dd>${fmt(world.influence[w.id])}</dd></div>
-      <div><dt>Credibility</dt><dd>${Math.round(c.share * 100)}% critics &amp; collectors</dd></div>
-      ${w.sample ? '<div><dt>Status</dt><dd>Sample work</dd></div>' : `<div><dt>Price</dt><dd>${money(w.price)}</dd></div>`}
+      <div><dt>${t('Medium')}</dt><dd>${esc(w.medium)}</dd></div>
+      <div><dt>${t('Movement')}</dt><dd>${esc(t(w.style))}</dd></div>
+      <div><dt>${t('Ranking')}</dt><dd>${rankNow ? t('No. {n} worldwide', { n: rankNow }) : '—'}</dd></div>
+      <div><dt>${t('Influence')}</dt><dd>${fmt(world.influence[w.id])}</dd></div>
+      <div><dt>${t('Credibility')}</dt><dd>${t('{pct}% critics & collectors', { pct: Math.round(c.share * 100) })}</dd></div>
+      ${w.sample ? `<div><dt>${t('Status')}</dt><dd>${t('Sample work')}</dd></div>` : `<div><dt>${t('Price')}</dt><dd>${money(w.price)}</dd></div>`}
     </dl>
     <div class="panel-actions">
       ${PremiumButton('View details', { act: 'artwork', variant: w.sample ? 'primary' : 'secondary', attrs: `data-id="${w.id}"` })}
       ${w.sample ? '' : PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${w.id}"` })}
       ${state.user.role === 'critic' ? PremiumButton('Write review', { act: 'review', variant: 'ghost', icon: 'pen', attrs: `data-id="${w.id}"` }) : ''}
     </div>
-    <p class="fine">${counts() ? `Your ${role().label.toLowerCase()} vote adds ${role().weight} influence (${role().weight * SAVE_MULTIPLIER} for a Treasure).` : '<button class="link" data-act="sign-in">Sign in</button> so your admirations count in the rankings.'} Keys: ← pass, → admire, ↑ treasure, Enter for details.</p>`;
+    <p class="fine">${counts() ? t('Your vote adds {w} influence ({w2} for a Treasure).', { w: role().weight, w2: role().weight * SAVE_MULTIPLIER }) : `<button class="link" data-act="sign-in">${t('Sign in')}</button> ${t('so your admirations count in the rankings.')}`} ${t('Keys: ← pass, → admire, ↑ treasure, Enter for details.')}</p>`;
 }
 
 function renderDiscover(root) {
   fillDeck();
   const top = deck[0];
   const order = ['oil', 'photography', 'digital', 'sculpture', 'street', 'mixed', 'illustration', 'ai', 'nft'];
-  const cats = order.map((id) => ({ id, label: DISCOVER_LABELS[id] || categoryById[id].label }));
+  const cats = order.map((id) => ({ id, label: DISCOVER_LABELS[id] || categoryById[id].label })); // CategoryFilter translates labels
   root.innerHTML = `<div class="shell discover">
-    <h1 class="sr-only">Discover</h1>
-    ${CategoryFilter(cats, discover.category, { act: 'discover-cat', allLabel: 'All', pills: true })}
+    <h1 class="sr-only">${t('Discover')}</h1>
+    ${CategoryFilter(cats, discover.category, { act: 'discover-cat', allLabel: t('All'), pills: true })}
     <div class="discover-stage">
       <div class="deck-col">
         <div class="deck" id="deck">
@@ -808,10 +829,10 @@ function renderDiscover(root) {
             action: PremiumButton('Start over', { act: 'reset-swipes', variant: 'secondary' }),
           })}
         </div>
-        ${top ? `<div class="deck-actions" role="group" aria-label="Your verdict on this work">
-          <span class="deck-act"><button class="deck-btn deck-pass" data-act="swipe" data-dir="pass" aria-label="Pass">${Icon('brush', { size: 26 })}</button><small aria-hidden="true">Pass</small></span>
-          <span class="deck-act deck-act-treasure"><button class="deck-btn deck-super" data-act="swipe" data-dir="super" aria-label="Treasure: save it to your Treasures (counts twice)">${Icon('treasure', { size: 24 })}</button><small aria-hidden="true">Treasure</small></span>
-          <span class="deck-act deck-act-admire"><button class="deck-btn deck-like" data-act="swipe" data-dir="like" aria-label="Admire">${Icon('admire', { size: 30 })}</button><small aria-hidden="true">Admire</small></span>
+        ${top ? `<div class="deck-actions" role="group" aria-label="${t('Your verdict on this work')}">
+          <span class="deck-act"><button class="deck-btn deck-pass" data-act="swipe" data-dir="pass" aria-label="${t('Pass')}">${Icon('brush', { size: 26 })}</button><small aria-hidden="true">${t('Pass')}</small></span>
+          <span class="deck-act deck-act-treasure"><button class="deck-btn deck-super" data-act="swipe" data-dir="super" aria-label="${t('Treasure: save it to your Treasures (counts twice)')}">${Icon('treasure', { size: 24 })}</button><small aria-hidden="true">${t('Treasure')}</small></span>
+          <span class="deck-act deck-act-admire"><button class="deck-btn deck-like" data-act="swipe" data-dir="like" aria-label="${t('Admire')}">${Icon('admire', { size: 30 })}</button><small aria-hidden="true">${t('Admire')}</small></span>
         </div>` : ''}
       </div>
       <aside class="discover-panel" aria-live="polite">${discoverPanelHTML(top)}</aside>
@@ -879,7 +900,7 @@ function decide(action) {
 function applySwipe(art, action) {
   setTimeout(maybeAskInterests, 450);
   setReaction(art, action);
-  if (action === 'super' && !counts()) toast(`Saved “${art.title}” to your collection`);
+  if (action === 'super' && !counts()) toast(t('Saved “{title}” to your collection', { title: art.title }));
 }
 
 // ——— Artwork & artist modals ———
@@ -900,26 +921,26 @@ function artworkSheet(id) {
   return `<div class="detail-grid">
     <div class="detail-art">${ArtImage(w, { eager: true })}</div>
     <div class="detail-body">
-      <p class="eyebrow">${esc(categoryById[w.category].label)} · ${esc(w.style)}</p>
+      <p class="eyebrow">${esc(t(categoryById[w.category].label))} · ${esc(t(w.style))}</p>
       <h2 class="display-md" id="modal-title">${esc(w.title)}</h2>
       ${w.sample ? SampleNote('artwork') : ''}
       <div class="panel-artist">
         <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}${verifiedBadge(a.id)}</b><small>${esc(countryName(a.country))}</small></span></button>
-        ${a.isMe ? '' : `<button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${a.id}" aria-pressed="${following}">${following ? 'Following' : 'Follow'}</button>`}
+        ${a.isMe ? '' : `<button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${a.id}" aria-pressed="${following}">${following ? t('Following') : t('Follow')}</button>`}
       </div>
       ${w.description ? `<p class="artwork-description">${esc(w.description)}</p>` : ''}
       <dl class="spec">
-        <div><dt>Medium</dt><dd>${esc(w.medium)}</dd></div>
-        <div><dt>Year</dt><dd>${w.year}</dd></div>
-        ${w.dimensions ? `<div><dt>Size</dt><dd>${esc(w.dimensions)}</dd></div>` : ''}
-        ${w.editionSize ? `<div><dt>Edition</dt><dd>Prints, edition of ${w.editionSize} · ${Math.max(0, w.editionSize - (w.editionsSold || 0))} left</dd></div>` : ''}
-        ${w.sample ? '' : `<div><dt>${forSale(w) ? 'Price' : 'Availability'}</dt><dd>${forSale(w) ? (w.availability === 'on_request' ? 'On request' : money(w.price)) : esc(AVAILABILITY[w.availability])}</dd></div>`}
+        <div><dt>${t('Medium')}</dt><dd>${esc(w.medium)}</dd></div>
+        <div><dt>${t('Year')}</dt><dd>${w.year}</dd></div>
+        ${w.dimensions ? `<div><dt>${t('Size')}</dt><dd>${esc(w.dimensions)}</dd></div>` : ''}
+        ${w.editionSize ? `<div><dt>${t('Edition')}</dt><dd>${t('Prints, edition of {size} · {left} left', { size: w.editionSize, left: Math.max(0, w.editionSize - (w.editionsSold || 0)) })}</dd></div>` : ''}
+        ${w.sample ? '' : `<div><dt>${forSale(w) ? t('Price') : t('Availability')}</dt><dd>${forSale(w) ? (w.availability === 'on_request' ? t('On request') : money(w.price)) : esc(t(AVAILABILITY[w.availability]))}</dd></div>`}
       </dl>
       <div class="detail-actions">
-        <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="Admire">${Icon('admire', { size: 18 })}</button>
-        <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="Treasure">${Icon('treasure', { size: 18 })}</button>
-        ${w.sample || !forSale(w) ? '' : PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : w.availability === 'on_request' ? 'Inquire' : `Inquire · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
-        ${canBuy(w) ? PremiumButton(w.editionSize ? `Buy a print · ${money(w.price)}` : `Buy · ${money(w.price)}`, { act: 'checkout-buy', attrs: `data-id="${id}"` }) : ''}
+        <button class="btn btn-icon${r === 'like' || r === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${id}" aria-pressed="${r === 'like' || r === 'super'}" aria-label="${t('Admire')}">${Icon('admire', { size: 18 })}</button>
+        <button class="btn btn-icon${r === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${id}" aria-pressed="${r === 'super'}" aria-label="${t('Treasure')}">${Icon('treasure', { size: 18 })}</button>
+        ${w.sample || !forSale(w) ? '' : PremiumButton(state.purchases.some((p) => p.artworkId === id) ? 'Purchased' : w.availability === 'on_request' ? 'Inquire' : `${t('Inquire')} · ${money(w.price)}`, { act: 'buy', attrs: `data-id="${id}"` })}
+        ${canBuy(w) ? PremiumButton(w.editionSize ? `${t('Buy a print')} · ${money(w.price)}` : `${t('Buy')} · ${money(w.price)}`, { act: 'checkout-buy', attrs: `data-id="${id}"` }) : ''}
         ${COMMUNITY && w.member && !isMine(w) && forSale(w) ? PremiumButton('Make an offer', { act: 'offer-open', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
         ${COMMUNITY && w.member && !isMine(w) && !forSale(w) ? PremiumButton(loop.watches.has(id) ? 'On your waitlist' : 'Notify me if available', { act: 'watch-toggle', variant: 'secondary', icon: 'bell', attrs: `data-id="${id}" aria-pressed="${loop.watches.has(id)}"` }) : ''}
         ${PremiumButton('Add to collection', { act: 'add-to-collection', variant: 'secondary', icon: 'folderPlus', attrs: `data-id="${id}"` })}
@@ -931,16 +952,16 @@ function artworkSheet(id) {
       </div>
       ${myReview ? `<blockquote class="quote"><span class="stars-static">${'★'.repeat(myReview.rating)}${'☆'.repeat(5 - myReview.rating)}</span>${esc(myReview.text)}</blockquote>` : ''}
       <div class="stat-row">
-        <div><b>${globalRank ?? '—'}</b><small>Worldwide</small></div>
+        <div><b>${globalRank ?? '—'}</b><small>${t('Worldwide')}</small></div>
         <div><b>${countryRank ?? '—'}</b><small>${esc(countryName(a.country))}</small></div>
-        <div><b>${catRank ?? '—'}</b><small>${esc(categoryById[w.category].label)}</small></div>
-        <div><b>${!COMMUNITY || state.community?.elo?.[w.id] != null ? Math.round(world.eloOf(w)) : '—'}</b><small>Battle Elo</small></div>
+        <div><b>${catRank ?? '—'}</b><small>${esc(t(categoryById[w.category].label))}</small></div>
+        <div><b>${!COMMUNITY || state.community?.elo?.[w.id] != null ? Math.round(world.eloOf(w)) : '—'}</b><small>${t('Battle Elo')}</small></div>
       </div>
-      ${globalRank == null ? '<p class="fine">Not ranked yet: a work is ranked once members like or save it.</p>' : ''}
+      ${globalRank == null ? `<p class="fine">${t('Not ranked yet: a work is ranked once members like or save it.')}</p>` : ''}
       <div class="influence">
-        <div class="influence-head"><h3>Influence score</h3><span>${fmt(world.influence[id])}</span></div>
-        ${rows.map((x) => `<div class="meter-row"><span>${esc(x.label)}</span><div class="meter"><i style="width:${(x.points / max) * 100}%"></i></div><span class="num">${fmt(x.points)}</span></div>
-          <p class="meter-sub">${x.role === 'review' ? `${x.likes} reviews · average ${avg}★` : `${fmt(x.likes)} admirations · ${fmt(x.saves)} treasures · weight ×${ROLE_WEIGHTS[x.role]}`}</p>`).join('')}
+        <div class="influence-head"><h3>${t('Influence score')}</h3><span>${fmt(world.influence[id])}</span></div>
+        ${rows.map((x) => `<div class="meter-row"><span>${esc(t(x.label))}</span><div class="meter"><i style="width:${(x.points / max) * 100}%"></i></div><span class="num">${fmt(x.points)}</span></div>
+          <p class="meter-sub">${x.role === 'review' ? t('{n} reviews · average {avg}★', { n: x.likes, avg }) : t('{likes} admirations · {saves} treasures · weight ×{w}', { likes: fmt(x.likes), saves: fmt(x.saves), w: ROLE_WEIGHTS[x.role] })}</p>`).join('')}
       </div>
     </div>
   </div>`;
@@ -953,11 +974,11 @@ const forSale = (w) => !w.sample && (!w.availability || w.availability === 'avai
 function renderArtworkPage(root) {
   const id = route().param;
   if (!world.artworkById[id]) {
-    root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artwork not found', body: 'It may have been removed by the artist.', action: '<a class="btn btn-secondary" href="#explore"><span>Explore art</span></a>' })}</div>`;
+    root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artwork not found', body: 'It may have been removed by the artist.', action: `<a class="btn btn-secondary" href="#explore"><span>${t('Explore art')}</span></a>` })}</div>`;
     return;
   }
   trackArtwork('artwork_view', id);
-  root.innerHTML = `<div class="shell artwork-page"><button class="link-arrow back-link" data-act="back">${Icon('back', { size: 14 })} Back</button>${artworkSheet(id)}</div>`;
+  root.innerHTML = `<div class="shell artwork-page"><button class="link-arrow back-link" data-act="back">${Icon('back', { size: 14 })} ${t('Back')}</button>${artworkSheet(id)}</div>`;
 }
 
 /** Artists have their own page (#artist/<id>), so links and search results navigate there. */
@@ -992,8 +1013,8 @@ function buySheet(id) {
 
 function contactSheet(artistId) {
   const a = world.artistById[artistId];
-  return `<div class="buy"><p class="eyebrow">Contact</p><h2 class="display-sm" id="modal-title">Write to ${esc(a.name)}</h2>
-    <label class="field"><span class="sr-only">Message</span><textarea id="msg" rows="5" placeholder="Commission request, studio visit, collaboration…"></textarea></label>
+  return `<div class="buy"><p class="eyebrow">${t('Contact')}</p><h2 class="display-sm" id="modal-title">${esc(t('Write to {name}', { name: a.name }))}</h2>
+    <label class="field"><span class="sr-only">${t('Message')}</span><textarea id="msg" rows="5" placeholder="${t('Commission request, studio visit, collaboration…')}"></textarea></label>
     <div class="detail-actions">${PremiumButton('Send', { act: 'send-message', attrs: `data-artist="${artistId}"` })}</div>
     <p class="fine">Prototype: messages are stored on this device only.</p></div>`;
 }
@@ -1547,7 +1568,7 @@ function emergingHTML() {
   if (!picks.length) return '';
   return `<section class="section" id="emerging">
     ${SectionHeader({ eyebrow: 'New on Abremi', title: 'Emerging artists' })}
-    <p class="muted emerging-note">Artists who joined in the last 60 days, one work each, in a fair daily rotation, not ordered by popularity.</p>
+    <p class="muted emerging-note">${t('Artists who joined in the last 60 days, one work each, in a fair daily rotation, not ordered by popularity.')}</p>
     ${ArtworkGrid(picks.map(({ w }) => card(w)))}
   </section>`;
 }
@@ -2071,21 +2092,21 @@ function renderExplore(root) {
     (!explore.country || artistOf(w)?.country === explore.country)).sort(SORTS[explore.sort].fn);
   const shown = all.slice(0, explore.limit);
   const activeFilters = [
-    explore.style && { k: 'style', label: explore.style },
+    explore.style && { k: 'style', label: t(explore.style) },
     explore.country && { k: 'country', label: countryName(explore.country) },
   ].filter(Boolean);
   root.innerHTML = `<div class="shell explore">
     <header class="page-head page-head-row">
-      <div><p class="eyebrow">Explore</p><h1 class="display-lg">The full collection</h1><p class="muted">${all.length} works</p></div>
+      <div><p class="eyebrow">${t('Explore')}</p><h1 class="display-lg">${t('The full collection')}</h1><p class="muted">${tn(all.length, '{n} work', '{n} works')}</p></div>
       <div class="toolbar-inline">
-        ${Select('explore-style', [{ value: '', label: 'All movements' }, ...STYLES.map((s) => ({ value: s, label: s }))], explore.style, 'Movement')}
-        ${Select('explore-sort', Object.entries(SORTS).map(([k, v]) => ({ value: k, label: v.label })), explore.sort, 'Sort')}
+        ${Select('explore-style', [{ value: '', label: t('All movements') }, ...STYLES.map((s) => ({ value: s, label: t(s) }))], explore.style, t('Movement'))}
+        ${Select('explore-sort', Object.entries(SORTS).map(([k, v]) => ({ value: k, label: t(v.label) })), explore.sort, t('Sort'))}
       </div>
     </header>
-    ${CategoryFilter(CATEGORIES, explore.category, { act: 'explore-cat', allLabel: 'All mediums' })}
+    ${CategoryFilter(CATEGORIES, explore.category, { act: 'explore-cat', allLabel: t('All mediums') })}
     ${activeFilters.length ? `<div class="active-filters">${activeFilters.map((f) => `<button class="tag" data-act="explore-clear" data-v="${f.k}">${esc(f.label)} ${Icon('x', { size: 14 })}</button>`).join('')}</div>` : ''}
     ${shown.length ? ArtworkGrid(shown.map((w) => card(w))) : EmptyState({ title: 'No works match', body: 'Loosen a filter to see more.' })}
-    ${all.length > shown.length ? `<div class="section-foot center">${PremiumButton(`Show more · ${all.length - shown.length} remaining`, { act: 'explore-more', variant: 'secondary' })}</div>` : ''}
+    ${all.length > shown.length ? `<div class="section-foot center">${PremiumButton(t('Show more · {n} remaining', { n: all.length - shown.length }), { act: 'explore-more', variant: 'secondary' })}</div>` : ''}
   </div>`;
   $('#explore-sort', root).addEventListener('change', (e) => { explore.sort = e.target.value; explore.limit = 24; renderView(); });
   $('#explore-style', root).addEventListener('change', (e) => { explore.style = e.target.value; explore.limit = 24; renderView(); });
@@ -2098,7 +2119,7 @@ function renderArtistPage(root) {
   const id = route().param;
   const a = world.artistById[id];
   if (!a) {
-    root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artist not found', body: 'They may have left Abremi.', action: '<a class="btn btn-secondary" href="#artists"><span>All artists</span></a>' })}</div>`;
+    root.innerHTML = `<div class="shell">${EmptyState({ title: 'Artist not found', body: 'They may have left Abremi.', action: `<a class="btn btn-secondary" href="#artists"><span>${t('All artists')}</span></a>` })}</div>`;
     return;
   }
   if (a.member && !a.isMe) track('profile_visit', id);
@@ -2112,52 +2133,52 @@ function renderArtistPage(root) {
   const cred = ins.cred[id];
   root.innerHTML = `<div class="artist-page">
     <div class="artist-banner">${cover ? ArtImage(cover, { full: true }) : ''}
-      <div class="artist-banner-bar shell"><button class="icon-btn glass" data-act="back" aria-label="Back">${Icon('back')}</button>
-        <button class="icon-btn glass" data-act="share-artist" data-id="${id}" aria-label="Share">${Icon('share')}</button></div>
+      <div class="artist-banner-bar shell"><button class="icon-btn glass" data-act="back" aria-label="${t('Back')}">${Icon('back')}</button>
+        <button class="icon-btn glass" data-act="share-artist" data-id="${id}" aria-label="${t('Share')}">${Icon('share')}</button></div>
     </div>
     <div class="shell">
       <header class="artist-header">
         <span class="artist-portrait">${Avatar(a, 'xl')}</span>
         <div class="artist-header-actions">
-          ${a.isMe ? '<span class="tag tag-gold">This is you</span>' : `<button class="btn ${following ? 'btn-secondary' : 'btn-primary'}" data-act="follow" data-id="${id}" aria-pressed="${following}"><span>${following ? 'Following' : 'Follow'}</span></button>
+          ${a.isMe ? `<span class="tag tag-gold">${t('This is you')}</span>` : `<button class="btn ${following ? 'btn-secondary' : 'btn-primary'}" data-act="follow" data-id="${id}" aria-pressed="${following}"><span>${following ? t('Following') : t('Follow')}</span></button>
             ${a.sample ? '' : `${state.user.role === 'collector' ? PremiumButton('Sponsor', { act: 'sponsor', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
-            ${IconButton('mail', `Contact ${a.name}`, { act: 'contact', attrs: `data-id="${id}"` })}`}`}
+            ${IconButton('mail', t('Contact {name}', { name: a.name }), { act: 'contact', attrs: `data-id="${id}"` })}`}`}
         </div>
-        <h1 class="display-md">${esc(a.name)}${verifiedBadge(id)}${member.badges[id] ? ` <span class="plan-badge" title="Artist ${esc(member.badges[id])} member (a plan; it doesn’t affect rankings)">${esc(member.badges[id])}</span>` : ''}</h1>
-        ${COMMUNITY && (loadFounding(), isFounding(id)) ? '<p class="founding-badge"><span class="tag tag-gold" title="Chosen by Abremi to open the platform. It doesn’t affect rankings.">Founding artist</span></p>' : ''}
+        <h1 class="display-md">${esc(a.name)}${verifiedBadge(id)}${member.badges[id] ? ` <span class="plan-badge" title="${esc(t('Artist {plan} member (a plan; it doesn’t affect rankings)', { plan: member.badges[id] }))}">${esc(member.badges[id])}</span>` : ''}</h1>
+        ${COMMUNITY && (loadFounding(), isFounding(id)) ? `<p class="founding-badge"><span class="tag tag-gold" title="${t('Chosen by Abremi to open the platform. It doesn’t affect rankings.')}">${t('Founding artist')}</span></p>` : ''}
         ${a.sample ? SampleNote('artist') : ''}
-        ${isVerified(id) && verified.map[id].managed ? '<p class="muted verified-note">Studio managed by the artist’s family, with Abremi’s confirmation.</p>' : ''}
+        ${isVerified(id) && verified.map[id].managed ? `<p class="muted verified-note">${t('Studio managed by the artist’s family, with Abremi’s confirmation.')}</p>` : ''}
         ${isAdmin && a.member ? `<div class="admin-artist-tools">${isVerified(id)
           ? `<button class="link-arrow" data-act="toggle-verified" data-id="${id}" data-v="">${Icon('x', { size: 14 })} Remove verification</button>`
           : `<button class="link-arrow" data-act="toggle-verified" data-id="${id}" data-v="self">${Icon('check', { size: 14 })} Verify artist</button>
              <button class="link-arrow" data-act="toggle-verified" data-id="${id}" data-v="family">${Icon('check', { size: 14 })} Verify · managed by family</button>`}</div>` : ''}
         ${isAdmin && a.member ? `<button class="link-arrow founding-toggle" data-act="toggle-founding" data-id="${id}" data-v="${isFounding(id) ? '' : '1'}">${Icon('spark', { size: 14 })} ${isFounding(id) ? 'Remove from Founding artists' : 'Make a Founding artist'}</button>` : ''}
-        <p class="muted">${esc(categoryById[a.category]?.label || 'Contemporary')} artist • ${a.city ? `${esc(a.city)}, ` : ''}${esc(countryName(a.country))}${a.debutYear ? ` • since ${a.debutYear}` : ''}</p>
+        <p class="muted">${esc(t('{medium} artist', { medium: t(categoryById[a.category]?.label || 'Contemporary') }))} • ${a.city ? `${esc(a.city)}, ` : ''}${esc(countryName(a.country))}${a.debutYear ? ` • ${t('since {year}', { year: a.debutYear })}` : ''}</p>
         ${a.bio ? `<p class="artist-bio">${esc(a.bio)}</p>` : ''}
         ${a.isMe && a.member ? `<button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Edit your artist profile</button>` : ''}
         <div class="signal-row">${signalChips(id)}${COMMUNITY ? artistAchievementsHTML(id) : badges.map((b) => `<span class="badge" title="${esc(BADGES[b].desc)}">${BADGES[b].emoji} ${BADGES[b].label}</span>`).join('')}</div>
         <dl class="stat-row artist-stats">
-          <div><dt>Followers</dt><dd>${fmt(followerTotal)}</dd></div>
-          <div><dt>Works</dt><dd>${works.length}</dd></div>
-          <div><dt>Influence</dt><dd>${fmt(world.artistScores[id])}</dd></div>
-          <div><dt>Worldwide</dt><dd>${world.globalArtistRanks[id] ? `No. ${world.globalArtistRanks[id]}` : 'Not ranked'}</dd></div>
+          <div><dt>${t('Followers')}</dt><dd>${fmt(followerTotal)}</dd></div>
+          <div><dt>${t('Works')}</dt><dd>${works.length}</dd></div>
+          <div><dt>${t('Influence')}</dt><dd>${fmt(world.artistScores[id])}</dd></div>
+          <div><dt>${t('Worldwide')}</dt><dd>${world.globalArtistRanks[id] ? t('No. {n}', { n: world.globalArtistRanks[id] }) : t('Not ranked')}</dd></div>
         </dl>
       </header>
       <div class="tabs" role="tablist">
-        ${[['artwork', 'Artwork'], ['about', 'About'], ...(COMMUNITY && a.member ? [['passport', 'Passport']] : [])].map(([k, v]) => `<button role="tab" class="${artistTab === k ? 'is-on' : ''}" aria-selected="${artistTab === k}" data-act="artist-tab" data-v="${k}">${v}</button>`).join('')}
+        ${[['artwork', 'Artwork'], ['about', 'About'], ...(COMMUNITY && a.member ? [['passport', 'Passport']] : [])].map(([k, v]) => `<button role="tab" class="${artistTab === k ? 'is-on' : ''}" aria-selected="${artistTab === k}" data-act="artist-tab" data-v="${k}">${t(v)}</button>`).join('')}
       </div>
       ${artistTab === 'passport' && COMMUNITY && a.member ? passportTabHTML(id) : artistTab === 'artwork'
         ? (works.length ? ArtworkGrid(works.map((r) => card(r.item, { rank: r.rank, details: true }))) : EmptyState({ title: 'No works yet' }))
-        : `${a.statement ? `<section class="artist-statement"><h2 class="eyebrow">Artist statement</h2><p>${esc(a.statement)}</p></section>` : ''}
+        : `${a.statement ? `<section class="artist-statement"><h2 class="eyebrow">${t('Artist statement')}</h2><p>${esc(a.statement)}</p></section>` : ''}
           ${a.website || a.instagram ? `<p class="artist-links">${a.website ? `<a href="${esc(a.website)}" target="_blank" rel="noopener noreferrer nofollow">${Icon('globe', { size: 14 })} ${esc(a.website.replace(/^https:\/\//, '').replace(/\/$/, ''))}</a>` : ''}
             ${a.instagram ? `<a href="https://instagram.com/${encodeURIComponent(a.instagram)}" target="_blank" rel="noopener noreferrer nofollow">@${esc(a.instagram)}</a>` : ''}</p>` : ''}
           <dl class="spec about-spec">
-            <div><dt>Movements</dt><dd>${a.styles.length ? a.styles.map(esc).join(', ') : '—'}</dd></div>
-            <div><dt>Medium</dt><dd>${esc(categoryById[a.category]?.label || '—')}</dd></div>
-            <div><dt>Country</dt><dd>${flag(a.country)} ${esc(countryName(a.country))}${world.countryArtistRanks[id] ? ` · No. ${world.countryArtistRanks[id]}` : ''}</dd></div>
-            <div><dt>Credibility</dt><dd>${Math.round((cred?.share || 0) * 100)}% of influence from critics &amp; collectors</dd></div>
-            <div><dt>Followers by role</dt><dd>${ROLES.map((r) => `${r.label} ${fmt(followers[r.id])}`).join(' · ')}</dd></div>
-            ${a.member ? '<div><dt>Profile</dt><dd>Member artist on Abremi</dd></div>' : ''}
+            <div><dt>${t('Movements')}</dt><dd>${a.styles.length ? a.styles.map((x) => esc(t(x))).join(', ') : '—'}</dd></div>
+            <div><dt>${t('Medium')}</dt><dd>${esc(categoryById[a.category] ? t(categoryById[a.category].label) : '—')}</dd></div>
+            <div><dt>${t('Country')}</dt><dd>${flag(a.country)} ${esc(countryName(a.country))}${world.countryArtistRanks[id] ? ` · ${t('No. {n}', { n: world.countryArtistRanks[id] })}` : ''}</dd></div>
+            <div><dt>${t('Credibility')}</dt><dd>${t('{pct}% of influence from critics & collectors', { pct: Math.round((cred?.share || 0) * 100) })}</dd></div>
+            <div><dt>${t('Followers by role')}</dt><dd>${ROLES.map((r) => `${t(r.label)} ${fmt(followers[r.id])}`).join(' · ')}</dd></div>
+            ${a.member ? `<div><dt>${t('Profile')}</dt><dd>${t('Member artist on Abremi')}</dd></div>` : ''}
           </dl>`}
     </div>
   </div>`;
@@ -2184,10 +2205,10 @@ function renderArtists(root) {
   const shown = list.slice(0, artistsView.limit);
   root.innerHTML = `<div class="shell artists">
     <header class="page-head page-head-row">
-      <div><p class="eyebrow">Artists</p><h1 class="display-lg">The people behind the work</h1><p class="muted">${list.length} artists${artistsView.country ? ` in ${esc(countryName(artistsView.country))}` : ' worldwide'}</p></div>
-      ${Select('artists-country', [{ value: '', label: 'All countries' }, ...COUNTRIES.map((c) => ({ value: c.code, label: c.name }))], artistsView.country, 'Country')}
+      <div><p class="eyebrow">${t('Artists')}</p><h1 class="display-lg">${t('The people behind the work')}</h1><p class="muted">${artistsView.country ? t('{n} artists in {country}', { n: list.length, country: esc(countryName(artistsView.country)) }) : t('{n} artists worldwide', { n: list.length })}</p></div>
+      ${Select('artists-country', [{ value: '', label: t('All countries') }, ...COUNTRIES.map((c) => ({ value: c.code, label: countryName(c.code) || c.name }))], artistsView.country, t('Country'))}
     </header>
-    ${CategoryFilter(CATEGORIES, artistsView.category, { act: 'artists-cat', allLabel: 'All disciplines' })}
+    ${CategoryFilter(CATEGORIES, artistsView.category, { act: 'artists-cat', allLabel: t('All disciplines') })}
     <div class="artist-grid">${shown.map((r) => ArtistCard(r.item, { cover: coverOf(r.item.id), following: !!state.follows[r.item.id], score: r.score, rank: r.rank })).join('')}</div>
     ${list.length > shown.length ? `<div class="section-foot center">${PremiumButton('Show more artists', { act: 'artists-more', variant: 'secondary' })}</div>` : ''}
   </div>`;
@@ -2761,15 +2782,15 @@ function closeSearch() {
 function searchResultsHTML(q) {
   const query = q.trim().toLowerCase();
   if (!query) {
-    return `<p class="eyebrow">Browse movements</p><div class="chip-row chip-row-wrap">${STYLES.map((s) => `<button class="chip" data-act="search-term" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>
-      <p class="eyebrow">Mediums</p><div class="chip-row chip-row-wrap">${CATEGORIES.map((c) => `<button class="chip" data-act="search-term" data-v="${esc(c.label)}">${esc(c.label)}</button>`).join('')}</div>`;
+    return `<p class="eyebrow">${t('Browse movements')}</p><div class="chip-row chip-row-wrap">${STYLES.map((s) => `<button class="chip" data-act="search-term" data-v="${esc(s)}">${esc(t(s))}</button>`).join('')}</div>
+      <p class="eyebrow">${t('Mediums')}</p><div class="chip-row chip-row-wrap">${CATEGORIES.map((c) => `<button class="chip" data-act="search-term" data-v="${esc(c.label)}">${esc(t(c.label))}</button>`).join('')}</div>`;
   }
   const hit = (s) => String(s).toLowerCase().includes(query);
   const works = world.topArtworks().map((r) => r.item).filter((w) => hit(w.title) || hit(w.style) || hit(w.medium) || hit(categoryById[w.category].label) || hit(artistOf(w).name)).slice(0, 8);
   const artists = world.topArtists().map((r) => r.item).filter((a) => hit(a.name) || hit(countryName(a.country))).slice(0, 6);
-  if (!works.length && !artists.length) return EmptyState({ icon: 'search', title: `No results for “${q.trim()}”`, body: 'Try a movement, medium, artist or country.' });
-  return `${artists.length ? `<p class="eyebrow">Artists</p><ol class="rank-list">${artists.map((a) => `<li><button class="rank-row" data-act="search-open" data-kind="artist" data-id="${a.id}">${Avatar(a, 'md')}<span class="rank-text"><b>${esc(a.name)}</b><small>${esc(countryName(a.country))}</small></span>${Icon('arrow', { size: 16 })}</button></li>`).join('')}</ol>` : ''}
-    ${works.length ? `<p class="eyebrow">Works</p><ol class="rank-list">${works.map((w) => `<li><button class="rank-row" data-act="search-open" data-kind="artwork" data-id="${w.id}"><span class="rank-thumb">${ArtImage(w)}</span><span class="rank-text"><b>${esc(w.title)}</b><small>${esc(artistOf(w).name)} · ${esc(w.style)}</small></span>${Icon('arrow', { size: 16 })}</button></li>`).join('')}</ol>` : ''}`;
+  if (!works.length && !artists.length) return EmptyState({ icon: 'search', title: t('No results for “{q}”', { q: q.trim() }), body: 'Try a movement, medium, artist or country.' });
+  return `${artists.length ? `<p class="eyebrow">${t('Artists')}</p><ol class="rank-list">${artists.map((a) => `<li><button class="rank-row" data-act="search-open" data-kind="artist" data-id="${a.id}">${Avatar(a, 'md')}<span class="rank-text"><b>${esc(a.name)}</b><small>${esc(countryName(a.country))}</small></span>${Icon('arrow', { size: 16 })}</button></li>`).join('')}</ol>` : ''}
+    ${works.length ? `<p class="eyebrow">${t('Works')}</p><ol class="rank-list">${works.map((w) => `<li><button class="rank-row" data-act="search-open" data-kind="artwork" data-id="${w.id}"><span class="rank-thumb">${ArtImage(w)}</span><span class="rank-text"><b>${esc(w.title)}</b><small>${esc(artistOf(w).name)} · ${esc(t(w.style))}</small></span>${Icon('arrow', { size: 16 })}</button></li>`).join('')}</ol>` : ''}`;
 }
 
 // ——— Notifications (derived from your own activity; nothing invented) ———
@@ -3364,6 +3385,15 @@ const ACTIONS = {
   },
   'batch-publish': () => batchPublish(),
   'batch-close': () => { batchReset(); closeSheet(); renderView(); },
+  'set-lang': async (el) => {
+    const code = el.dataset.v;
+    if (code === getLang()) return;
+    try { await setLang(code, { save: true }); } catch { toast('Could not load that language. Check your connection.', { force: true }); return; }
+    applyStaticText();
+    closePopovers();
+    if (sheetRenderer) refreshSheet();
+    renderView();
+  },
   'toggle-verified': async (el) => {
     const mode = el.dataset.v;
     el.disabled = true;
@@ -4274,5 +4304,8 @@ pwa = initPWA({
     else { const m = $('#menu-install'); if (m) m.hidden = !pwa.status().available; }
   },
 });
+// Load the visitor's language before the first page is drawn.
+try { await setLang(detectLang()); } catch { await setLang('en'); }
+applyStaticText();
 renderView();
 connectCommunity();

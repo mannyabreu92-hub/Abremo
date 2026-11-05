@@ -1,7 +1,7 @@
 // Account views: sign-in, the account card, About, and installing the app.
 // Pure HTML builders (moved out of app.js); app.js passes in the state they show.
 
-import { esc, fmt, Icon, PremiumButton } from '../components.js';
+import { esc, fmt, Icon, PremiumButton, t } from '../components.js';
 
 /** About Abremi. roles: [{ label, weight }]. */
 export function aboutHTML({ roles, community }) {
@@ -53,33 +53,33 @@ export function iosInstallHTML(host) {
 export function signInHTML({ auth, standalone, local, inviteRequired }) {
   if (auth.stage === 'sent') {
     return `<div class="auth">
-      <p class="eyebrow">Check your inbox</p>
-      <h2 class="display-md" id="modal-title">One tap to sign in</h2>
+      <p class="eyebrow">${t('Check your inbox')}</p>
+      <h2 class="display-md" id="modal-title">${t('One tap to sign in')}</h2>
       ${standalone
-        ? `<p class="muted">We emailed <b>${esc(auth.email)}</b>. Type the code from the email below. In the home-screen app, the link would open your browser instead.</p>`
-        : `<p class="muted">We sent a sign-in link to <b>${esc(auth.email)}</b>. Open it on this device and you’re in.</p>`}
-      <label class="field"><span>Or enter the code from the email</span>
+        ? `<p class="muted">${t('We emailed {email}. Type the code from the email below. In the home-screen app, the link would open your browser instead.', { email: `<b>${esc(auth.email)}</b>` })}</p>`
+        : `<p class="muted">${t('We sent a sign-in link to {email}. Open it on this device and you’re in.', { email: `<b>${esc(auth.email)}</b>` })}</p>`}
+      <label class="field"><span>${t('Or enter the code from the email')}</span>
         <input id="auth-code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456"></label>
-      ${auth.error ? `<p class="form-error" role="alert">${esc(auth.error)}</p>` : ''}
+      ${auth.error ? `<p class="form-error" role="alert">${esc(t(auth.error))}</p>` : ''}
       <div class="detail-actions">
         ${PremiumButton(auth.busy ? 'Checking…' : 'Verify code', { act: 'verify-code', attrs: auth.busy ? 'disabled' : '' })}
         ${PremiumButton('Use a different email', { act: 'auth-back', variant: 'ghost' })}
       </div>
-      <p class="fine">No email after a minute? Check spam, or go back and send it again.</p>
+      <p class="fine">${t('No email after a minute? Check spam, or go back and send it again.')}</p>
     </div>`;
   }
   return `<div class="auth">
-    <p class="eyebrow">Join Abremi</p>
-    <h2 class="display-md" id="modal-title">Make your taste count</h2>
-    <p class="muted">Members’ admirations, treasures, follows and battle votes shape the global rankings. Sign in with your email. There’s no password to remember.</p>
-    <label class="field"><span>Email</span>
+    <p class="eyebrow">${t('Join Abremi')}</p>
+    <h2 class="display-md" id="modal-title">${t('Make your taste count')}</h2>
+    <p class="muted">${t('Members’ admirations, treasures, follows and battle votes shape the global rankings. Sign in with your email. There’s no password to remember.')}</p>
+    <label class="field"><span>${t('Email')}</span>
       <input id="auth-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" value="${esc(auth.email)}"></label>
-    ${inviteRequired ? `<label class="field"><span>Invite code (new members)</span>
-      <input id="auth-invite" autocapitalize="characters" autocomplete="off" maxlength="10" placeholder="10 characters" value="${esc(auth.invite || '')}"></label>
-      <p class="fine">Abremi is invite-only during the beta. Already a member? Leave this empty.</p>` : ''}
-    ${auth.error ? `<p class="form-error" role="alert">${esc(auth.error)}</p>` : ''}
+    ${inviteRequired ? `<label class="field"><span>${t('Invite code (new members)')}</span>
+      <input id="auth-invite" autocapitalize="characters" autocomplete="off" maxlength="10" placeholder="${t('10 characters')}" value="${esc(auth.invite || '')}"></label>
+      <p class="fine">${t('Abremi is invite-only during the beta. Already a member? Leave this empty.')}</p>` : ''}
+    ${auth.error ? `<p class="form-error" role="alert">${esc(t(auth.error))}</p>` : ''}
     <div class="detail-actions">${PremiumButton(auth.busy ? 'Sending…' : 'Email me a sign-in link', { act: 'send-link', size: 'lg', attrs: auth.busy ? 'disabled' : '' })}</div>
-    ${local ? `<p class="fine">The ${local} work${local === 1 ? '' : 's'} you liked or saved on this device will be added to your account.</p>` : ''}
+    ${local ? `<p class="fine">${local === 1 ? t('The work you liked or saved on this device will be added to your account.') : t('The {n} works you liked or saved on this device will be added to your account.', { n: local })}</p>` : ''}
   </div>`;
 }
 
@@ -93,8 +93,8 @@ export function accountCardHTML({ community, me, members, publicLeaderboards, is
   }
   if (!me) {
     return `<section class="account-card is-invite">
-      <div><p class="eyebrow">Community</p><h3 class="display-sm">Make your taste count</h3>
-      <p class="muted">Sign in so your admirations, treasures, follows and battle votes count in the global rankings${members ? `, alongside ${fmt(members)} member${members === 1 ? '' : 's'}` : ''}.</p></div>
+      <div><p class="eyebrow">${t('Community')}</p><h3 class="display-sm">${t('Make your taste count')}</h3>
+      <p class="muted">${members ? t('Sign in so your admirations, treasures, follows and battle votes count in the global rankings, alongside {n} members.', { n: fmt(members) }) : t('Sign in so your admirations, treasures, follows and battle votes count in the global rankings.')}</p></div>
       ${PremiumButton('Sign in with email', { act: 'sign-in', size: 'lg' })}
     </section>`;
   }

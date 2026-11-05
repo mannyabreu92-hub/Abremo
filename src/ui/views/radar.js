@@ -2,7 +2,7 @@
 // Pure HTML builders; app.js supplies data and helpers. Rules live in
 // supabase/migrations/0010_radar_drops.sql.
 
-import { esc, Icon, PremiumButton, EmptyState, SectionHeader } from '../components.js';
+import { esc, Icon, PremiumButton, EmptyState, SectionHeader, t } from '../components.js';
 
 /** Before release: a soft veil painted from nine colours of the teaser (the image itself isn't sent). */
 function veilHTML(palette) {
@@ -24,15 +24,15 @@ const when = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numer
 export function inquirySheet({ artwork = null, artist, kind = 'question', thumb = '' }) {
   const kinds = Object.entries(INQUIRY_KINDS).filter(([k, v]) => (artwork ? k !== 'purchase' || artwork.available : !v.needsWork));
   return `<form class="auth inquiry-form" id="inquiry-form" novalidate data-artwork="${esc(artwork?.id || '')}" data-artist="${esc(artist.id)}">
-    <p class="eyebrow">Write to the artist</p>
+    <p class="eyebrow">${t('Write to the artist')}</p>
     <h2 class="display-sm" id="modal-title">${artwork ? esc(artwork.title) : esc(artist.name)}</h2>
-    ${artwork ? `<div class="inquiry-subject">${thumb}<span>by ${esc(artist.name)}</span></div>` : ''}
-    <div class="chip-row chip-row-wrap" role="radiogroup" aria-label="What is it about?">${kinds.map(([k, v]) => `<button type="button" role="radio" class="chip${k === kind ? ' is-on' : ''}" aria-checked="${k === kind}" data-act="inquiry-kind" data-v="${k}">${esc(v.label)}</button>`).join('')}</div>
+    ${artwork ? `<div class="inquiry-subject">${thumb}<span>${t('by {name}', { name: esc(artist.name) })}</span></div>` : ''}
+    <div class="chip-row chip-row-wrap" role="radiogroup" aria-label="${t('What is it about?')}">${kinds.map(([k, v]) => `<button type="button" role="radio" class="chip${k === kind ? ' is-on' : ''}" aria-checked="${k === kind}" data-act="inquiry-kind" data-v="${k}">${esc(t(v.label))}</button>`).join('')}</div>
     <input type="hidden" id="inquiry-kind" value="${esc(kinds.some(([k]) => k === kind) ? kind : kinds[0][0])}">
-    <label class="field"><span>Message</span><textarea id="inquiry-message" rows="5" maxlength="2000" placeholder="Introduce yourself and what you’d like to know."></textarea><small class="char-count" id="inquiry-message-count" data-max="2000">0 / 2000</small></label>
+    <label class="field"><span>${t('Message')}</span><textarea id="inquiry-message" rows="5" maxlength="2000" placeholder="${t('Introduce yourself and what you’d like to know.')}"></textarea><small class="char-count" id="inquiry-message-count" data-max="2000">0 / 2000</small></label>
     <p class="form-error" id="inquiry-error" role="alert" hidden></p>
     <div class="detail-actions">${PremiumButton('Send', { act: 'send-inquiry' })}</div>
-    <p class="fine">Only you and the artist can read this conversation. Your email isn’t shared; each of you sees the other’s display name.</p>
+    <p class="fine">${t('Only you and the artist can read this conversation. Your email isn’t shared; each of you sees the other’s display name.')}</p>
   </form>`;
 }
 

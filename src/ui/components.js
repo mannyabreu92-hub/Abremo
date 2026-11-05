@@ -3,12 +3,17 @@
 
 import { artSVG } from './art.js';
 import { categoryById, countryByCode, PALETTES } from '../core/seed.js';
+import { t, locale, regionName } from './i18n.js';
+
+export { t };
+/** A medium's or movement's name in the current language. */
+export const catLabel = (id) => t(categoryById[id]?.label || '');
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const fmt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}K` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(Math.round(n)));
-export const money = (n) => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+export const money = (n) => new Intl.NumberFormat(locale(), { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(Number(n));
 export const flag = (code) => countryByCode[code]?.flag || '';
-export const countryName = (code) => countryByCode[code]?.name || '';
+export const countryName = (code) => regionName(code, countryByCode[code]?.name || '');
 export const initials = (name) => String(name || '?').split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase();
 
 // ——— Icons (1.5px stroke, 24 grid) ———
@@ -106,7 +111,7 @@ export function Avatar(artist, size = 'md') {
  * @param {{ act?: string, variant?: string, icon?: string, attrs?: string, size?: string }} [opts]
  */
 export function PremiumButton(label, { act, variant = 'primary', icon, attrs = '', size = '' } = {}) {
-  return `<button class="btn btn-${variant}${size ? ` btn-${size}` : ''}" ${act ? `data-act="${act}"` : ''} ${attrs}>${icon ? Icon(icon, { size: 18 }) : ''}<span>${label}</span></button>`;
+  return `<button class="btn btn-${variant}${size ? ` btn-${size}` : ''}" ${act ? `data-act="${act}"` : ''} ${attrs}>${icon ? Icon(icon, { size: 18 }) : ''}<span>${t(label)}</span></button>`;
 }
 
 /**
@@ -115,7 +120,7 @@ export function PremiumButton(label, { act, variant = 'primary', icon, attrs = '
  * @param {{ act?: string, attrs?: string, className?: string }} [opts]
  */
 export function IconButton(icon, label, { act, attrs = '', className = '' } = {}) {
-  return `<button class="icon-btn ${className}" ${act ? `data-act="${act}"` : ''} aria-label="${esc(label)}" title="${esc(label)}" ${attrs}>${Icon(icon)}</button>`;
+  return `<button class="icon-btn ${className}" ${act ? `data-act="${act}"` : ''} aria-label="${esc(t(label))}" title="${esc(t(label))}" ${attrs}>${Icon(icon)}</button>`;
 }
 
 // ——— Artwork ———
@@ -128,19 +133,19 @@ export function ArtworkCard(art, ctx = {}) {
   const liked = reaction === 'like' || reaction === 'super';
   const saved = reaction === 'super';
   return `<article class="art-card">
-    <button class="art-frame" data-act="artwork" data-id="${art.id}" aria-label="View ${esc(art.title)}">
+    <button class="art-frame" data-act="artwork" data-id="${art.id}" aria-label="${esc(t('View {title}', { title: art.title }))}">
       ${ArtImage(art, { eager })}
-      ${rank ? `<span class="rank-tag">No. ${rank}</span>` : ''}
+      ${rank ? `<span class="rank-tag">${t('No. {n}', { n: rank })}</span>` : ''}
     </button>
     <div class="art-quick">
-      <button class="quick-btn${liked ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${art.id}" aria-pressed="${liked}" aria-label="Admire ${esc(art.title)}">${Icon('admire', { size: 18 })}</button>
-      <button class="quick-btn${saved ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${art.id}" aria-pressed="${saved}" aria-label="${saved ? 'Remove from collection' : 'Save to collection'}">${Icon('bookmark', { size: 18 })}</button>
+      <button class="quick-btn${liked ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${art.id}" aria-pressed="${liked}" aria-label="${esc(t('Admire {title}', { title: art.title }))}">${Icon('admire', { size: 18 })}</button>
+      <button class="quick-btn${saved ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${art.id}" aria-pressed="${saved}" aria-label="${saved ? t('Remove from collection') : t('Save to collection')}">${Icon('bookmark', { size: 18 })}</button>
     </div>
     <div class="art-caption">
       <div class="art-caption-main">
         <h3 class="art-title"><button data-act="artwork" data-id="${art.id}">${esc(art.title)}</button></h3>
         ${artist ? `<button class="art-artist" data-act="artist" data-id="${artist.id}">${esc(artist.name)}</button>` : ''}
-        <p class="art-meta">${details ? `${esc(art.medium || cat?.label || '')}${art.year ? ` · ${art.year}` : ''}` : `${esc(cat?.label || '')}${art.year ? `, ${art.year}` : ''}`}</p>
+        <p class="art-meta">${details ? `${esc(art.medium || t(cat?.label || ''))}${art.year ? ` · ${art.year}` : ''}` : `${esc(t(cat?.label || ''))}${art.year ? `, ${art.year}` : ''}`}</p>
         ${details && art.price && !art.sample ? `<p class="art-price">${money(art.price)}</p>` : ''}
       </div>
       ${score != null ? `<span class="art-score">${score}</span>` : ''}
@@ -155,24 +160,24 @@ export function ArtworkGrid(items, { className = '' } = {}) {
 export function FeaturedArtwork(art, { artist, label, reaction, influence, actionsHTML = '' }) {
   const cat = categoryById[art.category];
   return `<section class="featured">
-    <button class="featured-frame" data-act="artwork" data-id="${art.id}" aria-label="View ${esc(art.title)}">${ArtImage(art, { eager: true })}</button>
+    <button class="featured-frame" data-act="artwork" data-id="${art.id}" aria-label="${esc(t('View {title}', { title: art.title }))}">${ArtImage(art, { eager: true })}</button>
     <div class="featured-body">
       ${label ? `<p class="eyebrow">${label}</p>` : ''}
       <h2 class="display-md">${esc(art.title)}</h2>
       <button class="artist-line" data-act="artist" data-id="${artist.id}">${Avatar(artist, 'sm')}<span><b>${esc(artist.name)}</b><small>${esc(countryName(artist.country))}</small></span></button>
       <dl class="spec">
-        <div><dt>Medium</dt><dd>${esc(art.medium)}</dd></div>
-        <div><dt>Year</dt><dd>${art.year}</dd></div>
-        <div><dt>Movement</dt><dd>${esc(art.style)}</dd></div>
-        <div><dt>Category</dt><dd>${esc(cat?.label || '')}</dd></div>
-        ${influence != null ? `<div><dt>Influence</dt><dd>${fmt(influence)}</dd></div>` : ''}
-        <div><dt>Price</dt><dd>${money(art.price)}</dd></div>
+        <div><dt>${t('Medium')}</dt><dd>${esc(art.medium)}</dd></div>
+        <div><dt>${t('Year')}</dt><dd>${art.year}</dd></div>
+        <div><dt>${t('Movement')}</dt><dd>${esc(t(art.style))}</dd></div>
+        <div><dt>${t('Category')}</dt><dd>${esc(t(cat?.label || ''))}</dd></div>
+        ${influence != null ? `<div><dt>${t('Influence')}</dt><dd>${fmt(influence)}</dd></div>` : ''}
+        <div><dt>${t('Price')}</dt><dd>${money(art.price)}</dd></div>
       </dl>
       <div class="featured-actions">
-        <button class="btn btn-icon${reaction === 'like' || reaction === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${art.id}" aria-label="Admire">${Icon('admire', { size: 18 })}</button>
-        <button class="btn btn-icon${reaction === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${art.id}" aria-label="Save to collection">${Icon('bookmark', { size: 18 })}</button>
-        ${PremiumButton('View work', { act: 'artwork', variant: 'secondary', attrs: `data-id="${art.id}"` })}
-        ${PremiumButton('Inquire', { act: 'buy', variant: 'primary', attrs: `data-id="${art.id}"` })}
+        <button class="btn btn-icon${reaction === 'like' || reaction === 'super' ? ' is-on' : ''}" data-act="react" data-v="like" data-id="${art.id}" aria-label="${t('Admire')}">${Icon('admire', { size: 18 })}</button>
+        <button class="btn btn-icon${reaction === 'super' ? ' is-on' : ''}" data-act="react" data-v="super" data-id="${art.id}" aria-label="${t('Save to collection')}">${Icon('bookmark', { size: 18 })}</button>
+        ${PremiumButton(t('View work'), { act: 'artwork', variant: 'secondary', attrs: `data-id="${art.id}"` })}
+        ${PremiumButton(t('Inquire'), { act: 'buy', variant: 'primary', attrs: `data-id="${art.id}"` })}
         ${actionsHTML}
       </div>
     </div>
@@ -186,25 +191,25 @@ export function FeaturedArtwork(art, { artist, label, reaction, influence, actio
  */
 export function ArtistCard(artist, { cover, following, score, rank, signals = '' }) {
   return `<article class="artist-card">
-    <button class="artist-cover" data-act="artist" data-id="${artist.id}" aria-label="Open ${esc(artist.name)}">${cover ? ArtImage(cover) : ''}</button>
+    <button class="artist-cover" data-act="artist" data-id="${artist.id}" aria-label="${esc(t('Open {name}', { name: artist.name }))}">${cover ? ArtImage(cover) : ''}</button>
     <div class="artist-card-body">
       ${Avatar(artist, 'md')}
       <div class="artist-card-text">
         <button class="artist-card-name" data-act="artist" data-id="${artist.id}">${esc(artist.name)}</button>
-        <p>${esc(countryName(artist.country))}${rank ? ` · No. ${rank}` : ''}</p>
+        <p>${esc(countryName(artist.country))}${rank ? ` · ${t('No. {n}', { n: rank })}` : ''}</p>
       </div>
-      ${artist.isMe ? '<span class="tag">You</span>' : `<button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${artist.id}" aria-pressed="${!!following}">${following ? 'Following' : 'Follow'}</button>`}
+      ${artist.isMe ? `<span class="tag">${t('You')}</span>` : `<button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${artist.id}" aria-pressed="${!!following}">${following ? t('Following') : t('Follow')}</button>`}
     </div>
     ${signals ? `<div class="signal-row artist-card-signals">${signals}</div>` : ''}
-    ${score != null ? `<p class="artist-card-score"><span>Artist score</span><b>${fmt(score)}</b></p>` : ''}
+    ${score != null ? `<p class="artist-card-score"><span>${t('Artist score')}</span><b>${fmt(score)}</b></p>` : ''}
   </article>`;
 }
 
 // ——— Filters, search ———
-export function CategoryFilter(categories, active, { act = 'filter-cat', allLabel = 'All', pills = false, noAll = false } = {}) {
-  return `<div class="chip-row${pills ? ' pill-row' : ''}" role="tablist" aria-label="Filter by category">
+export function CategoryFilter(categories, active, { act = 'filter-cat', allLabel = t('All'), pills = false, noAll = false } = {}) {
+  return `<div class="chip-row${pills ? ' pill-row' : ''}" role="tablist" aria-label="${t('Filter by category')}">
     ${noAll ? '' : `<button class="chip${!active ? ' is-on' : ''}" role="tab" aria-selected="${!active}" data-act="${act}" data-v="">${allLabel}</button>`}
-    ${categories.map((c) => `<button class="chip${active === c.id ? ' is-on' : ''}" role="tab" aria-selected="${active === c.id}" data-act="${act}" data-v="${c.id}">${esc(c.label)}</button>`).join('')}
+    ${categories.map((c) => `<button class="chip${active === c.id ? ' is-on' : ''}" role="tab" aria-selected="${active === c.id}" data-act="${act}" data-v="${c.id}">${esc(t(c.label))}</button>`).join('')}
   </div>`;
 }
 
@@ -212,8 +217,8 @@ export function Select(id, options, value, label) {
   return `<label class="select"><span class="sr-only">${esc(label)}</span><select id="${id}">${options.map((o) => `<option value="${esc(o.value)}" ${o.value === value ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>${Icon('chevron', { size: 16 })}</label>`;
 }
 
-export function SearchBar({ value = '', placeholder = 'Search artworks, artists, movements' } = {}) {
-  return `<label class="search-bar">${Icon('search', { size: 18 })}<span class="sr-only">Search</span>
+export function SearchBar({ value = '', placeholder = t('Search artworks, artists, movements') } = {}) {
+  return `<label class="search-bar">${Icon('search', { size: 18 })}<span class="sr-only">${t('Search')}</span>
     <input id="search-input" type="search" value="${esc(value)}" placeholder="${esc(placeholder)}" autocomplete="off" spellcheck="false">
     <kbd>Esc</kbd></label>`;
 }
@@ -221,15 +226,15 @@ export function SearchBar({ value = '', placeholder = 'Search artworks, artists,
 // ——— Battles ———
 export function ArtBattleCard(art, { artist, index, elo, result }) {
   return `<article class="battle-card${result ? ` is-${result.state}` : ''}">
-    <button class="battle-frame" data-act="vote" data-i="${index}" aria-label="Vote for ${esc(art.title)}" ${result ? 'disabled' : ''}>
+    <button class="battle-frame" data-act="vote" data-i="${index}" aria-label="${esc(t('Vote for {title}', { title: art.title }))}" ${result ? 'disabled' : ''}>
       ${ArtImage(art, { full: true })}
-      ${result ? `<span class="battle-outcome"><b>${result.delta}</b><small>${result.share}% of voters</small></span>` : ''}
+      ${result ? `<span class="battle-outcome"><b>${result.delta}</b><small>${t('{share}% of voters', { share: result.share })}</small></span>` : ''}
     </button>
     <div class="battle-caption">
       <div><h3 class="art-title">${esc(art.title)}</h3><button class="art-artist" data-act="artist" data-id="${artist.id}">${esc(artist.name)}</button></div>
       <span class="elo">${Math.round(elo)}</span>
     </div>
-    <button class="btn btn-secondary btn-block vote-btn" data-act="vote" data-i="${index}" ${result ? 'disabled' : ''}>${index === 0 ? `${Icon('back', { size: 16 })}<span>Vote Left</span>` : `<span>Vote Right</span>${Icon('arrow', { size: 16 })}`}</button>
+    <button class="btn btn-secondary btn-block vote-btn" data-act="vote" data-i="${index}" ${result ? 'disabled' : ''}>${index === 0 ? `${Icon('back', { size: 16 })}<span>${t('Vote Left')}</span>` : `<span>${t('Vote Right')}</span>${Icon('arrow', { size: 16 })}`}</button>
   </article>`;
 }
 
@@ -248,21 +253,21 @@ export function CollectionCard({ title, subtitle, works, act, attrs = '' }) {
 
 // ——— States ———
 export function EmptyState({ icon = 'spark', title, body = '', action = '' }) {
-  return `<div class="empty-state">${Icon(icon, { size: 28 })}<h3>${esc(title)}</h3>${body ? `<p>${esc(body)}</p>` : ''}${action}</div>`;
+  return `<div class="empty-state">${Icon(icon, { size: 28 })}<h3>${esc(t(title))}</h3>${body ? `<p>${esc(t(body))}</p>` : ''}${action}</div>`;
 }
 
 export function LoadingSkeleton({ cards = 4, variant = 'grid' } = {}) {
   if (variant === 'list') return `<div class="skeleton-list" aria-hidden="true">${'<div class="skel skel-row"></div>'.repeat(cards)}</div>`;
-  return `<div class="art-grid" aria-busy="true" aria-label="Loading">${Array.from({ length: cards }, () => '<div class="skel-card"><div class="skel skel-img"></div><div class="skel skel-line"></div><div class="skel skel-line short"></div></div>').join('')}</div>`;
+  return `<div class="art-grid" aria-busy="true" aria-label="${t('Loading')}">${Array.from({ length: cards }, () => '<div class="skel-card"><div class="skel skel-img"></div><div class="skel skel-line"></div><div class="skel skel-line short"></div></div>').join('')}</div>`;
 }
 
 export function SectionHeader({ eyebrow, title, action = '' }) {
-  return `<header class="section-head"><div>${eyebrow ? `<p class="eyebrow">${eyebrow}</p>` : ''}<h2 class="display-sm">${title}</h2></div>${action}</header>`;
+  return `<header class="section-head"><div>${eyebrow ? `<p class="eyebrow">${t(eyebrow)}</p>` : ''}<h2 class="display-sm">${t(title)}</h2></div>${action}</header>`;
 }
 
 export function Movement(delta) {
-  if (delta === null || delta === undefined) return '<span class="move move-new">New</span>';
-  if (delta > 0) return `<span class="move move-up" aria-label="Up ${delta}">↑ ${delta}</span>`;
-  if (delta < 0) return `<span class="move move-down" aria-label="Down ${-delta}">↓ ${-delta}</span>`;
-  return '<span class="move move-same" aria-label="No change">—</span>';
+  if (delta === null || delta === undefined) return `<span class="move move-new">${t('New')}</span>`;
+  if (delta > 0) return `<span class="move move-up" aria-label="${t('Up {n}', { n: delta })}">↑ ${delta}</span>`;
+  if (delta < 0) return `<span class="move move-down" aria-label="${t('Down {n}', { n: -delta })}">↓ ${-delta}</span>`;
+  return `<span class="move move-same" aria-label="${t('No change')}">—</span>`;
 }
