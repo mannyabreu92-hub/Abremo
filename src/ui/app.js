@@ -89,6 +89,7 @@ const LAZY_VIEWS = {
   orders: () => import('./views/orders.js'),
   index: () => import('./views/index.js'),
   careers: () => import('./views/careers.js'),
+  certificate: () => import('./views/certificate.js'),
 };
 const lazyModules = {};
 const lazyLoading = {};
@@ -202,7 +203,7 @@ const VIEWS = {
   collections: renderCollections, charts: renderCharts, scan: renderScan, profile: renderProfile, artist: renderArtistPage, admin: renderAdmin,
   art: renderArtworkPage, collection: renderSharedCollection, competition: renderCompetition, studio: renderStudio,
   inbox: renderInbox, inquiry: renderInquiry, drop: renderDrop, coach: renderCoach, opportunities: renderOpportunities,
-  plans: renderPlans, gallery: renderGallery, index: renderIndex, orders: renderOrders, join: renderJoin,
+  plans: renderPlans, gallery: renderGallery, index: renderIndex, orders: renderOrders, join: renderJoin, certificate: renderCertificate,
 };
 /** #view or #view/param (e.g. #artist/a12). Unknown routes fall back to home. */
 function route() {
@@ -902,7 +903,7 @@ function artworkSheet(id) {
       <h2 class="display-md" id="modal-title">${esc(w.title)}</h2>
       ${w.sample ? SampleNote('artwork') : ''}
       <div class="panel-artist">
-        <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}</b><small>${esc(countryName(a.country))}</small></span></button>
+        <button class="artist-line" data-act="artist" data-id="${a.id}">${Avatar(a, 'sm')}<span><b>${esc(a.name)}${verifiedBadge(a.id)}</b><small>${esc(countryName(a.country))}</small></span></button>
         ${a.isMe ? '' : `<button class="follow-btn${following ? ' is-on' : ''}" data-act="follow" data-id="${a.id}" aria-pressed="${following}">${following ? 'Following' : 'Follow'}</button>`}
       </div>
       ${w.description ? `<p class="artwork-description">${esc(w.description)}</p>` : ''}
@@ -1149,6 +1150,43 @@ async function loadFounding(force = false) {
   if (['home', 'artist', 'join'].includes(currentView()) && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
 }
 const isFounding = (id) => founding.ids.includes(id);
+
+// ——— Verified artists (identity confirmed by a moderator; never ranked) ———
+const verified = { map: {}, at: 0 };
+async function loadVerified(force = false) {
+  if (!cloud?.verifiedArtists || (!force && Date.now() - verified.at < 60_000)) return;
+  verified.at = Date.now();
+  try { verified.map = Object.fromEntries((await cloud.verifiedArtists()).map((v) => [v.artist_id, v])); } catch { return; }
+  if (['home', 'artist', 'artwork', 'discover'].includes(currentView()) && !document.activeElement?.matches('input, textarea, select')) {
+    if (sheetRenderer) refreshSheet(); else renderView();
+  }
+}
+const isVerified = (id) => Boolean(COMMUNITY && (loadVerified(), verified.map[id]));
+const verifiedBadge = (id) => (isVerified(id)
+  ? ` <span class="verified-badge" title="Identity confirmed by Abremi${verified.map[id].managed ? '. Studio managed by the artist’s family' : ''}">${Icon('check', { size: 12 })}<span>Verified</span></span>` : '');
+
+// ——— Certificates of authenticity (#certificate/CODE) ———
+const certs = new Map(); // code → { data, error, loading }
+function renderCertificate(root) {
+  const v = lazyPage(root, 'certificate');
+  if (!v) return;
+  const code = decodeURIComponent(route().param || '').trim().toUpperCase();
+  if (!code) { root.innerHTML = v.certificateCheckHTML({ code: $('#cert-code', root)?.value || '' }); return; } // keep a half-typed code across redraws
+  if (!v.CODE_RE.test(code)) { root.innerHTML = v.certificateCheckHTML({ code, error: 'That doesn’t look like an Abremi certificate code (ABR-XXXX-XXXX-XXXX).' }); return; }
+  if (!COMMUNITY || !cloud?.verifyCertificate) { root.innerHTML = v.certificateCheckHTML({ code, error: 'Certificates can be checked once accounts are live.' }); return; }
+  const entry = certs.get(code);
+  if (!entry) {
+    certs.set(code, { loading: true });
+    cloud.verifyCertificate(code)
+      .then((data) => certs.set(code, { data, error: data ? '' : 'No certificate has this code. Check it for typos, or contact the seller and Abremi.' }))
+      .catch((e) => certs.set(code, { error: e?.message || 'Could not check the certificate right now.' }))
+      .finally(() => { if (currentView() === 'certificate') renderView(); });
+  }
+  if (!entry || entry.loading) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 2, variant: 'list' })}</div>`; return; }
+  if (!entry.data) { certs.delete(code); root.innerHTML = v.certificateCheckHTML({ code, error: entry.error }); return; }
+  const w = world.artworkById[entry.data.artwork_id];
+  root.innerHTML = v.certificateHTML(entry.data, { image: w ? ArtImage(w, { eager: true }) : '', medium: w?.medium || '', origin: location.origin });
+}
 function foundingHTML() {
   if (!COMMUNITY) return '';
   loadFounding();
@@ -1410,7 +1448,10 @@ function renderOrders(root) {
   if (!sales.orders) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 3, variant: 'list' })}</div>`; return; }
   const v = lazyPage(root, 'orders');
   if (!v) return;
+  // Background refreshes redraw this page: keep what the artist was typing (carrier, tracking).
+  const typed = [...root.querySelectorAll('.orders-page input[id]')].filter((i) => i.value).map((i) => [i.id, i.value]);
   root.innerHTML = v.ordersPage(sales.orders, { payout: sales.payout, isArtist: Boolean(world.artistById[myArtistId()]), salesOn: Boolean(member.flags?.sales_enabled), busy: sales.busy, country: state.user.country || 'US' });
+  for (const [id, value] of typed) { const el = root.querySelector(`#${CSS.escape(id)}`); if (el && !el.value) el.value = value; }
 }
 
 // ——— The Abremi Index (#index) ———
@@ -2081,9 +2122,14 @@ function renderArtistPage(root) {
             ${a.sample ? '' : `${state.user.role === 'collector' ? PremiumButton('Sponsor', { act: 'sponsor', variant: 'secondary', attrs: `data-id="${id}"` }) : ''}
             ${IconButton('mail', `Contact ${a.name}`, { act: 'contact', attrs: `data-id="${id}"` })}`}`}
         </div>
-        <h1 class="display-md">${esc(a.name)}${member.badges[id] ? ` <span class="plan-badge" title="Artist ${esc(member.badges[id])} member (a plan; it doesn’t affect rankings)">${esc(member.badges[id])}</span>` : ''}</h1>
+        <h1 class="display-md">${esc(a.name)}${verifiedBadge(id)}${member.badges[id] ? ` <span class="plan-badge" title="Artist ${esc(member.badges[id])} member (a plan; it doesn’t affect rankings)">${esc(member.badges[id])}</span>` : ''}</h1>
         ${COMMUNITY && (loadFounding(), isFounding(id)) ? '<p class="founding-badge"><span class="tag tag-gold" title="Chosen by Abremi to open the platform. It doesn’t affect rankings.">Founding artist</span></p>' : ''}
         ${a.sample ? SampleNote('artist') : ''}
+        ${isVerified(id) && verified.map[id].managed ? '<p class="muted verified-note">Studio managed by the artist’s family, with Abremi’s confirmation.</p>' : ''}
+        ${isAdmin && a.member ? `<div class="admin-artist-tools">${isVerified(id)
+          ? `<button class="link-arrow" data-act="toggle-verified" data-id="${id}" data-v="">${Icon('x', { size: 14 })} Remove verification</button>`
+          : `<button class="link-arrow" data-act="toggle-verified" data-id="${id}" data-v="self">${Icon('check', { size: 14 })} Verify artist</button>
+             <button class="link-arrow" data-act="toggle-verified" data-id="${id}" data-v="family">${Icon('check', { size: 14 })} Verify · managed by family</button>`}</div>` : ''}
         ${isAdmin && a.member ? `<button class="link-arrow founding-toggle" data-act="toggle-founding" data-id="${id}" data-v="${isFounding(id) ? '' : '1'}">${Icon('spark', { size: 14 })} ${isFounding(id) ? 'Remove from Founding artists' : 'Make a Founding artist'}</button>` : ''}
         <p class="muted">${esc(categoryById[a.category]?.label || 'Contemporary')} artist • ${a.city ? `${esc(a.city)}, ` : ''}${esc(countryName(a.country))}${a.debutYear ? ` • since ${a.debutYear}` : ''}</p>
         ${a.bio ? `<p class="artist-bio">${esc(a.bio)}</p>` : ''}
@@ -3218,6 +3264,22 @@ const ACTIONS = {
     try { await cloud.publishIndex(); idx.cache.clear(); toast('This week’s Index is published.', { force: true }); }
     catch (e) { toast(e?.message || 'Could not publish it.', { force: true }); }
   },
+  'toggle-verified': async (el) => {
+    const mode = el.dataset.v;
+    el.disabled = true;
+    try {
+      await cloud.setVerified(el.dataset.id, Boolean(mode), mode === 'family');
+      await loadVerified(true);
+      toast(mode ? 'Artist verified.' : 'Verification removed.', { force: true });
+    } catch (e) { toast(e?.message || 'Could not change that. Try again.', { force: true }); }
+    renderView();
+  },
+  'certificate-check': () => {
+    const code = ($('#cert-code')?.value || '').trim().toUpperCase();
+    certs.delete(code);
+    location.hash = `certificate/${encodeURIComponent(code)}`;
+  },
+  'certificate-print': () => window.print(),
   'toggle-founding': async (el) => {
     const on = el.dataset.v === '1';
     el.disabled = true;

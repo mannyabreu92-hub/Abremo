@@ -1266,6 +1266,32 @@ window.__abremiCloud = async () => {
       save(db);
       return on;
     },
+    async verifiedArtists() {
+      await wait();
+      return load().verified || [];
+    },
+    async setVerified(artistId, on, managed = false) {
+      needUser(); await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user.id)) throw new Error('Admins only');
+      if (!artistId.startsWith('m_')) throw new Error('Only member artists can be verified');
+      db.verified = (db.verified || []).filter((v) => v.artist_id !== artistId);
+      if (on) db.verified.push({ artist_id: artistId, managed: Boolean(managed), since: new Date().toISOString() });
+      save(db);
+      return on;
+    },
+    async verifyCertificate(code) {
+      await wait();
+      const db = load();
+      const o = (db.orders || []).find((x) => x.certificate === String(code || '').trim().toUpperCase());
+      if (!o) return null;
+      const w = db.uploads.find((u) => u.id === o.artwork_id) || {};
+      const artistId = `m_${o.artist_user}`;
+      return { code: o.certificate, artwork_id: o.artwork_id, title: o.title, artist_id: artistId, artist: profileOf(db, o.artist_user).name,
+        verified: (db.verified || []).some((v) => v.artist_id === artistId), year: w.year || null, medium: w.medium || null, dimensions: w.dimensions || null,
+        edition_number: o.edition_number, edition_size: w.edition_size || null, issued_at: o.paid_at,
+        valid: ['paid', 'shipped', 'delivered'].includes(o.status), status: o.status === 'refunded' ? 'void' : o.status === 'disputed' ? 'under_review' : 'valid' };
+    },
     async artistIndexBadge(artistId) {
       const d = await this.indexWeek();
       const a = d.artists.find((x) => x.id === artistId);
@@ -1291,7 +1317,7 @@ window.__abremiCloud = async () => {
       const n = w.edition_size ? (w.editions_sold || 0) + 1 : null;
       if (w.edition_size) { w.editions_sold = n; if (n >= w.edition_size) w.availability = 'sold'; } else w.availability = 'sold';
       db.orders.push({ id: crypto.randomUUID(), artwork_id: w.id, title: w.title, artist_user: w.owner, buyer: user.id, amount_cents: w.price * 100, fee_cents: Math.round(w.price * 20),
-        currency: 'usd', edition_number: n, status: 'paid', shipping: { name: profileOf(db, user.id).name, address: { city: 'Lisbon', country: 'PT' } }, paid_at: new Date().toISOString() });
+        currency: 'usd', edition_number: n, status: 'paid', certificate: `ABR-${[0, 1, 2].map(() => Math.floor(Math.random() * 65536).toString(16).toUpperCase().padStart(4, '0')).join('-')}`, shipping: { name: profileOf(db, user.id).name, address: { city: 'Lisbon', country: 'PT' } }, paid_at: new Date().toISOString() });
       (db.notifications ||= []).push({ id: crypto.randomUUID(), user_id: w.owner, kind: 'sale', title: `You sold “${w.title}”. Ship it and add tracking in Orders.`, link: 'orders', created_at: new Date().toISOString(), read_at: null });
       save(db);
       return { url: '#orders?paid=1' };

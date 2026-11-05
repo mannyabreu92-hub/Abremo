@@ -116,6 +116,48 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   await toastSays(mod, /Decision recorded/);
   step('the artist ships with tracking; the buyer confirms delivery and reports a problem; a moderator decides');
 
+  // ——— Verified artist and certificates of authenticity ———
+  await mod.goto(BASE + '#artist/m_u-ana@example.com');
+  await mod.waitForSelector('[data-act=toggle-verified][data-v=family]');
+  await mod.click('[data-act=toggle-verified][data-v=family]');
+  await mod.waitForSelector('.artist-header .verified-badge');
+  assert.match(await mod.locator('.verified-note').textContent(), /managed by the artist’s family/);
+  await cy.goto(BASE + '#orders');
+  await cy.waitForSelector('.orders-page a[href^="#certificate/ABR-"]');
+  const certHref = await cy.locator('.order-card', { hasText: 'Tideline' }).locator('a[href^="#certificate/ABR-"]').getAttribute('href');
+  const voidHref = await cy.locator('.order-card', { hasText: 'Harbour' }).locator('a[href^="#certificate/ABR-"]').getAttribute('href');
+  const code = certHref.split('/')[1];
+  assert.match(code, /^ABR-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/);
+  await cy.click(`.orders-page a[href="${certHref}"]`);
+  await cy.waitForSelector('.certificate');
+  const certText = await cy.locator('.certificate-page').textContent();
+  assert.match(certText, /Genuine/);
+  assert.match(certText, /Certificate of authenticity[\s\S]*Verified/);
+  assert.ok(certText.includes(code));
+  assert.match(certText, /Print 1 of 2/);
+  await cy.goto(BASE + voidHref);
+  await cy.waitForFunction(() => /void: the sale was refunded/.test(document.querySelector('.cert-status')?.textContent || ''));
+  // Anyone can check a code, signed in or not, and it never shows the buyer.
+  const guestCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await guestCtx.addInitScript(mock);
+  const guest = await guestCtx.newPage();
+  guest.on('pageerror', (e) => errors.push(e.message));
+  await guest.goto(BASE + '#certificate');
+  await guest.evaluate((db) => localStorage.setItem('mockcloud', db), await cy.evaluate(() => localStorage.getItem('mockcloud')));
+  await guest.reload();
+  await guest.waitForSelector('#cert-code');
+  await guest.fill('#cert-code', code.toLowerCase());
+  await guest.click('[data-act=certificate-check]');
+  await guest.waitForSelector('.certificate');
+  const shown = await guest.locator('.certificate-page').textContent();
+  assert.ok(!shown.includes('cy@example.com') && !/Lisbon/.test(shown), 'never the buyer or their address');
+  assert.equal(await guest.evaluate(() => document.documentElement.scrollWidth), 390);
+  await guest.goto(BASE + '#certificate/ABR-0000-0000-0000');
+  await guest.waitForSelector('.certificate-check [role=alert]');
+  assert.match(await guest.locator('[role=alert]').textContent(), /No certificate has this code/);
+  await guestCtx.close();
+  step('moderators verify artists (✓ badge); every sale has a printable certificate anyone can check');
+
   assert.deepEqual(errors, []);
   console.log('All checkout e2e checks passed');
   await browser.close();
