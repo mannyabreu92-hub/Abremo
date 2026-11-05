@@ -1,4 +1,5 @@
 import { seasonName, STREAK_MILESTONES } from '../core/streak.js';
+import { ALL_COUNTRY_CODES } from '../core/countries.js';
 import { buildSeedWorld, CATEGORIES, STYLES, COUNTRIES, PALETTES, CURRENT_YEAR, categoryById, countryByCode } from '../core/seed.js';
 import { ROLES, ROLE_WEIGHTS, SAVE_MULTIPLIER, influenceBreakdown, emptyRoleCounts } from '../core/scoring.js';
 import { battleResult, expectedScore, pickBattlePair, kFactor, LOSS_FACTOR, START_RATING } from '../core/elo.js';
@@ -2424,7 +2425,7 @@ function renderProfile(root) {
       <div class="profile-id">
         <p class="eyebrow">${role().label} · vote weight ×${role().weight}</p>
         <label class="field field-bare"><span class="sr-only">Display name</span><input id="name" value="${esc(state.user.name)}" maxlength="40"></label>
-        ${Select('country', COUNTRIES.map((c) => ({ value: c.code, label: c.name })), state.user.country, 'Country')}
+        ${Select('country', ALL_COUNTRY_CODES.map((code) => ({ value: code, label: countryName(code) || code })).sort((a, b) => a.label.localeCompare(b.label)), state.user.country, t('Country'))}
       </div>
     </header>
 
