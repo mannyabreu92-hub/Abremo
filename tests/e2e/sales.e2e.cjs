@@ -63,10 +63,12 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   await ana.reload();
   await ana.goto(BASE + '#orders');
   await ana.waitForSelector('[data-act=payouts-setup]');
+  await ana.fill('#payout-country', 'us');
   await ana.click('[data-act=payouts-setup]');
   await ana.waitForFunction(() => location.hash.includes('payouts=done'));
   await ana.reload();
   await ana.waitForFunction(() => /Payouts are ready/.test(document.querySelector('.orders-page')?.textContent || ''));
+  assert.equal((await ana.evaluate(() => window.__mockdb.load().payouts['u-ana@example.com'].country)), 'US', 'the country typed is the one sent');
   await ana.evaluate((id) => { const d = window.__mockdb.load(); d.uploads.find((u) => u.id === id).edition_size = 2; window.__mockdb.save(d); }, ids.Tideline);
   step('an artist sets up payouts with Stripe (stood in)');
 

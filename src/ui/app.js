@@ -1497,7 +1497,7 @@ function renderOrders(root) {
   if (!v) return;
   // Background refreshes redraw this page: keep what the artist was typing (carrier, tracking).
   const typed = [...root.querySelectorAll('.orders-page input[id]')].filter((i) => i.value).map((i) => [i.id, i.value]);
-  root.innerHTML = v.ordersPage(sales.orders, { payout: sales.payout, isArtist: Boolean(world.artistById[myArtistId()]), salesOn: Boolean(member.flags?.sales_enabled), busy: sales.busy, country: state.user.country || 'US' });
+  root.innerHTML = v.ordersPage(sales.orders, { payout: sales.payout, isArtist: Boolean(world.artistById[myArtistId()]), salesOn: Boolean(member.flags?.sales_enabled), busy: sales.busy, country: sales.payoutCountry || state.user.country || 'US' });
   for (const [id, value] of typed) { const el = root.querySelector(`#${CSS.escape(id)}`); if (el && !el.value) el.value = value; }
 }
 
@@ -3471,8 +3471,11 @@ const ACTIONS = {
     catch (e) { el.disabled = false; toast(e?.message || 'Could not start checkout.', { force: true }); }
   },
   'payouts-setup': async (el) => {
+    // Read the country before redrawing (the redraw resets the box to the profile's country).
+    const country = ($('#payout-country')?.value || '').trim().toUpperCase();
+    if (country) sales.payoutCountry = country;
     sales.busy = 'payouts'; renderView();
-    try { const { url } = await cloud.checkout(el.dataset.v === 'dashboard' ? 'dashboard' : 'onboard', { country: $('#payout-country')?.value }); location.assign(url); sales.payout = null; sales.orders = null; }
+    try { const { url } = await cloud.checkout(el.dataset.v === 'dashboard' ? 'dashboard' : 'onboard', { country: country || undefined }); location.assign(url); sales.payout = null; sales.orders = null; }
     catch (e) { toast(e?.message || 'Could not open payouts.', { force: true }); }
     sales.busy = ''; renderView();
   },
