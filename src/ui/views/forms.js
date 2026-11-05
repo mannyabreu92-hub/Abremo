@@ -24,6 +24,7 @@ export function artistProfileForm(artist) {
         <input type="file" id="portrait-file" accept="image/*"></label>
       ${a.avatar ? `<label class="check"><input type="checkbox" id="portrait-remove"> Remove portrait</label>` : ''}
     </div>
+    <label class="field"><span>Active since (the year your career began)</span><input id="profile-since" type="number" inputmode="numeric" min="1900" max="${new Date().getFullYear()}" value="${esc(a.activeSince || '')}" placeholder="e.g. 1994"></label>
     <label class="field"><span>City</span><input id="profile-city" maxlength="${PROFILE_LIMITS.city}" autocomplete="address-level2" value="${esc(a.city)}" placeholder="Lisbon"></label>
     <label class="field"><span>Short bio</span><textarea id="profile-bio" rows="4" maxlength="${PROFILE_LIMITS.bio}" placeholder="Who you are and what you make.">${esc(a.bio)}</textarea>${counter('profile-bio', a.bio, PROFILE_LIMITS.bio)}</label>
     <label class="field"><span>Artist statement</span><textarea id="profile-statement" rows="6" maxlength="${PROFILE_LIMITS.statement}" placeholder="What your work is about.">${esc(a.statement)}</textarea>${counter('profile-statement', a.statement, PROFILE_LIMITS.statement)}</label>

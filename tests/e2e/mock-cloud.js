@@ -1266,6 +1266,19 @@ window.__abremiCloud = async () => {
       save(db);
       return on;
     },
+    async artistsActiveSince() {
+      await wait();
+      return Object.entries(load().activeSince || {}).map(([artist_id, year]) => ({ artist_id, year }));
+    },
+    async setActiveSince(year) {
+      needUser(); await wait();
+      if (year != null && (year < 1900 || year > new Date().getFullYear())) throw new Error('Enter a year between 1900 and this year');
+      const db = load();
+      db.activeSince ||= {};
+      if (year == null) delete db.activeSince[`m_${user.id}`]; else db.activeSince[`m_${user.id}`] = year;
+      save(db);
+      return year;
+    },
     async verifiedArtists() {
       await wait();
       return load().verified || [];

@@ -583,6 +583,13 @@ export async function createSupabaseCloud(url, key) {
       return check(await sb.rpc('admin_set_founding', { p_artist: artistId, p_on: on }));
     },
     /** Artists whose identity a moderator confirmed: [{ artist_id, managed, since }]. */
+    /** Years member artists' careers began: [{ artist_id, year }]. */
+    async artistsActiveSince() {
+      return check(await sb.rpc('artists_active_since'));
+    },
+    async setActiveSince(year) {
+      return check(await sb.rpc('set_active_since', { p_year: year }));
+    },
     async verifiedArtists() {
       return check(await sb.rpc('verified_artists'));
     },

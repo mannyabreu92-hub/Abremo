@@ -101,6 +101,20 @@ const step = (name) => console.log(`✓ ${name}`);
   await ana.waitForFunction(() => document.querySelectorAll('#studio .work-row').length === 4);
   step('artists upload several works at once, with shared details and per-work checks');
 
+  // ——— Active since ———
+  await ana.goto(BASE + '#artist/m_u-ana@example.com');
+  await ana.waitForSelector('.artist-header');
+  assert.match(await ana.locator('.artist-header').textContent(), /On Abremi since \d{4}/, 'members show when they joined, not a career start');
+  await ana.goto(BASE + '#profile');
+  await ana.click('[data-act=edit-artist-profile]');
+  await ana.waitForSelector('#profile-since');
+  await ana.fill('#profile-since', '1994');
+  await ana.click('[data-act=save-artist-profile]');
+  await ana.waitForSelector('#artist-profile-form', { state: 'hidden' });
+  await ana.goto(BASE + '#artist/m_u-ana@example.com');
+  await ana.waitForFunction(() => /Active since 1994/.test(document.querySelector('.artist-header')?.textContent || ''));
+  step('artists can say when their career began ("Active since 1994"); others show when they joined Abremi');
+
   // ——— Founding artists ———
   await ana.goto(BASE + '#home');
   await ana.waitForSelector('#view .shell');
