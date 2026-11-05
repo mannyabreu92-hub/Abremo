@@ -141,6 +141,8 @@ To switch on (test mode first):
 4. In the Supabase SQL editor: `update app_settings set sales_enabled = true;`
 5. As an artist: Orders → Set up payouts (Stripe's test onboarding). As another member: buy with a test card (`4242 4242 4242 4242`), then ship, confirm delivery and try a refund.
 
+**Artists outside the US.** Abremi's Stripe account is in the US. Artists who choose another country when setting up payouts get a Stripe "recipient" account and are paid by [cross-border payouts](https://docs.stripe.com/connect/cross-border-payouts) (many countries, including the Dominican Republic; Stripe charges a per-payout fee by country). New Connect platforms must turn on **Accounts v1 support** in Stripe (Settings → Developers → API policies), in test mode and again in live mode. If the platform ever moves, set `STRIPE_PLATFORM_COUNTRY` in Vercel.
+
 To switch off at any time: `update app_settings set sales_enabled = false;`
 
 ## Seasons and streaks

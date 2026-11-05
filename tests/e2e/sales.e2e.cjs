@@ -63,7 +63,7 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   await ana.reload();
   await ana.goto(BASE + '#orders');
   await ana.waitForSelector('[data-act=payouts-setup]');
-  await ana.fill('#payout-country', 'us');
+  await ana.selectOption('#payout-country', 'US');
   await ana.click('[data-act=payouts-setup]');
   await ana.waitForFunction(() => location.hash.includes('payouts=done'));
   await ana.reload();

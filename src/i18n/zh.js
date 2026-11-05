@@ -222,6 +222,7 @@ export default {
   "Or enter the code from the email": "或输入邮件中的验证码",
   "Orders": "订单",
   "Original work": "原作",
+  "Outside the United States, Stripe pays you by cross-border payout, in your country’s currency where available. Stripe’s payout fee depends on the country.": "在美国以外，Stripe 会通过跨境付款向你付款，尽可能使用你所在国家的货币。Stripe 的付款手续费因国家而异。",
   "Paid · to ship": "已付款 · 待发货",
   "Painting": "绘画",
   "Pass": "跳过",

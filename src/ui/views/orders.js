@@ -2,7 +2,8 @@
 // Pure HTML builders; every action is checked again by the database (migration 0017).
 
 import { esc, Icon, PremiumButton, EmptyState, SectionHeader, t } from '../components.js';
-import { locale, formatDate } from '../i18n.js';
+import { locale, formatDate, regionName } from '../i18n.js';
+import { ALL_COUNTRY_CODES } from '../../core/countries.js';
 
 const amount = (o) => `${(o.currency || 'usd').toUpperCase()} ${(o.amount_cents / 100).toLocaleString(locale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const day = (d) => (d ? formatDate(d) : '');
@@ -29,7 +30,8 @@ function payoutCard(p, { salesOn, busy, country }) {
     ${ready ? `<p class="muted">${t('Collectors can buy your works with a listed price. Stripe pays you directly.')}</p>
         ${PremiumButton(busy === 'payouts' ? 'Opening…' : 'Open your Stripe dashboard', { act: 'payouts-setup', variant: 'secondary', attrs: `data-v="dashboard"${busy ? ' disabled' : ''}` })}`
       : `<p class="muted">${p?.connected ? t('Finish your details with Stripe to start selling.') : t('Stripe verifies your identity and bank details, then pays you directly. Abremi never holds your money.')}</p>
-        ${p?.connected ? '' : `<label class="field"><span>${t('Country where you’ll be paid')}</span><input id="payout-country" maxlength="2" value="${esc(country)}" autocapitalize="characters"></label>`}
+        ${p?.connected ? '' : `<label class="field"><span>${t('Country where you’ll be paid')}</span><select id="payout-country">${ALL_COUNTRY_CODES.map((c) => [c, regionName(c, c)]).sort((a, b) => a[1].localeCompare(b[1])).map(([c, name]) => `<option value="${c}"${c === country ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
+          <p class="fine">${t('Outside the United States, Stripe pays you by cross-border payout, in your country’s currency where available. Stripe’s payout fee depends on the country.')}</p>`}
         ${PremiumButton(busy === 'payouts' ? 'Opening Stripe…' : p?.connected ? 'Finish setup with Stripe' : 'Set up payouts with Stripe', { act: 'payouts-setup', attrs: busy ? 'disabled' : '' })}`}
   </section>`;
 }
