@@ -732,8 +732,13 @@ function applyStaticText() {
   for (const attr of ['aria-label', 'title']) {
     for (const el of document.querySelectorAll(`[data-i18n-${attr}]`)) el.setAttribute(attr, t(el.getAttribute(`data-i18n-${attr}`)));
   }
-  const menu = $('#menu-lang');
-  if (menu) menu.outerHTML = langPickerHTML('menu-lang');
+  const code = $('#lang-code');
+  if (code) code.textContent = getLang().toUpperCase();
+  const list = $('#lang-menu');
+  if (list) {
+    const now = getLang();
+    list.innerHTML = `<p class="popover-title">${t('Language')}</p>${LANGS.map((l) => `<button role="menuitemradio" class="lang-option${l.code === now ? ' is-on' : ''}" aria-checked="${l.code === now}" data-act="set-lang" data-v="${l.code}" lang="${l.code === 'zh' ? 'zh-Hans' : l.code}"><span>${l.label}</span>${l.code === now ? Icon('check', { size: 16 }) : ''}</button>`).join('')}`;
+  }
 }
 
 function footerHTML() {
@@ -4194,6 +4199,7 @@ const ACTIONS = {
   },
   'toggle-notifications': (el) => togglePopover('notifications', el),
   'toggle-menu': (el) => togglePopover('menu', el),
+  'toggle-lang': (el) => togglePopover('lang-menu', el),
 };
 
 document.addEventListener('click', (e) => {
