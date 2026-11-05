@@ -9,6 +9,7 @@ import { battleResult, expectedScore } from '../src/core/elo.js';
 import { buildSeedWorld } from '../src/core/seed.js';
 import { seedSQL, setupSQL } from '../scripts/gen-seed-sql.js';
 import { memberBoards } from '../src/core/leaderboards.js';
+import { battleStreak, seasonWindow } from '../src/core/streak.js';
 import { sampleCatalog, snapshotToCommunity } from '../src/core/community.js';
 import { artworkInfluence } from '../src/core/scoring.js';
 import { PLANS } from '../src/core/plans.js';
@@ -1487,6 +1488,87 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.equal(psql(`select string_agg(edition_number::text, ',' order by edition_number) from orders where artwork_id = '${w}'`), '1,2');
     fails(E, `select set_edition('${w}', null)`, /have been sold/);
     psql('update app_settings set sales_enabled = false');
+  });
+
+  // ——— 0018: seasons, medium leagues, Art Battle streaks ———
+  const seasonReference = (me, opts) => {
+    const profiles = JSON.parse(psql(`select json_agg(json_build_object('id', id, 'name', name, 'country', country, 'role', role, 'public', public_leaderboards)) from profiles`));
+    const reactions = JSON.parse(psql(`select coalesce(json_agg(json_build_object('user', r.user_id, 'artwork', r.artwork_id, 'kind', r.kind, 'role', r.role, 'medium', a.category,
+      'at', (extract(epoch from r.created_at) * 1000000)::bigint, 'time', (extract(epoch from r.created_at) * 1000)::float8)), '[]')
+      from reactions r join artworks a on a.id = r.artwork_id where not r.excluded and (a.owner_id is null or a.owner_id <> r.user_id)`));
+    const reviews = JSON.parse(psql(`select coalesce(json_agg(json_build_object('user', v.user_id, 'rating', v.rating, 'medium', a.category, 'time', (extract(epoch from v.created_at) * 1000)::float8)), '[]')
+      from reviews v join artworks a on a.id = v.artwork_id where a.owner_id is null or a.owner_id <> v.user_id`));
+    return memberBoards({ profiles, reactions, reviews }, { me, ...opts });
+  };
+  const monthStart = (offset) => psql(`select (date_trunc('month', now() at time zone 'utc') + interval '${offset} month')::date`);
+  const windowOf = (day) => seasonWindow(`${day}T00:00:00Z`);
+
+  await t.test('seasons and medium leagues: the same boards counted within a month or a medium, identical to the JavaScript reference', () => {
+    const last = monthStart(-1), now = monthStart(0);
+    psql(`update reactions set created_at = '${last}'::date + interval '3 days' + (random() * interval '1 hour') where user_id in ('${L[2]}', '${L[3]}')`);
+    for (const who of ['anon', L[3]]) {
+      const me = who === 'anon' ? null : who;
+      assert.deepEqual(boards(who, `p_season => '${now}'`), seasonReference(me, { season: windowOf(now) }));
+      assert.deepEqual(boards(who, `p_season => '${last}'`), seasonReference(me, { season: windowOf(last) }));
+      assert.deepEqual(boards(who, `p_medium => 'oil'`), seasonReference(me, { medium: 'oil' }));
+      assert.deepEqual(boards(who, `p_season => '${last}', p_medium => 'oil'`), seasonReference(me, { season: windowOf(last), medium: 'oil' }));
+    }
+    const name = (id) => psql(`select name from profiles where id = '${id}'`);
+    assert.ok(boards('anon', `p_season => '${last}'`).discoverers.some((r) => r.name === name(L[3])), 'last month’s discoverer is on last month’s board');
+    assert.ok(!boards('anon', `p_season => '${now}'`).discoverers.some((r) => r.name === name(L[3])), 'and not on this month’s');
+    assert.ok(!boards('anon', `p_season => '${last}'`).discoverers.some((r) => r.name === name(L[2])), 'opted-out members stay hidden');
+    assert.ok(boards(L[2], `p_season => '${last}'`).me.discoverers.rank >= 1, 'but see their own standing');
+    assert.deepEqual(boards('anon', `p_season => '${monthStart(-6)}'`).discoverers, [], 'a quiet season is empty');
+    assert.ok(boards('anon', `p_medium => 'sculpture'`).discoverers.length <= boards('anon').discoverers.length);
+  });
+
+  await t.test('closing a season freezes its top 10 once, as permanent achievements; finished seasons only; public members only', () => {
+    const last = monthStart(-1);
+    fails('anon', `select close_season('${last}')`, /permission denied/);
+    fails(L[3], `select close_season('${last}')`, /permission denied/);
+    assert.throws(() => psql(`select close_season('${monthStart(0)}')`), (e) => /hasn’t finished/.test(String(e.stderr)));
+    assert.ok(Number(psql(`select close_season('${last}')`)) > 0);
+    assert.equal(psql(`select close_season('${last}')`), '0', 'only once');
+    const label = psql(`select to_char('${last}'::date, 'FMMonth YYYY')`);
+    const mine = JSON.parse(as(L[3], `select json_agg(label) from my_achievements()`));
+    assert.ok(mine.includes(`Top 10 Discoverer · ${label}`), mine.join());
+    assert.equal(psql(`select count(*) from season_results where user_id = '${L[2]}'`), '0', 'opted-out members aren’t awarded');
+    assert.equal(as(L[3], 'select count(*) > 0 from season_results'), 't');
+    noRowsFor(L[4], `select count(*) from season_results where user_id = '${L[3]}'`);
+    noRowsFor(L[3], `with u as (insert into season_results (season, board, user_id, rank, score) values ('2020-01-01', 'critics', '${L[3]}', 1, 1) returning 1) select count(*) from u`);
+    assert.match(as(L[3], `select title from notifications where kind = 'season' limit 1`), /You finished No\. \d+ among Top Discoverers/);
+    assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname in ('season_boards', 'member_leaderboards', 'close_season', 'battle_streak') and p.prosrc ~* '(subscriptions|current_plan|plans\\b|plan_badges)'`), '', 'seasons never read plans');
+  });
+
+  await t.test('Art Battle streaks: a vote a day, one missed day a week forgiven, milestones at 7, 30 and 100 days', () => {
+    const [x, y] = seed.artworks.slice(0, 2).map((w) => w.id);
+    const vote = (who, daysAgo) => psql(`insert into battle_votes (user_id, winner_id, loser_id, role, gain, loss, created_at)
+      values ('${who}', '${x}', '${y}', 'fan', 1, 1, date_trunc('day', now() at time zone 'utc') at time zone 'utc' - interval '${daysAgo} days' + interval '12 hours')`);
+    const streak = (who) => JSON.parse(as(who, 'select my_battle_streak()'));
+    const reference = (who) => battleStreak(JSON.parse(psql(`select coalesce(json_agg(created_at), '[]') from battle_votes where user_id = '${who}'`)), Date.parse(psql(`select to_json(now())#>>'{}'`)));
+    fails('anon', 'select my_battle_streak()', /Sign in first|permission denied/);
+    fails(L[4], `select battle_streak('${L[5]}')`, /permission denied/);
+    assert.deepEqual(streak(L[4]), { current: 0, best: 0, today: false, grace_used: false });
+    for (const d of [10, 9, 8, 7, 6, 4, 3, 2, 1]) vote(L[4], d); // missed 5 days ago: forgiven
+    assert.deepEqual(streak(L[4]), { current: 9, best: 9, today: false, grace_used: true });
+    assert.deepEqual(streak(L[4]), reference(L[4]));
+    assert.match(as(L[4], `select string_agg(code, ',') from my_achievements()`), /streak_7/);
+    assert.doesNotMatch(as(L[4], `select string_agg(code, ',') from my_achievements()`), /streak_30/);
+    for (const d of [20, 19, 18, 16, 15, 13]) vote(L[5], d); // two misses within a week: ends at the second
+    vote(L[5], 0);
+    const s = streak(L[5]);
+    assert.deepEqual(s, reference(L[5]));
+    assert.deepEqual([s.current, s.best, s.today], [1, 5, true]);
+    assert.doesNotMatch(as(L[5], `select coalesce(string_agg(code, ','), '') from my_achievements()`), /streak_/);
+  });
+
+  await t.test('0018 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0018_down.sql'));
+    assert.equal(psql(`select count(*) from pg_proc where proname in ('season_boards', 'close_season', 'battle_streak')`), '0');
+    assert.ok(JSON.parse(as('anon', 'select member_leaderboards()::text')).discoverers);
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from pg_proc where proname in ('season_boards', 'close_season', 'battle_streak')`), '3');
   });
 
   await t.test('0017 can be undone, and setup.sql re-applies it', () => {

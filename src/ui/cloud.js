@@ -96,8 +96,15 @@ export async function createSupabaseCloud(url, key) {
     },
 
     /** Top Collectors, Critics and Discoverers (display names and scores only). */
-    async leaderboards(country = null) {
-      return check(await sb.rpc('member_leaderboards', { p_country: country, p_limit: 50 }));
+    async leaderboards(country = null, { season = null, medium = null } = {}) {
+      const args = { p_country: country, p_limit: 50 };
+      if (season) args.p_season = season;
+      if (medium) args.p_medium = medium;
+      return check(await sb.rpc('member_leaderboards', args));
+    },
+    /** Your daily Art Battle streak: { current, best, today, grace_used }. */
+    async myBattleStreak() {
+      return user ? check(await sb.rpc('my_battle_streak')) : null;
     },
 
     async snapshot() {

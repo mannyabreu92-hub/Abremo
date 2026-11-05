@@ -6,6 +6,7 @@ window.__abremiCloud = async () => {
   const { buildSeedWorld } = await import('/src/core/seed.js');
   const { battleResult, expectedScore } = await import('/src/core/elo.js');
   const { memberBoards } = await import('/src/core/leaderboards.js');
+  const { battleStreak, seasonWindow } = await import('/src/core/streak.js');
   const { PLANS } = await import('/src/core/plans.js');
   let clock = Date.now();
   const tick = () => ++clock;
@@ -239,14 +240,20 @@ window.__abremiCloud = async () => {
       p.role = 'fan';
       save(db);
     },
-    async leaderboards(country = null) {
+    async leaderboards(country = null, { season = null, medium = null } = {}) {
       await wait();
       const db = load();
+      const mediumOf = (id) => db.uploads.find((u) => u.id === id)?.category || seed.artworks.find((w) => w.id === id)?.category || null;
       return memberBoards({
         profiles: Object.values(db.profiles).map((p) => ({ id: p.id, name: p.name, country: p.country, role: p.role, public: p.public_leaderboards !== false })),
-        reactions: db.reactions.map((r) => ({ user: r.user_id, artwork: r.artwork_id, kind: r.kind, role: r.role, at: r.at || 0 })),
-        reviews: db.reviews.map((r) => ({ user: r.user_id, rating: r.rating })),
-      }, { me: user?.id || null, country });
+        reactions: db.reactions.map((r) => ({ user: r.user_id, artwork: r.artwork_id, kind: r.kind, role: r.role, at: r.at || 0, time: r.time ?? Date.now(), medium: mediumOf(r.artwork_id) })),
+        reviews: db.reviews.map((r) => ({ user: r.user_id, rating: r.rating, time: Date.parse(r.created_at) || Date.now(), medium: mediumOf(r.artwork_id) })),
+      }, { me: user?.id || null, country, season: season ? seasonWindow(`${season}T00:00:00Z`) : null, medium: medium || null });
+    },
+    async myBattleStreak() {
+      await wait();
+      if (!user) return null;
+      return battleStreak(load().votes.filter((v) => v.user_id === user.id).map((v) => v.time || Date.now()));
     },
     async profile() { needUser(); const db = load(); const isNew = !db.profiles[user.id]; const p = profileOf(db, user.id); if (isNew) save(db); return p; },
     async mine() {
@@ -266,7 +273,7 @@ window.__abremiCloud = async () => {
       if (existing && kind) Object.assign(existing, { kind, role: profileOf(db, user.id).role }); // an update keeps any exclusion
       else {
         db.reactions = db.reactions.filter((r) => r !== existing);
-        if (kind) db.reactions.push({ user_id: user.id, artwork_id, kind, role: profileOf(db, user.id).role, at: tick() });
+        if (kind) db.reactions.push({ user_id: user.id, artwork_id, kind, role: profileOf(db, user.id).role, at: tick(), time: Date.now() });
       }
       save(db);
     },
@@ -292,7 +299,9 @@ window.__abremiCloud = async () => {
       const wr = db.ratings[w] ?? baseElo[w] ?? 1200, lr = db.ratings[l] ?? baseElo[l] ?? 1200;
       const r = battleResult(wr, lr, role);
       db.ratings[w] = r.winner; db.ratings[l] = r.loser;
-      db.votes.push({ user_id: user.id, w, l, role });
+      db.votes.push({ user_id: user.id, w, l, role, time: Date.now() });
+      const best = battleStreak(db.votes.filter((v) => v.user_id === user.id).map((v) => v.time || Date.now())).best;
+      for (const n of [7, 30, 100]) if (best >= n) award(db, user.id, `streak_${n}`, { days: best });
       save(db);
       return { winner_rating: r.winner, loser_rating: r.loser, gain: r.gain, loss: r.loss, crowd: Math.round(expectedScore(wr, lr) * 100) };
     },
@@ -436,6 +445,7 @@ window.__abremiCloud = async () => {
       return [
         { code: 'first_discovery', audience: 'member', label: 'First Discovery', criteria: 'Liked or saved your first work.', sort: 10 },
         { code: 'master_curator', audience: 'member', label: 'Master Curator', criteria: 'Built 3 collections with at least 5 works each.', sort: 30 },
+        { code: 'streak_7', audience: 'member', label: 'Art Battle Streak · 7 days', criteria: 'Voted in the Art Battle 7 days running (one missed day a week is forgiven).', sort: 70 },
         { code: 'first_work', audience: 'artist', label: 'First Work', criteria: 'Published a first work on Abremi.', sort: 100 },
         { code: 'first_entry', audience: 'artist', label: 'First Entry', criteria: 'Entered a first Arena competition or Creative Challenge.', sort: 150 },
         { code: 'podium_finish', audience: 'artist', label: 'Podium Finish', criteria: 'Placed in the top 3 of an Arena competition or Creative Challenge.', sort: 160 },

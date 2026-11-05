@@ -14,9 +14,12 @@ export const BOARDS = ['collectors', 'critics', 'discoverers'];
  * For each like or Treasure: ln(1 + weight of the likes that came after yours) / (1 + weight of those before).
  * Later likes are weighted by role (fan 1 … collector 9), so throwaway accounts barely move it.
  * reactions: [{ user, artwork, kind, role, at }] — `at` orders reactions on the same artwork.
+ * `counts` picks which reactions earn credit (a season); the others still order the rest.
  * Returns Map(user → { score, discoveries }), score null below MIN_DISCOVERIES.
+ * @param {any[]} reactions
+ * @param {(r: any) => boolean} [counts]
  */
-export function discoveryScores(reactions) {
+export function discoveryScores(reactions, counts = () => true) {
   const byArtwork = new Map();
   for (const r of reactions) {
     if (r.kind !== 'like' && r.kind !== 'super') continue;
@@ -30,6 +33,7 @@ export function discoveryScores(reactions) {
     let before = 0;
     for (const r of list) {
       const after = total - before - w(r.role);
+      if (!counts(r)) { before += w(r.role); continue; }
       const cur = raw.get(r.user) || { sum: 0, n: 0 };
       cur.sum += Math.log(1 + after) / (1 + before);
       cur.n += 1;
@@ -47,10 +51,18 @@ export function discoveryScores(reactions) {
 /**
  * All three boards. profiles: [{ id, name, country, role, public }]; reviews: [{ user, rating }].
  * Only public members appear, plus the viewer (`me`), who always sees their own standing.
+ * A season ({ from, to } in ms; reactions and reviews then need `time`) counts only what was done
+ * within it; discovery credit comes from weight that arrived before its end. A medium (reactions and
+ * reviews then need `medium`) counts only works of that medium.
  */
-export function memberBoards({ profiles, reactions, reviews }, { me = null, country = null, limit = 50 } = {}) {
+export function memberBoards({ profiles, reactions: all, reviews: allReviews }, { me = null, country = null, limit = 50, season = null, medium = null } = {}) {
+  const inMedium = (r) => !medium || r.medium === medium;
+  const reactions = all.filter((r) => inMedium(r) && (!season || r.time < season.to));
+  const inSeason = (r) => !season || r.time >= season.from;
+  const reviews = allReviews.filter((r) => inMedium(r) && inSeason(r) && (!season || r.time < season.to));
   const contrib = new Map();
   for (const r of reactions) {
+    if (!inSeason(r)) continue;
     const pts = r.kind === 'like' ? w(r.role) : r.kind === 'super' ? 2 * w(r.role) : 0;
     const key = `${r.user}|${r.role}`;
     contrib.set(key, (contrib.get(key) || 0) + pts);
@@ -60,7 +72,7 @@ export function memberBoards({ profiles, reactions, reviews }, { me = null, coun
     reviewPts.set(r.user, (reviewPts.get(r.user) || 0) + 2 * r.rating);
     reviewCount.set(r.user, (reviewCount.get(r.user) || 0) + 1);
   }
-  const disc = discoveryScores(reactions);
+  const disc = discoveryScores(reactions, inSeason);
   const rows = { collectors: [], critics: [], discoverers: [] };
   for (const p of profiles) {
     if (!(p.public || p.id === me) || (country && p.country !== country)) continue;

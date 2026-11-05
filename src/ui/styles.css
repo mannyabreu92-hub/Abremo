@@ -1520,3 +1520,10 @@ div.rank-row:hover { background: transparent; }
 .join-list p { margin: 4px 0 0; color: var(--text-2); font-size: 14.5px; line-height: 1.5; }
 .join-icon { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: var(--abremi-gold); border: 1px solid var(--abremi-border-gold); }
 .join-steps { padding-left: 20px; display: grid; gap: 8px; color: var(--text-2); margin: 0 0 18px; }
+
+/* Seasons and leagues */
+.league-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 10px; }
+.league-row .pill-row { margin: 0; }
+.league-medium select { height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface, #111); color: inherit; font: inherit; font-size: 14px; }
+.streak-panel .influence-total small { font-size: 16px; color: var(--muted); margin-left: 4px; }
+.streak-slot { display: contents; }
