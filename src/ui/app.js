@@ -1,3 +1,4 @@
+import { seasonName, STREAK_MILESTONES } from '../core/streak.js';
 import { buildSeedWorld, CATEGORIES, STYLES, COUNTRIES, PALETTES, CURRENT_YEAR, categoryById, countryByCode } from '../core/seed.js';
 import { ROLES, ROLE_WEIGHTS, SAVE_MULTIPLIER, influenceBreakdown, emptyRoleCounts } from '../core/scoring.js';
 import { battleResult, expectedScore, pickBattlePair, kFactor, LOSS_FACTOR, START_RATING } from '../core/elo.js';
@@ -78,7 +79,7 @@ let deck = [];
 const discover = { category: '' };
 let battlePair = null;
 let battleOutcome = null; // { winner: index, res, crowd }
-const charts = { tab: 'global', expanded: '', country: '', category: '', memberCountry: '' };
+const charts = { tab: 'global', expanded: '', country: '', category: '', memberCountry: '', memberSeason: '', memberMedium: '' };
 const explore = { category: '', style: '', country: '', sort: 'trending', limit: 24 };
 const artistsView = { country: '', category: '', limit: 24 };
 const homeFeed = { category: '', mode: 'trending' };
@@ -403,9 +404,33 @@ async function loadAchievements() {
     ]);
     if (defs) serverAchievements.defs = Object.fromEntries(defs.map((d) => [d.code, { label: d.label, desc: d.criteria, audience: d.audience }]));
     serverAchievements.earned = earned || [];
+    // Season places are defined when a season closes: take their labels from what you earned.
+    for (const a of serverAchievements.earned) if (a.label && !serverAchievements.defs[a.code]) serverAchievements.defs[a.code] = { label: a.label, desc: a.criteria, audience: a.audience || 'member' };
+    if (me) loadStreak();
     if (me) checkAchievements();
   } catch { /* older database without achievements: nothing to show */ }
 }
+// ——— Art Battle streak (community mode; computed by the server) ———
+let myStreak = null;
+async function loadStreak() {
+  if (!cloud?.myBattleStreak || !me) return;
+  try { myStreak = await cloud.myBattleStreak(); } catch { myStreak = null; return; }
+  const slot = $('#streak-slot'); // update in place: a full re-render would wipe forms on the page
+  if (slot) slot.innerHTML = streakCardHTML();
+}
+function streakCardHTML() {
+  if (!COMMUNITY || !me || !myStreak) return '';
+  const s = myStreak;
+  const next = STREAK_MILESTONES.find((n) => n > s.best);
+  const note = s.current && !s.today ? 'Vote today to keep it going.' : s.today ? 'You’ve voted today.' : 'Vote in the Art Battle to start one.';
+  return `<section class="panel streak-panel">
+    <p class="eyebrow">Art Battle streak</p>
+    <p class="influence-total">${s.current}<small> day${s.current === 1 ? '' : 's'}</small></p>
+    <p class="muted">${esc(note)} Best: ${s.best} day${s.best === 1 ? '' : 's'}.${next ? ` Next milestone: ${next} days.` : ''}</p>
+    <p class="fine">One vote a day (UTC) keeps it going; one missed day a week is forgiven${s.grace_used ? ', and you’ve used this week’s' : ''}.</p>
+  </section>`;
+}
+
 /** { code: { label, desc } } for the achievements this mode uses. */
 const achievementCatalog = () => (COMMUNITY ? serverAchievements.defs || {} : ACHIEVEMENTS);
 
@@ -1671,6 +1696,7 @@ function vote(i) {
         state.community.elo[winner.id] = r.winner_rating;
         state.community.elo[loser.id] = r.loser_rating;
         commit();
+        if (!myStreak?.today) loadStreak();
       })
       .catch((e) => {
         state.community.elo[winner.id] = wr;
@@ -1759,17 +1785,20 @@ function rankRow(r, kind, previous, { elo = false } = {}) {
 }
 
 // ——— Member leaderboards (computed by the server; display names and scores only) ———
-const memberCache = new Map(); // scope → { at, data, loading, error }
+const memberCache = new Map(); // "country|season|medium" → { at, data, loading, error }
+const monthStart = (offset = 0) => { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + offset, 1)).toISOString().slice(0, 10); };
+const memberKey = () => `${charts.memberCountry || 'world'}|${charts.memberSeason || ''}|${charts.memberMedium || ''}`;
 
-async function loadMembers(scope) {
-  const prev = memberCache.get(scope);
+async function loadMembers(key) {
+  const prev = memberCache.get(key);
   if (prev?.loading || !cloud) return;
-  memberCache.set(scope, { ...prev, loading: true });
+  memberCache.set(key, { ...prev, loading: true });
+  const [scope, season, medium] = key.split('|');
   try {
-    const data = await cloud.leaderboards(scope === 'world' ? null : scope);
-    memberCache.set(scope, { at: Date.now(), data, loading: false });
+    const data = await cloud.leaderboards(scope === 'world' ? null : scope, { season: season || null, medium: medium || null });
+    memberCache.set(key, { at: Date.now(), data, loading: false });
   } catch (e) {
-    memberCache.set(scope, { ...prev, at: Date.now(), loading: false, error: e?.message || 'Leaderboards are unavailable right now.' });
+    memberCache.set(key, { ...prev, at: Date.now(), loading: false, error: e?.message || 'Leaderboards are unavailable right now.' });
   }
   if (currentView() === 'charts' && charts.tab === 'members' && !sheetRenderer) renderView();
 }
@@ -1796,18 +1825,27 @@ function membersBoardsHTML() {
       action: '<a class="btn btn-secondary" href="#profile"><span>See your Taste Score</span></a>' })}</section>`;
   }
   const scope = charts.memberCountry || 'world';
-  const entry = memberCache.get(scope);
-  if (!entry || (!entry.loading && Date.now() - entry.at > 60_000)) setTimeout(() => loadMembers(scope), 0);
+  const season = charts.memberSeason || '';
+  const medium = charts.memberMedium || '';
+  const key = memberKey();
+  const entry = memberCache.get(key);
+  if (!entry || (!entry.loading && Date.now() - entry.at > 60_000)) setTimeout(() => loadMembers(key), 0);
   const country = state.user.country;
+  const seasons = [['', 'All time'], [monthStart(0), seasonName(monthStart(0)).split(' ')[0]], [monthStart(-1), seasonName(monthStart(-1)).split(' ')[0]]];
   const pills = `<div class="chip-row pill-row" role="tablist" aria-label="Region">
     <button class="chip${scope === 'world' ? ' is-on' : ''}" role="tab" aria-selected="${scope === 'world'}" data-act="members-scope" data-v="">Worldwide</button>
-    <button class="chip${scope === country ? ' is-on' : ''}" role="tab" aria-selected="${scope === country}" data-act="members-scope" data-v="${country}">${flag(country)} ${esc(countryName(country))}</button></div>`;
+    <button class="chip${scope === country ? ' is-on' : ''}" role="tab" aria-selected="${scope === country}" data-act="members-scope" data-v="${country}">${flag(country)} ${esc(countryName(country))}</button></div>
+    <div class="league-row">
+      <div class="chip-row pill-row" role="tablist" aria-label="Season">${seasons.map(([v, label]) => `<button class="chip${season === v ? ' is-on' : ''}" role="tab" aria-selected="${season === v}" data-act="members-season" data-v="${v}">${esc(label)}</button>`).join('')}</div>
+      <label class="league-medium"><span class="sr-only">Medium</span><select id="members-medium" aria-label="Medium league">
+        <option value="">All media</option>${CATEGORIES.map((c) => `<option value="${c.id}"${medium === c.id ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}</select></label>
+    </div>`;
   if (!entry?.data) {
     return `${pills}${entry?.error ? EmptyState({ title: 'Leaderboards are unavailable', body: entry.error, action: PremiumButton('Try again', { act: 'members-retry', variant: 'secondary' }) }) : LoadingSkeleton({ cards: 5, variant: 'list' })}`;
   }
   const d = entry.data;
   const standing = me ? `<section class="standing">
-      <p class="eyebrow">Your standing${scope === 'world' ? ' worldwide' : ` in ${esc(countryName(scope))}`}</p>
+      <p class="eyebrow">Your standing${scope === 'world' ? ' worldwide' : ` in ${esc(countryName(scope))}`}${medium ? ` · ${esc(categoryById[medium]?.label || medium)}` : ''}${season ? ` · ${esc(seasonName(season))}` : ''}</p>
       <div class="standing-grid">${['discoverers', 'collectors', 'critics'].map((k) => [k, MEMBER_BOARDS[k]]).map(([k, b]) => {
         const s = d.me?.[k];
         return `<div class="standing-item${s ? ' is-ranked' : ''}"><small>${b.title.replace('Top ', '')}</small>
@@ -1821,7 +1859,7 @@ function membersBoardsHTML() {
       ${rows.length ? `<ol class="rank-list">${rows.map(memberRow).join('')}</ol>` : `<p class="board-note">Nobody here yet. ${esc(MEMBER_BOARDS[k].qualify)}</p>`}</section>`;
   };
   return `${pills}${standing}${board('discoverers')}${board('collectors')}${board('critics')}
-    <p class="fine explainer"><b>Discovery Score</b> rewards liking work before others do: the more weight (Fan 1 … Collector 9) that arrives after you, and the earlier you were, the higher it climbs. <b>Collectors</b> and <b>critics</b> are ranked by the influence they have added in that role; critics’ reviews count too. Members appear by display name only and can opt out in their profile. ${fmt(d.members || 0)} member${d.members === 1 ? '' : 's'} on the boards.</p>`;
+    <p class="fine explainer"><b>Seasons</b> run for a calendar month (UTC) and count only what members did that month; on the 1st, each board’s top 10 is frozen and becomes a permanent achievement. <b>Leagues</b> narrow the boards to a country or a medium. <b>Discovery Score</b> rewards liking work before others do: the more weight (Fan 1 … Collector 9) that arrives after you, and the earlier you were, the higher it climbs. <b>Collectors</b> and <b>critics</b> are ranked by the influence they have added in that role; critics’ reviews count too. Members appear by display name only and can opt out in their profile. ${fmt(d.members || 0)} member${d.members === 1 ? '' : 's'} on the boards.</p>`;
 }
 
 /** Cultural Influence by Country. Community mode lists only countries with real activity. */
@@ -1910,6 +1948,7 @@ function renderCharts(root) {
     ${COMMUNITY ? `<button class="link-arrow how-ranked" data-act="how-ranked">${Icon('info', { size: 14 })} How rankings work</button>` : ''}
     <p class="fine explainer"><b>Score</b> is popularity: every like weighted by who gave it (Fan 1, Artist 3, Critic 5, Collector 9; Treasures count ×${SAVE_MULTIPLIER}). <b>Credible</b> is the share of that score from critics and collectors. Rankings are organic: nobody can pay to move them.</p>
   </div>`;
+  $('#members-medium', root)?.addEventListener('change', (e) => { charts.memberMedium = e.target.value; renderView(); });
 }
 
 // ——— Explore ———
@@ -2259,6 +2298,7 @@ function renderProfile(root) {
 
     <div class="dash-grid profile-culture">
       ${tasteCardHTML(myTaste())}
+      <div id="streak-slot" class="streak-slot">${streakCardHTML()}</div>
       <section class="panel influence-panel">
         <p class="eyebrow">Cultural Influence</p>
         <p class="influence-total">${fmt(personalInfluence(state.interactions, state.interactionRoles, state.reviews))}</p>
@@ -2270,7 +2310,7 @@ function renderProfile(root) {
       ${SectionHeader({ eyebrow: 'Recognition', title: 'Achievements' })}
       <div class="achievement-grid">${(() => {
         const earned = new Set(myAchievements());
-        return Object.entries(achievementCatalog()).filter(([k, a]) => !COMMUNITY || a.audience === 'member' || state.user.role === 'artist' || earned.has(k)).map(([k, a]) => `<div class="achievement-card${earned.has(k) ? ' is-earned' : ''}">
+        return Object.entries(achievementCatalog()).filter(([k, a]) => earned.has(k) || (!k.startsWith('season_') && (!COMMUNITY || a.audience === 'member' || state.user.role === 'artist'))).map(([k, a]) => `<div class="achievement-card${earned.has(k) ? ' is-earned' : ''}">
           <span class="achievement-mark">${earned.has(k) ? AbremiSymbol(18) : Icon('lock', { size: 16 })}</span>
           <b>${esc(a.label)}</b><small>${esc(a.desc)}</small></div>`).join('');
       })()}</div>
@@ -3638,7 +3678,8 @@ const ACTIONS = {
     } catch (e) { toast(e?.message || 'Could not update the flag.', { force: true }); }
   },
   'members-scope': (el) => { charts.memberCountry = el.dataset.v; renderView(); },
-  'members-retry': () => { memberCache.delete(charts.memberCountry || 'world'); renderView(); },
+  'members-retry': () => { memberCache.delete(memberKey()); renderView(); },
+  'members-season': (el) => { charts.memberSeason = el.dataset.v; renderView(); },
   'chart-expand': (el) => { charts.expanded = charts.expanded === el.dataset.v ? '' : el.dataset.v; renderView(); },
   'chart-country': (el) => { Object.assign(charts, { tab: 'countries', country: el.dataset.v, expanded: '' }); renderView(); window.scrollTo(0, 0); },
   'charts-goto': (el) => { Object.assign(charts, { tab: el.dataset.v, country: '', expanded: '' }); location.hash = 'charts'; },

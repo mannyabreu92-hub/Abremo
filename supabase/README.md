@@ -16,6 +16,8 @@ Abremi runs in two modes:
 | `migrations/0004_role_applications.sql` | Critic & Collector applications, the admin list, and the review functions |
 | `migrations/0006_profiles_artworks_collections.sql` | Audit trail, artist profiles, artwork details (description, size, availability), collections; the shared catalog starts every work at the same battle rating |
 | `migrations/down/0006_down.sql` | Undoes 0006 (drops its tables and columns, with their data, and restores the earlier functions). Not part of `setup.sql` |
+| `migrations/0018_seasons.sql` | Seasons (monthly boards, frozen top 10 as achievements, pg_cron on the 1st), medium leagues, and daily Art Battle streaks |
+| `migrations/down/0018_down.sql` | Undoes 0018 |
 | `migrations/0017_checkout.sql` | Checkout (off until switched on): payout accounts, orders, 20% commission, editions, shipping and disputes, verified sales on the Passport |
 | `migrations/down/0017_down.sql` | Undoes 0017 |
 | `migrations/0016_index.sql` | The Abremi Index: weekly frozen charts (pg_cron every Monday 00:17 UTC), the archive, and artists' badges |
@@ -134,6 +136,12 @@ To switch on (test mode first):
 5. As an artist: Orders → Set up payouts (Stripe's test onboarding). As another member: buy with a test card (`4242 4242 4242 4242`), then ship, confirm delivery and try a refund.
 
 To switch off at any time: `update app_settings set sales_enabled = false;`
+
+## Seasons and streaks
+Migration `0018_seasons.sql` adds:
+- `member_leaderboards(p_country, p_limit, p_season, p_medium)`: pass any date in a month as `p_season` for that month's boards, and a medium id (`oil`, `sculpture`, …) as `p_medium`.
+- `close_season(date)`: freezes a finished month's top 10 per board into `season_results` and awards the achievements. pg_cron runs it at 00:23 UTC on the 1st (`abremi-season-close`). Running it again for the same month changes nothing. To close a month by hand: `select close_season('2026-11-01');` (only for finished months).
+- `my_battle_streak()`: the signed-in member's daily Art Battle streak. Milestone achievements (7, 30, 100 days) are awarded as votes arrive.
 
 ## Beta testing
 

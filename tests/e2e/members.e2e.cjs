@@ -92,6 +92,35 @@ const step = (name) => console.log(`✓ ${name}`);
   assert.ok(!(await page.locator('.charts').textContent()).includes('Isabel Marte'), 'country filter');
   step('country filter');
 
+  // Seasons and medium leagues
+  await page.click('[data-act=members-scope][data-v=""]');
+  await page.waitForSelector('[data-act=members-scope][data-v=""].is-on');
+  const seasons = page.locator('[data-act=members-season]');
+  assert.equal(await seasons.count(), 3);
+  await seasons.nth(2).click(); // last month: nothing happened then
+  await page.waitForSelector('[data-act=members-season].is-on >> nth=0');
+  await page.waitForFunction(() => /Nobody here yet/.test(document.querySelector('.board')?.textContent || ''));
+  await seasons.nth(1).click(); // this month
+  await page.waitForFunction(() => document.querySelector('.board .rank-list li.is-me'));
+  assert.match(await page.locator('.standing .eyebrow').textContent(), /worldwide · [A-Z][a-z]+ \d{4}/);
+  await page.selectOption('#members-medium', 'sculpture');
+  await page.waitForFunction(() => /Sculpture/.test(document.querySelector('.standing .eyebrow')?.textContent || ''));
+  assert.equal(await page.locator('#members-medium').inputValue(), 'sculpture');
+  await page.selectOption('#members-medium', '');
+  await seasons.nth(0).click();
+  await page.waitForFunction(() => document.querySelector('.board .rank-list li.is-me'));
+  step('seasons (all time, this month, last month) and medium leagues');
+
+  // Art Battle streak on the profile
+  await page.goto(BASE + '#battle');
+  await page.waitForSelector('.vote-btn');
+  await page.locator('.vote-btn').first().click();
+  await page.waitForTimeout(400);
+  await page.goto(BASE + '#profile');
+  await page.waitForSelector('.streak-panel');
+  assert.match(await page.locator('.streak-panel').textContent(), /1 day[\s\S]*voted today[\s\S]*Next milestone: 7 days/);
+  step('a daily Art Battle streak on your profile');
+
   await page.goto(BASE + '#profile');
   await page.uncheck('#public-leaderboards');
   await page.waitForTimeout(200);
