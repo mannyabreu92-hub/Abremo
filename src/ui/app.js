@@ -673,6 +673,7 @@ function renderHome(root) {
     <div class="shell">
       ${welcomed() ? '' : welcomeCardHTML()}
       ${masterpieceHTML(mp)}
+      ${foundingHTML()}
       ${COMMUNITY ? (radar.drops ? dropsSection(radar.drops, { image: storageImage }) : (loadDrops(), '')) : ''}
       ${emergingHTML()}
 
@@ -1139,6 +1140,27 @@ async function loadInbox() {
   if (currentView() === 'inbox' && !sheetRenderer) renderView();
   else { const m = $('#menu-inbox'); const n = radar.list.filter((q) => q.unread).length; if (m) m.textContent = n ? `Inbox (${n})` : 'Inbox'; }
 }
+// ——— Founding artists (chosen by moderators; editorial, never ranked) ———
+const founding = { ids: [], at: 0 };
+async function loadFounding(force = false) {
+  if (!cloud?.foundingArtists || (!force && Date.now() - founding.at < 60_000)) return;
+  founding.at = Date.now();
+  try { founding.ids = (await cloud.foundingArtists()).map((f) => f.artist_id); } catch { return; }
+  if (['home', 'artist', 'join'].includes(currentView()) && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
+}
+const isFounding = (id) => founding.ids.includes(id);
+function foundingHTML() {
+  if (!COMMUNITY) return '';
+  loadFounding();
+  const artists = founding.ids.map((id) => world.artistById[id]).filter(Boolean);
+  if (!artists.length) return '';
+  return `<section class="section founding">
+    ${SectionHeader({ eyebrow: 'Chosen by Abremi', title: 'Founding artists', action: `<a class="link-arrow" href="#join">Become one ${Icon('arrow', { size: 16 })}</a>` })}
+    <p class="muted founding-note">The first artists to show their work on Abremi. Chosen by our team, not ranked: their place in the rankings comes from admirations, like everyone’s.</p>
+    <div class="artist-grid">${artists.map((a) => ArtistCard(a, { cover: coverOf(a.id), following: !!state.follows[a.id], rank: world.globalArtistRanks[a.id], signals: signalChips(a.id) })).join('')}</div>
+  </section>`;
+}
+
 async function loadDrops(force = false) {
   if (!cloud?.drops || (!force && Date.now() - radar.dropsAt < 30_000)) return;
   radar.dropsAt = Date.now();
@@ -2060,7 +2082,9 @@ function renderArtistPage(root) {
             ${IconButton('mail', `Contact ${a.name}`, { act: 'contact', attrs: `data-id="${id}"` })}`}`}
         </div>
         <h1 class="display-md">${esc(a.name)}${member.badges[id] ? ` <span class="plan-badge" title="Artist ${esc(member.badges[id])} member (a plan; it doesn’t affect rankings)">${esc(member.badges[id])}</span>` : ''}</h1>
+        ${COMMUNITY && (loadFounding(), isFounding(id)) ? '<p class="founding-badge"><span class="tag tag-gold" title="Chosen by Abremi to open the platform. It doesn’t affect rankings.">Founding artist</span></p>' : ''}
         ${a.sample ? SampleNote('artist') : ''}
+        ${isAdmin && a.member ? `<button class="link-arrow founding-toggle" data-act="toggle-founding" data-id="${id}" data-v="${isFounding(id) ? '' : '1'}">${Icon('spark', { size: 14 })} ${isFounding(id) ? 'Remove from Founding artists' : 'Make a Founding artist'}</button>` : ''}
         <p class="muted">${esc(categoryById[a.category]?.label || 'Contemporary')} artist • ${a.city ? `${esc(a.city)}, ` : ''}${esc(countryName(a.country))}${a.debutYear ? ` • since ${a.debutYear}` : ''}</p>
         ${a.bio ? `<p class="artist-bio">${esc(a.bio)}</p>` : ''}
         ${a.isMe && a.member ? `<button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Edit your artist profile</button>` : ''}
@@ -3193,6 +3217,16 @@ const ACTIONS = {
   'index-publish': async () => {
     try { await cloud.publishIndex(); idx.cache.clear(); toast('This week’s Index is published.', { force: true }); }
     catch (e) { toast(e?.message || 'Could not publish it.', { force: true }); }
+  },
+  'toggle-founding': async (el) => {
+    const on = el.dataset.v === '1';
+    el.disabled = true;
+    try {
+      await cloud.setFounding(el.dataset.id, on);
+      await loadFounding(true);
+      toast(on ? 'Added to Founding artists.' : 'Removed from Founding artists.', { force: true });
+    } catch (e) { toast(e?.message || 'Could not change that. Try again.', { force: true }); }
+    renderView();
   },
   'tour-open': () => { tourStep = 0; openSheet(() => tourSheet(tourStep)); },
   'tour-next': (el) => { tourStep = Number(el.dataset.v) || 0; refreshSheet(); },
