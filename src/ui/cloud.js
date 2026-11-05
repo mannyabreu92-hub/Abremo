@@ -582,6 +582,17 @@ export async function createSupabaseCloud(url, key) {
     async setFounding(artistId, on) {
       return check(await sb.rpc('admin_set_founding', { p_artist: artistId, p_on: on }));
     },
+    /** Artists whose identity a moderator confirmed: [{ artist_id, managed, since }]. */
+    async verifiedArtists() {
+      return check(await sb.rpc('verified_artists'));
+    },
+    async setVerified(artistId, on, managed = false) {
+      return check(await sb.rpc('admin_set_verified', { p_artist: artistId, p_on: on, p_managed: managed }));
+    },
+    /** A certificate of authenticity by its code (anyone can check one), or null. */
+    async verifyCertificate(code) {
+      return check(await sb.rpc('verify_certificate', { p_code: code }));
+    },
     async artistIndexBadge(artistId) {
       return check(await sb.rpc('artist_index_badge', { p_artist: artistId }));
     },

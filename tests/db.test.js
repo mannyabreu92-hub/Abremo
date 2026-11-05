@@ -1192,7 +1192,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
       where n.nspname = 'public' and p.prosecdef and p.prorettype <> 'trigger'::regtype and has_function_privilege('anon', p.oid, 'execute')`).split(',');
     const PUBLIC_FUNCTIONS = ['app_flags', 'arena', 'artist_achievements', 'artist_passport', 'chart_baseline', 'check_invite', 'community_snapshot',
       'competition_detail', 'drop_detail', 'drops_overview', 'gallery_page', 'log_client_error', 'member_leaderboards', 'opportunities_list',
-      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge', 'artists_accepting_payments', 'founding_artists_list'];
+      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge', 'artists_accepting_payments', 'founding_artists_list', 'verified_artists', 'verify_certificate'];
     const unexpected = anonCan.filter((f) => !PUBLIC_FUNCTIONS.includes(f));
     assert.deepEqual(unexpected, [], 'privileged functions guests can run that aren’t on the public list');
     // Every moderator function checks is_admin() itself (the app hiding a button is not a permission).
@@ -1584,6 +1584,63 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     as(P[1], `select admin_set_founding('m_${E}', false)`);
     assert.deepEqual(list(), []);
     as(P[1], `select admin_set_founding('m_${E}', true)`);
+  });
+
+  // ——— 0020: verified artists and certificates of authenticity ———
+  await t.test('verified artists: moderators confirm identity (optionally family-managed); public; rankings never read it', () => {
+    const list = () => JSON.parse(as('anon', 'select verified_artists()'));
+    fails(B, `select admin_set_verified('m_${E}', true, false)`, /Admins only/);
+    fails('anon', `select admin_set_verified('m_${E}', true, false)`, /permission denied/);
+    fails(P[1], `select admin_set_verified('${seed.artists[0].id}', true, false)`, /member artists/);
+    const before = psql(`select md5(coalesce((select json_agg(x order by x.artist_id)::text from artist_scores() x), '')) || md5(member_leaderboards()::text)`);
+    as(P[1], `select admin_set_verified('m_${E}', true, true)`);
+    assert.deepEqual(list().map((v) => [v.artist_id, v.managed]), [[`m_${E}`, true]]);
+    as(P[1], `select admin_set_verified('m_${E}', true, false)`);
+    assert.equal(list()[0].managed, false, 'can be updated');
+    assert.equal(psql(`select md5(coalesce((select json_agg(x order by x.artist_id)::text from artist_scores() x), '')) || md5(member_leaderboards()::text)`), before, 'verification changes no score');
+    noRowsFor(E, `with u as (insert into artist_verifications (artist_id) values ('m_${B}') returning 1) select count(*) from u`);
+    assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log()`), /artist\.verified/);
+    assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname not in ('verified_artists', 'admin_set_verified', 'verify_certificate') and p.prosrc ~* 'artist_verifications'`), '', 'nothing else reads verifications');
+  });
+
+  await t.test('certificates: every paid sale gets a unique code; anyone can check it; never shows the buyer; void after a refund', () => {
+    const codes = psql(`select string_agg(status || '=' || coalesce(certificate_code, '-'), ' ' order by created_at) from orders`).split(' ');
+    assert.ok(codes.length >= 3);
+    for (const c of codes) {
+      const [status, code] = c.split('=');
+      if (['paid', 'shipped', 'delivered', 'disputed', 'refunded'].includes(status)) assert.match(code, /^ABR-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/, c);
+    }
+    assert.equal(psql(`select count(distinct certificate_code) = count(certificate_code) from orders`), 't', 'unique');
+    const paid = psql(`select certificate_code from orders where status in ('paid', 'shipped', 'delivered') and edition_number is not null order by created_at limit 1`);
+    const cert = JSON.parse(as('anon', `select verify_certificate('${paid.toLowerCase()}')`));
+    assert.equal(cert.code, paid);
+    assert.equal(cert.valid, true);
+    assert.equal(cert.status, 'valid');
+    assert.equal(cert.verified, true, 'shows the verified artist');
+    assert.ok(cert.edition_number >= 1 && cert.edition_size === 2);
+    const text = as('anon', `select verify_certificate('${paid}')::text`);
+    const buyerId = psql(`select buyer_id from orders where certificate_code = '${paid}'`);
+    assert.ok(!text.includes(buyerId), 'never the buyer’s id');
+    assert.ok(!text.includes(psql(`select name from profiles where id = '${buyerId}'`)), 'or name');
+    assert.ok(!/buyer|shipping|example\.com/i.test(text), 'or anything about them');
+    const refunded = psql(`select certificate_code from orders where status = 'refunded' limit 1`);
+    const voided = JSON.parse(as('anon', `select verify_certificate('${refunded}')`));
+    assert.deepEqual([voided.valid, voided.status], [false, 'void']);
+    assert.equal(as('anon', `select verify_certificate('ABR-0000-0000-0000') is null`), 't');
+    const buyer = buyerId;
+    assert.ok(JSON.parse(as(buyer, 'select my_orders()')).purchases.some((o) => o.certificate === paid), 'the buyer has it');
+    assert.ok(JSON.parse(as(E, 'select my_orders()')).sales.some((o) => o.certificate === paid), 'so does the artist');
+    noRowsFor(buyer, `with u as (update orders set certificate_code = 'ABR-FAKE-FAKE-FAKE' returning 1) select count(*) from u`);
+  });
+
+  await t.test('0020 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0020_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.columns where table_name = 'orders' and column_name = 'certificate_code'`), '0');
+    assert.ok(JSON.parse(as(E, 'select my_orders()')).sales.length > 0, 'my_orders still works');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from pg_proc where proname in ('verify_certificate', 'verified_artists', 'admin_set_verified')`), '3');
+    assert.equal(psql(`select count(*) from orders where status in ('paid', 'shipped', 'delivered', 'disputed', 'refunded') and certificate_code is null`), '0', 'codes reissued for past sales');
   });
 
   await t.test('0019 can be undone, and setup.sql re-applies it', () => {

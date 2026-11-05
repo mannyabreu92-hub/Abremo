@@ -42,6 +42,7 @@ function saleCard(o) {
     ${ship ? `<p><b>Ship to:</b> ${esc(ship)}</p>` : ''}
     ${o.tracking ? `<p class="muted">${esc(o.carrier)} ${esc(o.tracking)}</p>` : ''}
     ${o.dispute_reason ? `<p class="notice">${Icon('info', { size: 16 })} Problem reported: ${esc(o.dispute_reason)}${o.dispute_resolution ? ` · Decision: ${esc(o.dispute_resolution)}` : ''}</p>` : ''}
+    ${o.certificate ? `<p><a class="link-arrow" href="#certificate/${esc(o.certificate)}">${Icon('check', { size: 14 })} Certificate of authenticity · ${esc(o.certificate)}</a></p>` : ''}
     ${o.status === 'paid' ? `<div class="field-row"><label class="field"><span>Carrier</span><input id="ship-carrier-${esc(o.id)}" maxlength="60" placeholder="UPS, DHL, USPS…"></label>
         <label class="field"><span>Tracking number</span><input id="ship-tracking-${esc(o.id)}" maxlength="100"></label></div>
         ${PremiumButton('Mark as shipped', { act: 'order-ship', attrs: `data-id="${esc(o.id)}"` })}` : ''}
@@ -55,6 +56,7 @@ function purchaseCard(o) {
     <p class="muted">${esc(amount(o))}${o.artist ? ` · by ${esc(o.artist)}` : ''}</p>
     ${o.tracking ? `<p>${Icon('arrow', { size: 14 })} ${esc(o.carrier)} ${esc(o.tracking)}</p>` : o.status === 'paid' ? '<p class="muted">The artist will ship it and add tracking here.</p>' : ''}
     ${o.dispute_resolution ? `<p class="muted">Decision: ${esc(o.dispute_resolution)}</p>` : ''}
+    ${o.certificate ? `<p><a class="link-arrow" href="#certificate/${esc(o.certificate)}">${Icon('check', { size: 14 })} Certificate of authenticity</a></p>` : ''}
     <div class="detail-actions">
       ${o.status === 'shipped' ? PremiumButton('I received it', { act: 'order-delivered', attrs: `data-id="${esc(o.id)}"` }) : ''}
       ${o.can_dispute ? PremiumButton('Report a problem', { act: 'order-dispute', variant: 'ghost', attrs: `data-id="${esc(o.id)}"` }) : ''}
