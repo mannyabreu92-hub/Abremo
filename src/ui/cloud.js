@@ -575,6 +575,13 @@ export async function createSupabaseCloud(url, key) {
     async indexWeek(week = null, chart = 'overall') {
       return check(await sb.rpc('index_week', { p_week: week, p_chart: chart }));
     },
+    /** Founding artists: [{ artist_id, since }], chosen by moderators (editorial; never ranked). */
+    async foundingArtists() {
+      return check(await sb.rpc('founding_artists_list'));
+    },
+    async setFounding(artistId, on) {
+      return check(await sb.rpc('admin_set_founding', { p_artist: artistId, p_on: on }));
+    },
     async artistIndexBadge(artistId) {
       return check(await sb.rpc('artist_index_badge', { p_artist: artistId }));
     },

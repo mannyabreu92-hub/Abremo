@@ -71,6 +71,26 @@ const step = (name) => console.log(`✓ ${name}`);
   assert.equal(png.readUInt32BE(20), 1350);
   step('artists get a 1080×1350 share card of their work');
 
+  // ——— Founding artists ———
+  await ana.goto(BASE + '#home');
+  await ana.waitForSelector('#view .shell');
+  assert.equal(await ana.locator('.founding').count(), 0, 'no section until someone is chosen');
+  await ana.goto(BASE + '#artist/m_u-ana@example.com');
+  await ana.waitForSelector('.artist-header');
+  assert.equal(await ana.locator('[data-act=toggle-founding]').count(), 0, 'only moderators see the button');
+  await ana.evaluate(() => { const db = window.__mockdb.load(); db.admins = ['u-ana@example.com']; window.__mockdb.save(db); });
+  await ana.reload();
+  await ana.waitForSelector('[data-act=toggle-founding]');
+  await ana.click('[data-act=toggle-founding]');
+  await ana.waitForSelector('.founding-badge');
+  assert.match(await ana.locator('.founding-badge').textContent(), /Founding artist/);
+  await ana.goto(BASE + '#home');
+  await ana.waitForSelector('.founding');
+  const section = await ana.locator('.founding').textContent();
+  assert.match(section, /Founding artists[\s\S]*not ranked/);
+  assert.equal(await ana.locator('.founding .artist-card, .founding [data-act=artist]').count() > 0, true);
+  step('moderators choose Founding artists: a labelled home section and a badge, never ranked');
+
   assert.deepEqual(errors, []);
   console.log('All launch kit e2e checks passed');
   await browser.close();

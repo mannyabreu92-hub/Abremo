@@ -1536,3 +1536,8 @@ div.rank-row:hover { background: transparent; }
 .league-medium select { height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface, #111); color: inherit; font: inherit; font-size: 14px; }
 .streak-panel .influence-total small { font-size: 16px; color: var(--muted); margin-left: 4px; }
 .streak-slot { display: contents; }
+
+/* Founding artists */
+.founding-note { margin: -6px 0 18px; max-width: 640px; font-size: 14px; }
+.founding-badge { margin: 6px 0 4px; }
+.founding-toggle { margin: 4px 0 8px; }

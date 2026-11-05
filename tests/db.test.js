@@ -1192,7 +1192,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
       where n.nspname = 'public' and p.prosecdef and p.prorettype <> 'trigger'::regtype and has_function_privilege('anon', p.oid, 'execute')`).split(',');
     const PUBLIC_FUNCTIONS = ['app_flags', 'arena', 'artist_achievements', 'artist_passport', 'chart_baseline', 'check_invite', 'community_snapshot',
       'competition_detail', 'drop_detail', 'drops_overview', 'gallery_page', 'log_client_error', 'member_leaderboards', 'opportunities_list',
-      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge', 'artists_accepting_payments'];
+      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge', 'artists_accepting_payments', 'founding_artists_list'];
     const unexpected = anonCan.filter((f) => !PUBLIC_FUNCTIONS.includes(f));
     assert.deepEqual(unexpected, [], 'privileged functions guests can run that aren’t on the public list');
     // Every moderator function checks is_admin() itself (the app hiding a button is not a permission).
@@ -1561,6 +1561,36 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.deepEqual(s, reference(L[5]));
     assert.deepEqual([s.current, s.best, s.today], [1, 5, true]);
     assert.doesNotMatch(as(L[5], `select coalesce(string_agg(code, ','), '') from my_achievements()`), /streak_/);
+  });
+
+  // ——— 0019: founding artists ———
+  await t.test('founding artists: moderators choose member artists; everyone can see them; rankings never read the list', () => {
+    const list = (who = 'anon') => JSON.parse(as(who, 'select founding_artists_list()')).map((f) => f.artist_id);
+    assert.deepEqual(list(), []);
+    fails(B, `select admin_set_founding('m_${E}', true)`, /Admins only/);
+    fails('anon', `select admin_set_founding('m_${E}', true)`, /permission denied/);
+    fails(P[1], `select admin_set_founding('${seed.artists[0].id}', true)`, /member artists/);
+    const before = psql(`select md5(coalesce((select json_agg(x order by x.artist_id)::text from artist_scores() x), '')) || md5(member_leaderboards()::text)`);
+    assert.equal(as(P[1], `select admin_set_founding('m_${E}', true)`), 't');
+    as(P[1], `select admin_set_founding('m_${E}', true)`);
+    assert.deepEqual(list(), [`m_${E}`]);
+    assert.deepEqual(list(B), [`m_${E}`]);
+    assert.equal(psql(`select md5(coalesce((select json_agg(x order by x.artist_id)::text from artist_scores() x), '')) || md5(member_leaderboards()::text)`), before, 'featuring changes no score');
+    noRowsFor(E, `with u as (insert into founding_artists (artist_id) values ('m_${B}') returning 1) select count(*) from u`);
+    noRowsFor(E, `with u as (delete from founding_artists returning 1) select count(*) from u`);
+    assert.match(as(P[1], `select string_agg(action, ',') from admin_audit_log()`), /artist\.founding_added/);
+    assert.equal(psql(`select coalesce(string_agg(p.proname, ','), '') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname not in ('founding_artists_list', 'admin_set_founding') and p.prosrc ~* 'founding_artists'`), '', 'nothing else reads the founding list');
+    as(P[1], `select admin_set_founding('m_${E}', false)`);
+    assert.deepEqual(list(), []);
+    as(P[1], `select admin_set_founding('m_${E}', true)`);
+  });
+
+  await t.test('0019 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0019_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.tables where table_schema = 'public' and table_name = 'founding_artists'`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from pg_proc where proname in ('founding_artists_list', 'admin_set_founding')`), '2');
   });
 
   await t.test('0018 can be undone, and setup.sql re-applies it', () => {

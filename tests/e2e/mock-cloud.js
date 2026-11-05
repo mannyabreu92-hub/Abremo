@@ -1250,6 +1250,22 @@ window.__abremiCloud = async () => {
         charts: [...new Set(all.flatMap((w) => ['overall', `medium:${w.category}`, `country:${w.country}`]))],
         artworks: rank(all.filter(inChart)), artists: rank(Object.values(artists)) };
     },
+    async foundingArtists() {
+      await wait();
+      const db = load();
+      const has = (id) => db.uploads.some((u) => u.artist_id === id && !u.hidden && (!u.release_at || Date.parse(u.release_at) <= Date.now()));
+      return (db.founding || []).filter((f) => has(f.artist_id));
+    },
+    async setFounding(artistId, on) {
+      needUser(); await wait();
+      const db = load();
+      if (!(db.admins || []).includes(user.id)) throw new Error('Admins only');
+      if (!artistId.startsWith('m_')) throw new Error('Only member artists can be founding artists');
+      db.founding = (db.founding || []).filter((f) => f.artist_id !== artistId);
+      if (on) db.founding.push({ artist_id: artistId, since: new Date().toISOString() });
+      save(db);
+      return on;
+    },
     async artistIndexBadge(artistId) {
       const d = await this.indexWeek();
       const a = d.artists.find((x) => x.id === artistId);
