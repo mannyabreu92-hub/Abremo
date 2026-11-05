@@ -20,7 +20,16 @@ function loadSupabase() {
 
 const toUser = (session) => (session?.user ? { id: session.user.id, email: session.user.email || '' } : null);
 
-function check({ data, error }) {
+/** The server turned the sign-in away as expired (e.g. the device's clock is behind, so it never refreshed). */
+export const EXPIRED_SESSION = /exp"? claim|jwt expired|token (has |is )?expired|invalid jwt/i;
+
+let onExpired = null; // set by createSupabaseCloud: refreshes the sign-in
+
+export function check({ data, error }) {
+  if (error && EXPIRED_SESSION.test(error.message || '')) {
+    onExpired?.();
+    throw Object.assign(new Error('Your sign-in had expired and has been renewed. Please try again.'), { cause: error });
+  }
   if (error) throw Object.assign(new Error(error.message || 'Request failed'), { cause: error });
   return data;
 }
@@ -31,6 +40,26 @@ export async function createSupabaseCloud(url, key) {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' },
   });
   let user = null;
+
+  // The library refreshes the sign-in by the device's clock. When the server says it has expired
+  // anyway (a clock that is behind, a laptop that slept), refresh it and try once more.
+  const fresh = async (run) => {
+    const first = await run();
+    if (!first?.error || !EXPIRED_SESSION.test(first.error.message || '')) return first;
+    const { error } = await sb.auth.refreshSession();
+    if (error) return { data: null, error: { message: 'Your sign-in has expired. Sign out and sign in again.' } };
+    return run();
+  };
+  onExpired = () => { sb.auth.refreshSession().catch(() => {}); };
+  const rawRpc = sb.rpc.bind(sb);
+  sb.rpc = (...args) => fresh(() => rawRpc(...args));
+  const rawFrom = sb.storage.from.bind(sb.storage);
+  sb.storage.from = (bucketName) => {
+    const b = rawFrom(bucketName);
+    const rawUpload = b.upload.bind(b);
+    b.upload = (...args) => fresh(() => rawUpload(...args));
+    return b;
+  };
 
   return {
     kind: 'supabase',
