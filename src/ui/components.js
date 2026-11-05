@@ -4,6 +4,7 @@
 import { artSVG } from './art.js';
 import { categoryById, countryByCode, PALETTES } from '../core/seed.js';
 import { t, locale, regionName } from './i18n.js';
+import { flagOf } from '../core/countries.js';
 
 export { t };
 /** A medium's or movement's name in the current language. */
@@ -12,7 +13,7 @@ export const catLabel = (id) => t(categoryById[id]?.label || '');
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const fmt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}K` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(Math.round(n)));
 export const money = (n) => new Intl.NumberFormat(locale(), { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(Number(n));
-export const flag = (code) => countryByCode[code]?.flag || '';
+export const flag = (code) => countryByCode[code]?.flag || flagOf(code);
 export const countryName = (code) => regionName(code, countryByCode[code]?.name || '');
 export const initials = (name) => String(name || '?').split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase();
 
