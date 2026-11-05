@@ -41,7 +41,7 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   plain.on('console', (m) => m.type() === 'error' && cspErrors.push(m.text()));
   plain.on('pageerror', (e) => cspErrors.push(e.message));
   const external = [];
-  plain.on('request', (r) => { const u = new URL(r.url()); if (!['localhost', 'fonts.googleapis.com', 'fonts.gstatic.com', 'example.supabase.co'].includes(u.hostname)) external.push(r.url()); });
+  plain.on('request', (r) => { const u = new URL(r.url()); if (!['localhost', 'example.supabase.co'].includes(u.hostname)) external.push(r.url()); });
   await plain.goto(BASE + '#home');
   await plain.waitForSelector('.home');
   const kind = await plain.evaluate(async () => (await (await import('/src/ui/cloud.js')).createSupabaseCloud('https://example.supabase.co', 'sb_publishable_test')).kind);

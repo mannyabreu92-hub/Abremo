@@ -21,14 +21,9 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
 import { emptyCommunity, snapshotToCommunity, mineToState, guestContributions, sampleCatalog, collectionsToState, AVAILABILITY, imageURL } from '../core/community.js';
 import { artistProfileForm, validateArtistProfile, artworkEditForm, collectionEditForm } from './views/forms.js';
 import { howRankedSheet } from './views/explainers.js';
-import { studioPage } from './views/studio.js';
-import { coachPage, passportHTML, exhibitionsSheet, opportunitiesPage, opportunityForm, COACH_TOOLS } from './views/careers.js';
 import { inquirySheet, inboxPage, threadPage, dropsSection, dropPage, createDropForm } from './views/radar.js';
 import { arenaTabs, competitionsHTML, historyHTML, competitionPage, enterSheet, createCompetitionForm, competitionCard } from './views/arena.js';
 import { plansPage, galleryForm, galleryPageHTML, feedbackSheet, membershipCardHTML } from './views/membership.js';
-import { adminPage } from './views/admin.js';
-import { indexPage, badgeEmbedHTML } from './views/index.js';
-import { ordersPage } from './views/orders.js';
 import { welcomeCardHTML, tourSheet, joinPage, WELCOME_KEY } from './views/launch.js';
 import { guidePanelHTML, replyHTML, GUIDE_COPY } from './views/assistant.js';
 import { aboutHTML, installCardHTML, iosInstallHTML, signInHTML, accountCardHTML } from './views/account.js';
@@ -84,6 +79,39 @@ const explore = { category: '', style: '', country: '', sort: 'trending', limit:
 const artistsView = { country: '', category: '', limit: 24 };
 const homeFeed = { category: '', mode: 'trending' };
 let sheetRenderer = null;
+
+// Pages most visitors never open (moderation, Studio, orders, the Index, career tools) load on first
+// use, so a first visit downloads less. lazyView() returns the module, or null while it loads; the
+// page or sheet that asked is drawn again once it arrives. The service worker still precaches them.
+const LAZY_VIEWS = {
+  admin: () => import('./views/admin.js'),
+  studio: () => import('./views/studio.js'),
+  orders: () => import('./views/orders.js'),
+  index: () => import('./views/index.js'),
+  careers: () => import('./views/careers.js'),
+};
+const lazyModules = {};
+const lazyLoading = {};
+function lazyView(name) {
+  if (lazyModules[name]) return lazyModules[name];
+  if (!lazyLoading[name]) {
+    const view = currentView(), sheet = sheetRenderer;
+    lazyLoading[name] = LAZY_VIEWS[name]().then((m) => {
+      lazyModules[name] = m;
+      if (sheet && sheetRenderer === sheet) refreshSheet();
+      else if (!sheetRenderer && currentView() === view) renderView();
+    }).catch(() => {
+      delete lazyLoading[name];
+      toast('This page couldn’t load. Check your connection and try again.', { force: true });
+    });
+  }
+  return null;
+}
+const lazyPage = (root, name) => {
+  const m = lazyView(name);
+  if (!m) root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 4, variant: 'list' })}</div>`;
+  return m;
+};
 let lastFocus = null;
 let lastScan = null;
 let scanning = false;
@@ -1204,13 +1232,17 @@ function renderCoach(root) {
   const c = careers.coach;
   c.artworkId ||= works[0]?.id || null;
   c.opportunityId ||= careers.opps?.[0]?.id || null;
-  root.innerHTML = coachPage({ state: c, usage: careers.usage, works, opportunities: (careers.opps || []).map((o) => ({ id: o.id, title: o.title })) });
+  const v = lazyPage(root, 'careers');
+  if (!v) return;
+  root.innerHTML = v.coachPage({ state: c, usage: careers.usage, works, opportunities: (careers.opps || []).map((o) => ({ id: o.id, title: o.title })) });
 }
 
 function renderOpportunities(root) {
   if (!COMMUNITY) { root.innerHTML = `<div class="shell">${EmptyState({ title: 'Opportunities run with accounts' })}</div>`; return; }
   loadOpportunities();
-  root.innerHTML = opportunitiesPage(careers.opps, { kind: careers.oppKind, signedIn: Boolean(me), artist: Boolean(me && world.artistById[myArtistId()]) });
+  const v = lazyPage(root, 'careers');
+  if (!v) return;
+  root.innerHTML = v.opportunitiesPage(careers.opps, { kind: careers.oppKind, signedIn: Boolean(me), artist: Boolean(me && world.artistById[myArtistId()]) });
 }
 
 /** The Passport tab on a member artist's page (fetched when opened). */
@@ -1223,7 +1255,8 @@ function passportTabHTML(id) {
       .finally(() => { if (route().name === 'artist' && route().param === id && artistTab === 'passport' && !sheetRenderer) renderView(); });
   }
   const data = careers.passports.get(id)?.data;
-  return data === undefined ? LoadingSkeleton({ cards: 3, variant: 'list' }) : passportHTML(data, { artworkTitle: (aid) => world.artworkById[aid]?.title || 'A work' });
+  const v = lazyView('careers');
+  return data === undefined || !v ? LoadingSkeleton({ cards: 3, variant: 'list' }) : v.passportHTML(data, { artworkTitle: (aid) => world.artworkById[aid]?.title || 'A work' });
 }
 
 /**
@@ -1353,7 +1386,9 @@ function renderOrders(root) {
       .finally(() => { if (currentView() === 'orders' && !sheetRenderer) renderView(); });
   }
   if (!sales.orders) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 3, variant: 'list' })}</div>`; return; }
-  root.innerHTML = ordersPage(sales.orders, { payout: sales.payout, isArtist: Boolean(world.artistById[myArtistId()]), salesOn: Boolean(member.flags?.sales_enabled), busy: sales.busy, country: state.user.country || 'US' });
+  const v = lazyPage(root, 'orders');
+  if (!v) return;
+  root.innerHTML = v.ordersPage(sales.orders, { payout: sales.payout, isArtist: Boolean(world.artistById[myArtistId()]), salesOn: Boolean(member.flags?.sales_enabled), busy: sales.busy, country: state.user.country || 'US' });
 }
 
 // ——— The Abremi Index (#index) ———
@@ -1370,7 +1405,9 @@ function renderIndex(root) {
   }
   const d = idx.cache.get(key)?.data;
   if (d === undefined) { root.innerHTML = `<div class="shell">${LoadingSkeleton({ cards: 6, variant: 'list' })}</div>`; return; }
-  root.innerHTML = indexPage(d, { thumb: (id) => (world.artworkById[id] ? ArtImage(world.artworkById[id]) : '') });
+  const v = lazyPage(root, 'index');
+  if (!v) return;
+  root.innerHTML = v.indexPage(d, { thumb: (id) => (world.artworkById[id] ? ArtImage(world.artworkById[id]) : '') });
   $('#index-week', root)?.addEventListener('change', (e) => { idx.week = e.target.value; renderView(); });
   $('#index-chart', root)?.addEventListener('change', (e) => { idx.chart = e.target.value; renderView(); });
 }
@@ -1632,8 +1669,11 @@ function renderStudio(root) {
     idx.badge = null;
     cloud.artistIndexBadge(myArtistId()).then((b) => { idx.badge = b; if (currentView() === 'studio' && b) renderView(); }).catch(() => {});
   }
-  root.innerHTML = studioPage(studio.data, studio.reports, { days: studio.days, maxDays: studio.data?.max_days || 90, thumb: (id) => (world.artworkById[id] ? `<span class="rank-thumb">${ArtImage(world.artworkById[id])}</span>` : '') });
-  if (idx.badge?.rank) root.querySelector('.shell')?.insertAdjacentHTML('beforeend', badgeEmbedHTML(idx.badge, { artistId: myArtistId(), origin: location.origin }));
+  const v = lazyPage(root, 'studio');
+  const badgeView = idx.badge?.rank ? lazyView('index') : null;
+  if (!v) return;
+  root.innerHTML = v.studioPage(studio.data, studio.reports, { days: studio.days, maxDays: studio.data?.max_days || 90, thumb: (id) => (world.artworkById[id] ? `<span class="rank-thumb">${ArtImage(world.artworkById[id])}</span>` : '') });
+  if (badgeView) root.querySelector('.shell')?.insertAdjacentHTML('beforeend', badgeView.badgeEmbedHTML(idx.badge, { artistId: myArtistId(), origin: location.origin }));
 }
 
 /** #competition/<id>: the brief, entries, voting or results, and the rules. */
@@ -2757,7 +2797,9 @@ function renderAdmin(root) {
       ${createCompetitionForm(arena.adminKind)}
       ${running.length ? `<h3 class="sub-head">Running now</h3><div class="competition-list">${running.map((c) => `<div class="admin-competition">${competitionCard(c, { cover: coverThumb })}${PremiumButton('Cancel', { act: 'cancel-competition', variant: 'ghost', attrs: `data-v="${c.id}" data-danger` })}</div>`).join('')}</div>` : ''}
     </section>`;
-  root.innerHTML = adminPage(adminData, { roleLabel: (r) => ROLE_GUIDE[r]?.label || r, competitionSection, planSearch: member.planSearch });
+  const v = lazyPage(root, 'admin');
+  if (!v) return;
+  root.innerHTML = v.adminPage(adminData, { roleLabel: (r) => ROLE_GUIDE[r]?.label || r, competitionSection, planSearch: member.planSearch });
 }
 
 // ——— Install as an app ———
@@ -3075,7 +3117,7 @@ const ACTIONS = {
     Object.assign(c, { busy: true, error: '' });
     renderView();
     try {
-      c.result = await cloud.coach(c.tool, { artworkId: COACH_TOOLS[c.tool].needs === 'artwork' ? c.artworkId : null, opportunityId: c.tool === 'application' ? c.opportunityId : null });
+      c.result = await cloud.coach(c.tool, { artworkId: lazyModules.careers.COACH_TOOLS[c.tool].needs === 'artwork' ? c.artworkId : null, opportunityId: c.tool === 'application' ? c.opportunityId : null });
     } catch (e) { c.error = e?.message || 'The Coach is unavailable right now.'; }
     c.busy = false;
     careers.usage = await cloud.coachUsage().catch(() => careers.usage);
@@ -3089,7 +3131,7 @@ const ACTIONS = {
   'exhibitions-open': async () => {
     if (!me) return openSignIn();
     careers.exhibitions = await cloud.myExhibitions().catch(() => []);
-    openSheet(() => exhibitionsSheet(careers.exhibitions));
+    openSheet(() => lazyView('careers')?.exhibitionsSheet(careers.exhibitions) ?? LoadingSkeleton({ cards: 3, variant: 'list' }));
   },
   'exhibition-submit': async (el) => {
     const v = (k) => ($(`#ex-${k}`)?.value || '').trim();
@@ -3102,12 +3144,12 @@ const ACTIONS = {
       await cloud.submitExhibition({ kind: v('kind'), title: v('title'), venue: v('venue'), city: v('city'), country: state.user.country, start: v('start'), end: v('end'), link: v('link') });
       careers.exhibitions = await cloud.myExhibitions();
       toast('Sent for verification.', { force: true });
-      openSheet(() => exhibitionsSheet(careers.exhibitions));
+      openSheet(() => lazyView('careers')?.exhibitionsSheet(careers.exhibitions) ?? LoadingSkeleton({ cards: 3, variant: 'list' }));
     } catch (e) { el.disabled = false; fail(e?.message || 'Could not send it.'); }
   },
   'exhibition-delete': async (el) => {
     if (!confirm('Remove this exhibition from your Passport?')) return;
-    try { await cloud.deleteExhibition(el.dataset.id); careers.exhibitions = await cloud.myExhibitions(); careers.passports.clear(); openSheet(() => exhibitionsSheet(careers.exhibitions)); }
+    try { await cloud.deleteExhibition(el.dataset.id); careers.exhibitions = await cloud.myExhibitions(); careers.passports.clear(); openSheet(() => lazyView('careers')?.exhibitionsSheet(careers.exhibitions) ?? LoadingSkeleton({ cards: 3, variant: 'list' })); }
     catch (e) { toast(e?.message || 'Could not remove it.', { force: true }); }
   },
   'exhibition-review': async (el) => {
@@ -3122,7 +3164,7 @@ const ACTIONS = {
     try { await cloud.saveOpportunity(el.dataset.id, el.dataset.v === 'on'); toast(el.dataset.v === 'on' ? 'Saved. We’ll remind you 3 days before the deadline.' : 'Removed.', { force: true }); await loadOpportunities(true); }
     catch (e) { toast(e?.message || 'Could not save.', { force: true }); }
   },
-  'opportunity-suggest': () => (me ? openSheet(() => opportunityForm({ admin: isAdmin })) : openSignIn()),
+  'opportunity-suggest': () => (me ? openSheet(() => lazyView('careers')?.opportunityForm({ admin: isAdmin }) ?? LoadingSkeleton({ cards: 3, variant: 'list' })) : openSignIn()),
   'opportunity-submit': async (el) => {
     const v = (k) => ($(`#op-${k}`)?.value || '').trim();
     const fail = (msg) => { const e = $('#op-error'); e.textContent = msg; e.hidden = false; };

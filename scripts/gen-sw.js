@@ -24,7 +24,8 @@ function walk(dir, exts) {
 export function assetList() {
   const src = walk('src/', ['.js', '.css']).sort();
   const icons = walk('icons/', ['.png']).sort();
-  return ['index.html', 'manifest.webmanifest', ...src, ...icons];
+  const fonts = walk('fonts/', ['.woff2']).filter((f) => !f.includes('-ext')).sort(); // extended Latin loads on demand
+  return ['index.html', 'manifest.webmanifest', ...src, ...fonts, ...icons];
 }
 
 export function contentVersion(files = assetList()) {
