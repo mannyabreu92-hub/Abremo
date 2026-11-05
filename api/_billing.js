@@ -73,7 +73,9 @@ export function formEncode(obj, prefix = '') {
 export async function rpc(fetchImpl, { supabaseUrl, key, token = null }, name, args = {}) {
   const res = await fetchImpl(`${supabaseUrl}/rest/v1/rpc/${name}`, {
     method: 'POST',
-    headers: { apikey: key, Authorization: `Bearer ${token || key}`, 'Content-Type': 'application/json' },
+    // With only the server key, send it as apikey alone: Supabase's newer secret keys (sb_secret_…)
+    // are not JWTs and must not go in Authorization; legacy service_role keys work either way.
+    headers: { apikey: key, ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/json' },
     body: JSON.stringify(args),
   });
   const text = await res.text();

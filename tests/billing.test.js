@@ -97,7 +97,8 @@ test('webhook: only signed subscription events, the plan from the price (never m
   const ok = await hook(body, sign(body, 4999));
   assert.deepEqual(ok, { status: 200, body: { result: 'applied' } });
   const rpc = calls.find((c) => c.url.endsWith('/rpc/apply_billing_event'));
-  assert.equal(rpc.init.headers.Authorization, 'Bearer service');
+  assert.equal(rpc.init.headers.apikey, 'service');
+  assert.equal(rpc.init.headers.Authorization, undefined, 'a server key never goes in Authorization');
   const args = JSON.parse(rpc.init.body);
   assert.equal(args.p_plan, 'pro', 'from the price, not metadata.plan');
   assert.equal(args.p_status, 'active');
