@@ -190,7 +190,7 @@ See [`docs/PITCH.md`](docs/PITCH.md) for the investor pitch.
 ## Design system
 The design system lives in `src/ui/styles.css`:
 - **Colours:** dark surfaces (`#08090B` to `#1B1D22`), hairline borders at `rgba(255,255,255,.09)`, warm off-white text, and champagne gold `#C8A96B` used sparingly as the accent.
-- **Typography:** Inter for the interface and Playfair Display for headlines (both from Google Fonts, with system fallbacks).
+- **Typography:** Inter for the interface and Playfair Display for headlines (both open-licensed and served from Abremi itself, in `fonts/`, with system fallbacks).
 - **Atmosphere:** very soft radial light behind the page.
 - **Motion:** 200–300 ms transitions, View Transitions between pages where the browser supports them, and full support for `prefers-reduced-motion`.
 - **Keyboard:** `/` or ⌘K opens search, Esc closes overlays, ← → ↑ swipe in Discover, and ← → vote in Art Battles.
