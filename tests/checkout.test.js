@@ -94,3 +94,23 @@ test('the webhook records paid checkouts, refunds and payout status, only when s
   const off = createWebhook({ fetchImpl, env: { ...ENV, SALES_ENABLED: 'false', BILLING_ENABLED: 'true' }, now });
   assert.equal((await off(paid, sign(paid, 4999))).status, 503, 'sales events refused while sales are off');
 });
+
+test('payout setup: Stripe’s reason is logged and, for an unsupported country, shown to the person', async () => {
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => logged.push(a.join(' '));
+  try {
+    const { fetchImpl } = stand({ account: null });
+    const failing = async (url, init) => (url.endsWith('/v1/accounts')
+      ? Response.json({ error: { code: 'invalid_request_error', message: 'Connected accounts in DO cannot be created by platforms in US.' } }, { status: 400 })
+      : fetchImpl(url, init));
+    const out = await createCheckout({ fetchImpl: failing, env: ENV })({ method: 'POST', token: 't', body: { action: 'onboard', country: 'DO' } });
+    assert.equal(out.status, 400);
+    assert.match(out.body.error, /Stripe couldn’t open a payout account: Connected accounts in DO/);
+    assert.ok(logged.some((l) => /checkout failed.*v1\/accounts|checkout failed.*accounts/.test(l) && /DO cannot be created/.test(l)), logged.join('\n'));
+    assert.ok(!logged.join('').includes('sk_test_x'), 'never logs the secret key');
+    const generic = async (url, init) => (url.endsWith('/v1/accounts') ? Response.json({ error: { message: 'Something internal' } }, { status: 500 }) : fetchImpl(url, init));
+    const out2 = await createCheckout({ fetchImpl: generic, env: ENV })({ method: 'POST', token: 't', body: { action: 'onboard', country: 'US' } });
+    assert.deepEqual([out2.status, out2.body.error], [502, 'Payments are unavailable right now. Please try again.']);
+  } finally { console.error = orig; }
+});

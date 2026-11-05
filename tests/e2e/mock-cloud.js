@@ -1312,12 +1312,13 @@ window.__abremiCloud = async () => {
     },
     async publishIndex() { const db = load(); needAdmin(db); return 1; },
     // ——— Checkout (same rules as 0017; Stripe stood in) ———
-    async checkout(action, { artworkId } = {}) {
+    async checkout(action, opts = {}) {
+      const { artworkId } = opts;
       needUser(); await wait();
       const db = load();
       if (!db.settings?.sales_enabled) throw new Error('Buying isn’t switched on yet.');
       db.payouts ||= {};
-      if (action === 'onboard') { db.payouts[user.id] = { charges_enabled: true, payouts_enabled: true }; save(db); return { url: '#orders?payouts=done' }; }
+      if (action === 'onboard') { db.payouts[user.id] = { charges_enabled: true, payouts_enabled: true, country: opts?.country || 'US' }; save(db); return { url: '#orders?payouts=done' }; }
       if (action === 'dashboard') return { url: '#orders' };
       const w = db.uploads.find((u) => u.id === artworkId);
       if (!w || w.owner === user.id) throw new Error('That’s your own work');

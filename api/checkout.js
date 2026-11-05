@@ -24,7 +24,11 @@ export function createCheckout({ fetchImpl, env }) {
       body: formEncode(params),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error('Payment provider error'), { status: 502 });
+    if (!res.ok) {
+      // Stripe's own message (never a secret) goes to the server log, and helps the person when it's about their input.
+      const message = String(data?.error?.message || `Stripe error ${res.status}`);
+      throw Object.assign(new Error(message), { status: 502, stripe: true, path, code: data?.error?.code || '' });
+    }
     return data;
   };
   const service = (name, args) => rpc(fetchImpl, { supabaseUrl: cfg.supabaseUrl, key: cfg.serviceKey }, name, args);
@@ -89,7 +93,11 @@ export function createCheckout({ fetchImpl, env }) {
         return json(200, { url: link.url });
       }
       return json(400, { error: 'Unknown action' });
-    } catch {
+    } catch (e) {
+      console.error('checkout failed', JSON.stringify({ action: body?.action || 'buy', path: e?.path || null, code: e?.code || null, message: String(e?.message || e).slice(0, 300) }));
+      if (e?.stripe && body?.action === 'onboard' && /countr|capabilit|not supported|cannot be created|platform profile|Connect/i.test(e.message)) {
+        return json(400, { error: `Stripe couldn’t open a payout account: ${e.message}` });
+      }
       return json(502, { error: 'Payments are unavailable right now. Please try again.' });
     }
   };
