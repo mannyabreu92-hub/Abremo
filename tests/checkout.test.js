@@ -12,7 +12,7 @@ const sign = (payload, t) => `t=${t},v1=${createHmac('sha256', 'whsec_x').update
 function stand({ sales = true, purchaseError = null, account = 'acct_1', target = 'acct_1' } = {}) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
-    calls.push({ url, auth: init.headers?.Authorization, body: init.body });
+    calls.push({ url, auth: init.headers?.Authorization || (init.headers?.apikey === 'service' ? 'server key' : undefined), body: init.body });
     const name = url.split('/rpc/')[1];
     if (name === 'app_flags') return Response.json({ sales_enabled: sales });
     if (name === 'begin_purchase') return purchaseError ? Response.json({ message: purchaseError }, { status: 400 }) : Response.json({ order_id: 'o-1', title: 'Harbour', amount_cents: 90000, fee_cents: 18000, currency: 'usd' });
@@ -42,7 +42,7 @@ test('buy: the database creates the order; the session pays the artist directly 
   const out = await createCheckout({ fetchImpl, env: ENV })({ method: 'POST', token: 'buyer-token', body: { action: 'buy', artworkId: 'u_1' } });
   assert.equal(out.status, 200);
   assert.equal(calls.find((c) => c.url.endsWith('/rpc/begin_purchase')).auth, 'Bearer buyer-token', 'as the buyer');
-  assert.equal(calls.find((c) => c.url.endsWith('/rpc/order_payout_target')).auth, 'Bearer service');
+  assert.equal(calls.find((c) => c.url.endsWith('/rpc/order_payout_target')).auth, 'server key');
   const form = new URLSearchParams(calls.find((c) => c.url.endsWith('/checkout/sessions')).body);
   assert.equal(form.get('mode'), 'payment');
   assert.equal(form.get('line_items[0][price_data][unit_amount]'), '90000');
@@ -64,7 +64,7 @@ test('payout setup creates one Express account per artist and returns Stripe’s
   assert.equal(out.status, 200);
   const acct = new URLSearchParams(calls.find((c) => c.url.endsWith('/v1/accounts')).body);
   assert.deepEqual([acct.get('type'), acct.get('country'), acct.get('metadata[user_id]')], ['express', 'PT', 'u-1']);
-  assert.ok(calls.some((c) => c.url.endsWith('/rpc/set_payout_account') && c.auth === 'Bearer service'));
+  assert.ok(calls.some((c) => c.url.endsWith('/rpc/set_payout_account') && c.auth === 'server key'));
   assert.ok(calls.some((c) => c.url.endsWith('/v1/account_links')));
   const existing = stand({ account: 'acct_9' });
   await createCheckout({ fetchImpl: existing.fetchImpl, env: ENV })({ method: 'POST', token: 't', body: { action: 'onboard' } });
