@@ -1,5 +1,5 @@
 // The Abremi Index badge: a small image artists can put on their own website.
-//   <a href="https://abremi.vercel.app/#artist/ID"><img src="https://abremi.vercel.app/api/badge?artist=ID" alt="Abremi Index"></a>
+//   <a href="https://abremi.app/#artist/ID"><img src="https://abremi.app/api/badge?artist=ID" alt="Abremi Index"></a>
 // It shows the artist's best place in the latest weekly Index (migration 0016), read with the public
 // key only. Artists who aren't ranked this week get a plain "On Abremi" badge, so embeds never break.
 import { CATEGORIES, countryByCode } from '../src/core/seed.js';
@@ -58,7 +58,7 @@ export default async function handler(req, res) {
     supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
     supabaseKey: process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   });
-  const artist = new URL(req.url, 'https://abremi.vercel.app').searchParams.get('artist');
+  const artist = new URL(req.url, 'https://abremi.app').searchParams.get('artist');
   const { status, body } = await badge(artist);
   res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=3600');

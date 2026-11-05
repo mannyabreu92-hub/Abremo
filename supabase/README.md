@@ -51,7 +51,7 @@ Regenerate `seed.sql` and `setup.sql` after changing the catalog or the migratio
 
 1. **Create the database.** In the Vercel dashboard, open the project and go to **Storage → Create Database → Supabase**, then connect it to the project. Vercel adds `SUPABASE_URL` and `SUPABASE_ANON_KEY` (or their `NEXT_PUBLIC_` variants) to the environment. You can also add those two variables yourself from an existing Supabase project.
 2. **Create the tables.** In Supabase, open **SQL Editor**, paste all of `setup.sql`, and **Run**.
-3. **Allow sign-in links back to the site.** In Supabase, go to **Authentication → URL Configuration**. Set **Site URL** to `https://abremi.vercel.app` and add `https://abremi.vercel.app/**` under **Redirect URLs**.
+3. **Allow sign-in links back to the site.** In Supabase, go to **Authentication → URL Configuration**. Set **Site URL** to `https://abremi.app` and add `https://abremi.app/**` under **Redirect URLs**.
 4. **Make yourself a moderator** (after signing in to the site once), so you can review Critic and Collector applications at `#admin`:
    ```sql
    insert into public.admins (user_id) select id from auth.users where email = 'you@example.com';

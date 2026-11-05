@@ -10,7 +10,7 @@ For the owner and moderators. Tick these off in order.
 - [ ] You are a moderator (the `admins` table), and so is at least one other trusted person.
 
 ## Inviting
-- [ ] Start with artists: send them `https://abremi.vercel.app/#join` and an invite code. Aim for 20–50 artists, each with 3+ strong works with clear photos, medium, size, year and price.
+- [ ] Start with artists: send them `https://abremi.app/#join` and an invite code. Aim for 20–50 artists, each with 3+ strong works with clear photos, medium, size, year and price.
 - [ ] Then collectors and art lovers: send them the home page. Their admirations and treasures are what bring the Index and rankings to life.
 - [ ] Ask artists to share their works with the share card (the download icon on their own artwork) and a link back to their page.
 

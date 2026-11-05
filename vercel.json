@@ -8,7 +8,29 @@
           "value": "gabangi.vercel.app"
         }
       ],
-      "destination": "https://abremi.vercel.app/$1",
+      "destination": "https://abremi.app/$1",
+      "permanent": true
+    },
+    {
+      "source": "/((?!sw\\.js$).*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "abremi.vercel.app"
+        }
+      ],
+      "destination": "https://abremi.app/$1",
+      "permanent": true
+    },
+    {
+      "source": "/((?!sw\\.js$).*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.abremi.app"
+        }
+      ],
+      "destination": "https://abremi.app/$1",
       "permanent": true
     }
   ],

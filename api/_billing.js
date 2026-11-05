@@ -22,7 +22,7 @@ export function billingConfig(env) {
     prices,
     /** @param {string} priceId */
     planForPrice: (priceId) => /** @type {string | null} */ (Object.entries(prices).find(([, id]) => id && id === priceId)?.[0] || null),
-    siteUrl: (env.SITE_URL || 'https://abremi.vercel.app').replace(/\/+$/, ''),
+    siteUrl: (env.SITE_URL || 'https://abremi.app').replace(/\/+$/, ''),
     supabaseUrl: (env.SUPABASE_URL || '').replace(/\/+$/, ''),
     anonKey: env.SUPABASE_ANON_KEY || '',
     serviceKey: env.SUPABASE_SERVICE_ROLE_KEY || '',

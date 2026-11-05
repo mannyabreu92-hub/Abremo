@@ -96,11 +96,11 @@ const step = (name) => console.log(`✓ ${name}`);
   assert.deepEqual(keys, [null, 'Old Friend']);
   step('data saved under the old name moves to Abremi');
 
-  // The old address (gabangi.vercel.app) retires its offline copy so the redirect can work.
+  // Old addresses (gabangi.vercel.app, abremi.vercel.app) retire its offline copy so the redirect can work.
   // Simulated on 127.0.0.1 (always a secure context), since the switch only compares hostnames.
   const swPath2 = path.join(__dirname, '..', '..', 'sw.js');
   const current = fs.readFileSync(swPath2, 'utf8');
-  assert.match(current, /const RETIRED_HOSTS = \['gabangi\.vercel\.app'\];/);
+  assert.match(current, /const RETIRED_HOSTS = \['gabangi\.vercel\.app', 'abremi\.vercel\.app', 'www\.abremi\.app'\];/);
   const asInstalled = current.replace(/const RETIRED_HOSTS = \[[^\]]*\];/, 'const RETIRED_HOSTS = [];');
   const retiring = current.replace(/const RETIRED_HOSTS = \[[^\]]*\];/, "const RETIRED_HOSTS = ['127.0.0.1'];");
   restoreSw = () => fs.writeFileSync(swPath2, current);

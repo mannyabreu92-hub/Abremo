@@ -68,10 +68,10 @@ const RUNTIME = 'abremi-runtime-v1';
 const RUNTIME_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 const PAGE_TIMEOUT_MS = 4000;
 
-// The app moved from gabangi.vercel.app to abremi.vercel.app. On the old address this worker
+// The app moved from gabangi.vercel.app to abremi.vercel.app, then to abremi.app. On an old address this worker
 // retires: it clears its caches, removes itself and reloads open pages, so the server's
 // redirect can take visitors to the new address instead of a stale offline copy.
-const RETIRED_HOSTS = ['gabangi.vercel.app'];
+const RETIRED_HOSTS = ['gabangi.vercel.app', 'abremi.vercel.app', 'www.abremi.app'];
 
 if (RETIRED_HOSTS.includes(self.location.hostname)) {
   self.addEventListener('install', () => self.skipWaiting());
