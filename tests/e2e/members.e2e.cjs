@@ -40,6 +40,10 @@ const step = (name) => console.log(`✓ ${name}`);
   await page.waitForFunction(() => document.querySelector('#nav-profile .avatar'));
   const myName = await page.evaluate(() => JSON.parse(localStorage.getItem('abremi:v1')).user.name);
   assert.match(myName, /^Member [0-9A-F]{4}$/);
+  await page.goto(BASE + '#home');
+  await page.waitForSelector('.hero-actions');
+  assert.equal(await page.locator('.landing-proof').count(), 0, 'small member counts stay hidden');
+  assert.doesNotMatch(await page.locator('#view').textContent(), /members shaping/);
   step(`new members get a neutral public name (${myName}), not their email`);
 
   // The scout likes three works first (through the real UI).
