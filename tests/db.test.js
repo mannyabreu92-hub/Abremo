@@ -1192,7 +1192,7 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
       where n.nspname = 'public' and p.prosecdef and p.prorettype <> 'trigger'::regtype and has_function_privilege('anon', p.oid, 'execute')`).split(',');
     const PUBLIC_FUNCTIONS = ['app_flags', 'arena', 'artist_achievements', 'artist_passport', 'chart_baseline', 'check_invite', 'community_snapshot',
       'competition_detail', 'drop_detail', 'drops_overview', 'gallery_page', 'log_client_error', 'member_leaderboards', 'opportunities_list',
-      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge', 'artists_accepting_payments', 'founding_artists_list', 'verified_artists', 'verify_certificate'];
+      'plan_badges', 'public_collection', 'record_events', 'index_week', 'artist_index_badge', 'artists_accepting_payments', 'founding_artists_list', 'verified_artists', 'verify_certificate', 'artists_active_since'];
     const unexpected = anonCan.filter((f) => !PUBLIC_FUNCTIONS.includes(f));
     assert.deepEqual(unexpected, [], 'privileged functions guests can run that aren’t on the public list');
     // Every moderator function checks is_admin() itself (the app hiding a button is not a permission).
@@ -1632,6 +1632,28 @@ for (const [mode, stub] of Object.entries(STUBS)) test(`database (${mode})`, { s
     assert.ok(JSON.parse(as(buyer, 'select my_orders()')).purchases.some((o) => o.certificate === paid), 'the buyer has it');
     assert.ok(JSON.parse(as(E, 'select my_orders()')).sales.some((o) => o.certificate === paid), 'so does the artist');
     noRowsFor(buyer, `with u as (update orders set certificate_code = 'ABR-FAKE-FAKE-FAKE' returning 1) select count(*) from u`);
+  });
+
+  // ——— 0021: active since ———
+  await t.test('active since: artists set their own career year (not the future); public; rankings never read it', () => {
+    fails('anon', 'select set_active_since(1994)', /permission denied|Sign in first/);
+    fails(E, `select set_active_since(${new Date().getFullYear() + 1})`, /between 1900 and this year/);
+    fails(E, 'select set_active_since(1899)', /between 1900 and this year/);
+    const before = psql(`select md5(coalesce((select json_agg(x order by x.artist_id)::text from artist_scores() x), ''))`);
+    assert.equal(as(E, 'select set_active_since(1994)'), '1994');
+    assert.deepEqual(JSON.parse(as('anon', 'select artists_active_since()')).filter((x) => x.artist_id === `m_${E}`), [{ artist_id: `m_${E}`, year: 1994 }]);
+    noRowsFor(B, `with u as (update artists set active_since = 1950 where id = 'm_${E}' returning 1) select count(*) from u`);
+    assert.equal(psql(`select md5(coalesce((select json_agg(x order by x.artist_id)::text from artist_scores() x), ''))`), before, 'changes no score');
+    as(E, 'select set_active_since(null)');
+    assert.equal(JSON.parse(as('anon', 'select artists_active_since()')).some((x) => x.artist_id === `m_${E}`), false, 'can be cleared');
+    as(E, 'select set_active_since(1994)');
+  });
+
+  await t.test('0021 can be undone, and setup.sql re-applies it', () => {
+    psql(file('supabase/migrations/down/0021_down.sql'));
+    assert.equal(psql(`select count(*) from information_schema.columns where table_name = 'artists' and column_name = 'active_since'`), '0');
+    psql(file('supabase/setup.sql'));
+    assert.equal(psql(`select count(*) from pg_proc where proname in ('set_active_since', 'artists_active_since')`), '2');
   });
 
   await t.test('0020 can be undone, and setup.sql re-applies it', () => {

@@ -16,6 +16,8 @@ Abremi runs in two modes:
 | `migrations/0004_role_applications.sql` | Critic & Collector applications, the admin list, and the review functions |
 | `migrations/0006_profiles_artworks_collections.sql` | Audit trail, artist profiles, artwork details (description, size, availability), collections; the shared catalog starts every work at the same battle rating |
 | `migrations/down/0006_down.sql` | Undoes 0006 (drops its tables and columns, with their data, and restores the earlier functions). Not part of `setup.sql` |
+| `migrations/0021_active_since.sql` | Artists can give the year their career began ("Active since 1994"); display only |
+| `migrations/down/0021_down.sql` | Undoes 0021 |
 | `migrations/0020_verified_certificates.sql` | Verified artists (moderator-confirmed ✓) and certificates of authenticity for every paid sale, checkable by code |
 | `migrations/down/0020_down.sql` | Undoes 0020 |
 | `migrations/0019_founding_artists.sql` | Founding artists: chosen by moderators, shown in a labelled Home section and badge; never read by rankings |

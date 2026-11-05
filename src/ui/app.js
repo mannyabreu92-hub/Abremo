@@ -1192,6 +1192,22 @@ async function loadVerified(force = false) {
     if (sheetRenderer) refreshSheet(); else renderView();
   }
 }
+// ——— When an artist's career began (member artists set it; display only) ———
+const activeSince = { map: {}, at: 0 };
+async function loadActiveSince(force = false) {
+  if (!cloud?.artistsActiveSince || (!force && Date.now() - activeSince.at < 60_000)) return;
+  activeSince.at = Date.now();
+  try { activeSince.map = Object.fromEntries((await cloud.artistsActiveSince()).map((x) => [x.artist_id, x.year])); } catch { return; }
+  if (currentView() === 'artist' && !sheetRenderer && !document.activeElement?.matches('input, textarea, select')) renderView();
+}
+/** "Active since 1994" when the artist gave it, "On Abremi since 2026" for other members, "since 2014" for samples. */
+function sinceLabel(a) {
+  if (!a.member) return a.debutYear ? t('since {year}', { year: a.debutYear }) : '';
+  if (COMMUNITY) loadActiveSince();
+  const y = activeSince.map[a.id];
+  return y ? t('Active since {year}', { year: y }) : t('On Abremi since {year}', { year: a.debutYear });
+}
+
 const isVerified = (id) => Boolean(COMMUNITY && (loadVerified(), verified.map[id]));
 const verifiedBadge = (id) => (isVerified(id)
   ? ` <span class="verified-badge" title="Identity confirmed by Abremi${verified.map[id].managed ? '. Studio managed by the artist’s family' : ''}">${Icon('check', { size: 12 })}<span>Verified</span></span>` : '');
@@ -2162,7 +2178,7 @@ function renderArtistPage(root) {
           : `<button class="link-arrow" data-act="toggle-verified" data-id="${id}" data-v="self">${Icon('check', { size: 14 })} Verify artist</button>
              <button class="link-arrow" data-act="toggle-verified" data-id="${id}" data-v="family">${Icon('check', { size: 14 })} Verify · managed by family</button>`}</div>` : ''}
         ${isAdmin && a.member ? `<button class="link-arrow founding-toggle" data-act="toggle-founding" data-id="${id}" data-v="${isFounding(id) ? '' : '1'}">${Icon('spark', { size: 14 })} ${isFounding(id) ? 'Remove from Founding artists' : 'Make a Founding artist'}</button>` : ''}
-        <p class="muted">${esc(t('{medium} artist', { medium: t(categoryById[a.category]?.label || 'Contemporary') }))} • ${a.city ? `${esc(a.city)}, ` : ''}${esc(countryName(a.country))}${a.debutYear ? ` • ${t('since {year}', { year: a.debutYear })}` : ''}</p>
+        <p class="muted">${esc(t('{medium} artist', { medium: t(categoryById[a.category]?.label || 'Contemporary') }))} • ${a.city ? `${esc(a.city)}, ` : ''}${esc(countryName(a.country))}${sinceLabel(a) ? ` • ${sinceLabel(a)}` : ''}</p>
         ${a.bio ? `<p class="artist-bio">${esc(a.bio)}</p>` : ''}
         ${a.isMe && a.member ? `<button class="link-arrow" data-act="edit-artist-profile">${Icon('pen', { size: 14 })} Edit your artist profile</button>` : ''}
         <div class="signal-row">${signalChips(id)}${COMMUNITY ? artistAchievementsHTML(id) : badges.map((b) => `<span class="badge" title="${esc(BADGES[b].desc)}">${BADGES[b].emoji} ${BADGES[b].label}</span>`).join('')}</div>
@@ -3874,7 +3890,8 @@ const ACTIONS = {
   'edit-artist-profile': () => {
     if (COMMUNITY && !me) return openSignIn();
     portraitChoice = null;
-    openSheet(() => artistProfileForm(world.artistById[myArtistId()] || { name: state.user.name }));
+    const mine = world.artistById[myArtistId()] || { name: state.user.name };
+    openSheet(() => artistProfileForm({ ...mine, activeSince: activeSince.map[myArtistId()] || '' }));
   },
   'save-artist-profile': async (el) => {
     const v = (k) => ($(`#profile-${k}`)?.value || '').trim();
@@ -3891,6 +3908,8 @@ const ACTIONS = {
         avatarPath = await cloud.uploadPortrait(prepared.thumb);
       }
       await cloud.updateArtistProfile({ ...fields, avatarPath });
+      const since = v('since') ? Number(v('since')) : null;
+      if (cloud.setActiveSince && since !== (activeSince.map[myArtistId()] ?? null)) { await cloud.setActiveSince(since); await loadActiveSince(true); }
       await refreshCommunity();
       closeSheet();
       toast('Your artist profile is updated.', { force: true });
