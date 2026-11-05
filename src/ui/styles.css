@@ -1607,4 +1607,23 @@ div.rank-row:hover { background: transparent; }
 .lang-btn:hover { color: var(--text-1, #f3efe7); }
 .lang-btn.is-on { border-color: var(--abremi-border-gold); color: var(--abremi-gold); }
 .footer .lang-picker { flex-basis: 100%; justify-content: center; margin-top: 10px; }
-#menu-lang { padding: 8px 10px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+
+/* Language button in the top bar */
+.lang-toggle { width: auto; padding: 0 10px; gap: 5px; display: inline-flex; align-items: center; }
+.lang-code { font-size: 12px; font-weight: 600; letter-spacing: .06em; }
+.popover-lang { width: 210px; }
+.lang-option { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px 12px; border: 0; border-radius: 10px;
+  background: none; color: var(--text-2); font: inherit; font-size: 15px; text-align: left; cursor: pointer; }
+.lang-option:hover { background: rgba(255,255,255,.04); color: var(--text-1, #f3efe7); }
+.lang-option.is-on { color: var(--abremi-gold); }
+@media (max-width: 760px) {
+  /* Phones: the language button is just the globe, so it fits beside Sign in and the menu. */
+  .lang-toggle { width: 38px; padding: 0; justify-content: center; }
+  .lang-code { display: none; }
+  /* Signed out (the Sign in button shows): no personal notifications, so the bell makes room for the globe. */
+  .nav-tools:has(> .nav-profile[data-act="sign-in"]) > .popover-wrap:has(#notif-btn) { display: none; }
+}
+@media (max-width: 380px) {
+  /* Narrow phones: the logo alone, so the top bar's buttons fit. */
+  .nav .brand .brand-word { display: none; }
+}
