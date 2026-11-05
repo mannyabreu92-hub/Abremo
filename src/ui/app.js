@@ -90,6 +90,7 @@ const LAZY_VIEWS = {
   index: () => import('./views/index.js'),
   careers: () => import('./views/careers.js'),
   certificate: () => import('./views/certificate.js'),
+  batch: () => import('./views/batch.js'),
 };
 const lazyModules = {};
 const lazyLoading = {};
@@ -2385,6 +2386,10 @@ function renderProfile(root) {
   // (Phase 6). Demo mode keeps the on-device plan preview.
   const canAnalyze = true; // studio insights are free on every plan
 
+  // Background refreshes redraw this page: keep a half-filled upload (photo and details).
+  const draftForm = $('#upload', root);
+  const draft = draftForm ? { file: $('input[type=file]', draftForm)?.files?.[0] || null,
+    values: [...draftForm.querySelectorAll('input[name]:not([type=file]), select[name], textarea[name]')].map((el) => [el.name, el.value]) } : null;
   root.innerHTML = `<div class="shell profile">
     ${accountCard()}
     ${installCard()}
@@ -2497,6 +2502,18 @@ function renderProfile(root) {
       } else preview.hidden = true;
       setUploadStatus('');
     });
+    if (draft) {
+      for (const [name, value] of draft.values) { const el = form.elements.namedItem(name); if (el && 'value' in el) el.value = value; }
+      if (draft.file) {
+        try {
+          const dt = new DataTransfer();
+          dt.items.add(draft.file);
+          const input = $('input[type=file]', form);
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change'));
+        } catch { /* older browsers: the photo has to be chosen again */ }
+      }
+    }
   }
 }
 
@@ -2530,6 +2547,7 @@ function studioHTML(myWorks, canAnalyze) {
         <p class="upload-status" id="upload-status" role="status" aria-live="polite"></p>
         <button class="btn btn-primary btn-block" id="upload-submit">${COMMUNITY ? 'Publish to Abremi' : 'Publish work'}</button>
         <p class="fine">${where} Photos are resized and their hidden data (such as location) is removed before upload.</p>
+        ${COMMUNITY ? `<button type="button" class="link-arrow batch-open" data-act="batch-open">${Icon('grid', { size: 14 })} Upload several works at once</button>` : ''}
       </form>
       <div class="panel">
         ${myWorks.length ? `<ol class="rank-list">${myWorks.map((w) => {
@@ -2626,6 +2644,71 @@ async function onUpload(e) {
     const b = $('#upload-submit');
     if (b) b.disabled = false;
   }
+}
+
+// ——— Upload several works at once ———
+const batch = { items: [], defaults: { materials: '', dimensions: '', year: '', category: 'mixed', style: 'Expressionism', price: '' }, running: false };
+const batchSheetHTML = () => {
+  const v = lazyView('batch');
+  return v ? v.batchSheet({ ...batch, categories: CATEGORIES, styles: STYLES, availability: AVAILABILITY, year: CURRENT_YEAR }) : LoadingSkeleton({ cards: 2, variant: 'list' });
+};
+function batchReset() {
+  for (const it of batch.items) URL.revokeObjectURL(it.preview);
+  batch.items = [];
+  batch.running = false;
+}
+function batchAddFiles(files) {
+  const room = 20 - batch.items.filter((i) => i.status !== 'done').length;
+  const images = [...files].filter((f) => /^image\//.test(f.type));
+  if (images.length > room) toast(`Up to 20 at a time: added the first ${room}.`, { force: true });
+  const d = batch.defaults;
+  for (const file of images.slice(0, room)) {
+    batch.items.push({ file, preview: URL.createObjectURL(file), title: file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/^IMG\s?\d+$/i, '').slice(0, 60),
+      price: d.price, materials: d.materials, dimensions: d.dimensions, year: d.year || CURRENT_YEAR, category: d.category, style: d.style,
+      availability: 'available', description: '', status: '', error: '' });
+  }
+  refreshSheet();
+}
+async function batchPublish() {
+  if (batch.running) return;
+  if (COMMUNITY && !me) return openSignIn();
+  const todo = batch.items.filter((i) => i.status !== 'done');
+  let bad = 0;
+  for (const it of todo) {
+    const meta = { title: String(it.title || '').trim(), category: it.category, style: it.style, price: Number(it.price), year: Number(it.year) || CURRENT_YEAR };
+    const errs = validateUpload({ ...meta, fileType: it.file.type, fileSize: it.file.size });
+    it.error = errs[0] || '';
+    if (errs.length) bad += 1;
+  }
+  if (bad) { refreshSheet(); toast(`Fix ${bad} work${bad === 1 ? '' : 's'} first (see the notes in red).`, { force: true }); return; }
+  batch.running = true;
+  let ok = 0;
+  for (const it of todo) {
+    it.status = 'uploading';
+    refreshSheet();
+    const meta = { title: String(it.title).trim(), category: it.category, style: it.style, price: Number(it.price), year: Number(it.year) || CURRENT_YEAR };
+    const medium = String(it.materials || '').trim() || categoryById[meta.category].medium;
+    try {
+      const prepared = await prepareImage(it.file);
+      const published = await cloud.publishArtwork({ ...prepared, ...meta, medium });
+      if (prepared?.previewURL) URL.revokeObjectURL(prepared.previewURL);
+      const extra = { description: String(it.description || '').trim(), dimensions: String(it.dimensions || '').trim(), availability: it.availability || 'available' };
+      if (published?.id && (extra.description || extra.dimensions || extra.availability !== 'available')) {
+        await cloud.updateArtwork(published.id, { ...meta, medium, ...extra }).catch(() => { it.error = 'Published, but the size or description could not be saved. Edit the work to add it.'; });
+      }
+      it.status = 'done';
+      ok += 1;
+    } catch (e) {
+      it.status = '';
+      const msg = e?.message || '';
+      it.error = /Daily limit/i.test(msg) ? 'Daily limit reached (20 new works a day). Publish the rest tomorrow.' : /decode|read|source/i.test(msg) ? 'That image could not be read. Try a JPG or PNG.' : msg || 'Upload failed. Try again.';
+      if (/Daily limit/i.test(msg)) break;
+    }
+  }
+  batch.running = false;
+  if (ok) await refreshCommunity().catch(() => {});
+  refreshSheet();
+  toast(ok ? `Published ${ok} work${ok === 1 ? '' : 's'}.` : 'Nothing was published. See the notes in red.', { force: true });
 }
 
 async function deleteArtwork(id) {
@@ -3264,6 +3347,23 @@ const ACTIONS = {
     try { await cloud.publishIndex(); idx.cache.clear(); toast('This week’s Index is published.', { force: true }); }
     catch (e) { toast(e?.message || 'Could not publish it.', { force: true }); }
   },
+  'batch-open': () => {
+    if (COMMUNITY && !me) return openSignIn();
+    if (!batch.running && batch.items.every((i) => i.status === 'done')) batchReset();
+    openSheet(batchSheetHTML, { wide: true });
+  },
+  'batch-remove': (el) => { const [it] = batch.items.splice(Number(el.dataset.v), 1); if (it) URL.revokeObjectURL(it.preview); refreshSheet(); },
+  'batch-apply': () => {
+    const d = batch.defaults;
+    for (const it of batch.items) {
+      if (it.status === 'done') continue;
+      for (const k of ['materials', 'dimensions', 'year', 'category', 'style', 'price']) if (String(d[k] ?? '') !== '') it[k] = d[k];
+    }
+    refreshSheet();
+    toast('Applied to all works.', { force: true });
+  },
+  'batch-publish': () => batchPublish(),
+  'batch-close': () => { batchReset(); closeSheet(); renderView(); },
   'toggle-verified': async (el) => {
     const mode = el.dataset.v;
     el.disabled = true;
@@ -4087,7 +4187,19 @@ document.addEventListener('change', (e) => {
   const url = URL.createObjectURL(file);
   $('#portrait-preview').innerHTML = `<span class="avatar avatar-xl has-photo"><img src="${url}" alt=""></span>`;
 });
+function batchField(e) {
+  const k = e.target.dataset?.k;
+  const where = e.target.dataset?.batch;
+  if (!k || where == null) return;
+  if (where === 'all') batch.defaults[k] = e.target.value;
+  else if (batch.items[Number(where)]) { batch.items[Number(where)][k] = e.target.value; batch.items[Number(where)].error = ''; }
+}
+document.addEventListener('change', (e) => {
+  batchField(e);
+  if (e.target.id === 'batch-files' && e.target.files?.length) batchAddFiles(e.target.files);
+});
 document.addEventListener('input', (e) => {
+  batchField(e);
   const count = e.target.id ? document.getElementById(`${e.target.id}-count`) : null;
   if (count?.dataset.max) count.textContent = `${e.target.value.length} / ${count.dataset.max}`;
   if (e.target.id === 'apply-statement') $('#apply-count').textContent = `${e.target.value.trim().length} / 1500`;
