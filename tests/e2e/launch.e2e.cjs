@@ -71,6 +71,36 @@ const step = (name) => console.log(`✓ ${name}`);
   assert.equal(png.readUInt32BE(20), 1350);
   step('artists get a 1080×1350 share card of their work');
 
+  // ——— Upload several works at once ———
+  await ana.goto(BASE + '#profile');
+  await ana.waitForSelector('[data-act=batch-open]');
+  await ana.click('[data-act=batch-open]');
+  await ana.waitForSelector('#batch-files', { state: 'attached' });
+  const photo = readFileSync(PHOTO);
+  await ana.setInputFiles('#batch-files', ['Hijo.jpg', 'Veronica.jpg', 'IMG_1234.jpg'].map((name) => ({ name, mimeType: 'image/jpeg', buffer: photo })));
+  await ana.waitForFunction(() => document.querySelectorAll('.batch-row').length === 3);
+  assert.equal(await ana.inputValue('[data-batch="0"][data-k=title]'), 'Hijo', 'titles start from the file names');
+  assert.equal(await ana.inputValue('[data-batch="2"][data-k=title]'), '', 'but not camera names');
+  await ana.fill('[data-batch=all][data-k=materials]', 'Mixed media on linen');
+  await ana.fill('[data-batch=all][data-k=dimensions]', '48 × 36 in');
+  await ana.fill('[data-batch=all][data-k=price]', '2400');
+  await ana.click('[data-act=batch-apply]');
+  await ana.waitForFunction(() => document.querySelector('[data-batch="1"][data-k=price]')?.value === '2400');
+  await ana.fill('[data-batch="1"][data-k=title]', 'Verónica');
+  await ana.click('[data-act=batch-publish]');
+  await ana.waitForSelector('.batch-row.has-error');
+  assert.match(await ana.locator('.batch-row.has-error').textContent(), /Give your work a title/);
+  assert.equal((await ana.evaluate(() => window.__mockdb.load().uploads.length)), 1, 'nothing published while one is incomplete');
+  await ana.fill('[data-batch="2"][data-k=title]', 'Mi valor');
+  await ana.click('[data-act=batch-publish]');
+  await ana.waitForFunction(() => document.querySelectorAll('.batch-row.is-done').length === 3, null, { timeout: 20000 });
+  const ups = await ana.evaluate(() => window.__mockdb.load().uploads.map((u) => ({ title: u.title, medium: u.medium, dimensions: u.dimensions, price: u.price })));
+  assert.deepEqual(ups.slice(1).map((u) => u.title).sort(), ['Hijo', 'Mi valor', 'Verónica']);
+  assert.ok(ups.slice(1).every((u) => u.medium === 'Mixed media on linen' && u.dimensions === '48 × 36 in' && u.price === 2400), JSON.stringify(ups));
+  await ana.click('[data-act=batch-close]');
+  await ana.waitForFunction(() => document.querySelectorAll('#studio .work-row').length === 4);
+  step('artists upload several works at once, with shared details and per-work checks');
+
   // ——— Founding artists ———
   await ana.goto(BASE + '#home');
   await ana.waitForSelector('#view .shell');
