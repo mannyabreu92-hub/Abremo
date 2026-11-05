@@ -37,7 +37,8 @@ const toastSays = (page, re) => page.waitForFunction((src) => new RegExp(src).te
   await ana.fill('#upload [name=title]', 'Harbour');
   await ana.fill('#upload [name=price]', '800');
   await ana.click('#upload-submit');
-  await toastSays(ana, /live for everyone/);
+  // The toast is brief and can be replaced by another message on a busy machine; the work appearing is what matters.
+  await ana.waitForFunction(() => window.__mockdb.load().uploads.length > 0 && document.querySelector('#studio .work-row'), null, { timeout: 15000 });
   const db = () => ana.evaluate(() => window.__mockdb.load());
   const work = (await db()).uploads[0].id;
   await ana.goto(BASE + `#art/${work}`);

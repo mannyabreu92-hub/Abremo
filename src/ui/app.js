@@ -139,6 +139,9 @@ const cardCtx = (w, extra = {}) => ({ artist: artistOf(w), reaction: reactionOf(
 const card = (w, extra) => ArtworkCard(w, cardCtx(w, extra));
 const isMine = (w) => w.artistId === myArtistId();
 const catalog = () => world.artworks.filter((a) => !isMine(a));
+/** Member counts stay hidden until the community is large enough to impress (a count of 3 doesn't). */
+const SHOW_MEMBERS_FROM = 50_000;
+const shownMembers = (n) => (n >= SHOW_MEMBERS_FROM ? n : 0);
 const coverOf = (artistId) => (world.worksByArtist[artistId] || []).slice().sort((a, b) => world.influence[b.id] - world.influence[a.id])[0];
 
 function toast(msg, { action, act, duration = 2400, force = false } = {}) {
@@ -651,10 +654,10 @@ function renderHome(root) {
     .sort((a, b) => ins.mom[b.id] - ins.mom[a.id]).slice(0, 4);
   if (!battlePair) newBattle();
   const countries = countryBoard().slice(0, 5);
-  const members = COMMUNITY ? state.community?.members || 0 : 0;
+  const members = COMMUNITY ? shownMembers(state.community?.members || 0) : 0;
   const proof = members
     ? tn(members, '{n} member shaping the rankings', '{n} members shaping the rankings').replace(String(members), fmt(members))
-    : t('{artists} artists · {countries} countries · {works} works', { artists: fmt(world.artists.filter((a) => !a.isMe).length), countries: COUNTRIES.length, works: fmt(catalog().length) });
+    : COMMUNITY ? '' : t('{artists} artists · {countries} countries · {works} works', { artists: fmt(world.artists.filter((a) => !a.isMe).length), countries: COUNTRIES.length, works: fmt(catalog().length) });
 
   root.innerHTML = `<div class="home">
     <section class="hero landing">
@@ -669,7 +672,7 @@ function renderHome(root) {
           <a class="btn btn-primary btn-lg" href="#discover"><span>${t('Start Exploring')}</span>${Icon('arrow', { size: 18 })}</a>
           <a class="text-link" href="#charts">${t('Explore Rankings')}</a>
         </div>
-        <p class="landing-proof">${esc(proof)}</p>
+        ${proof ? `<p class="landing-proof">${esc(proof)}</p>` : ''}
         ${pwa?.status().available ? `<button class="link-arrow get-app" data-act="pwa-install">${Icon('download', { size: 16 })} ${t('Get the Abremi app')}</button>` : ''}
       </div>
     </section>
@@ -1990,7 +1993,7 @@ function membersBoardsHTML() {
       ${rows.length ? `<ol class="rank-list">${rows.map(memberRow).join('')}</ol>` : `<p class="board-note">Nobody here yet. ${esc(MEMBER_BOARDS[k].qualify)}</p>`}</section>`;
   };
   return `${pills}${standing}${board('discoverers')}${board('collectors')}${board('critics')}
-    <p class="fine explainer"><b>Seasons</b> run for a calendar month (UTC) and count only what members did that month; on the 1st, each board’s top 10 is frozen and becomes a permanent achievement. <b>Leagues</b> narrow the boards to a country or a medium. <b>Discovery Score</b> rewards liking work before others do: the more weight (Fan 1 … Collector 9) that arrives after you, and the earlier you were, the higher it climbs. <b>Collectors</b> and <b>critics</b> are ranked by the influence they have added in that role; critics’ reviews count too. Members appear by display name only and can opt out in their profile. ${fmt(d.members || 0)} member${d.members === 1 ? '' : 's'} on the boards.</p>`;
+    <p class="fine explainer"><b>Seasons</b> run for a calendar month (UTC) and count only what members did that month; on the 1st, each board’s top 10 is frozen and becomes a permanent achievement. <b>Leagues</b> narrow the boards to a country or a medium. <b>Discovery Score</b> rewards liking work before others do: the more weight (Fan 1 … Collector 9) that arrives after you, and the earlier you were, the higher it climbs. <b>Collectors</b> and <b>critics</b> are ranked by the influence they have added in that role; critics’ reviews count too. Members appear by display name only and can opt out in their profile.${shownMembers(d.members || 0) ? ` ${fmt(d.members)} members on the boards.` : ''}</p>`;
 }
 
 /** Cultural Influence by Country. Community mode lists only countries with real activity. */
@@ -3278,7 +3281,7 @@ function onPulse() {
   pulseTimer = setTimeout(() => { pulseTimer = null; lastPulseRefresh = Date.now(); quietRefresh(); }, delay);
 }
 
-const accountCard = () => accountCardHTML({ community: COMMUNITY, me, members: state.community?.members || 0, publicLeaderboards: state.user.publicLeaderboards !== false, isAdmin });
+const accountCard = () => accountCardHTML({ community: COMMUNITY, me, members: shownMembers(state.community?.members || 0), publicLeaderboards: state.user.publicLeaderboards !== false, isAdmin });
 
 // ——— Actions ———
 const ACTIONS = {
