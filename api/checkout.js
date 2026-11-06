@@ -15,7 +15,10 @@ export const SHIP_TO = ['US', 'CA', 'MX', 'PR', 'DO', 'JM', 'TT', 'BS', 'BB', 'G
 const json = (status, body) => ({ status, body });
 
 /** deps: { fetchImpl, env } */
+
 export function createCheckout({ fetchImpl, env }) {
+  // Abremi's Stripe account is in the US; set STRIPE_PLATFORM_COUNTRY if that ever changes.
+  const PLATFORM_COUNTRY = String(env.STRIPE_PLATFORM_COUNTRY || 'US').toUpperCase();
   const cfg = billingConfig(env);
   const stripe = async (path, params) => {
     const res = await fetchImpl(`https://api.stripe.com/v1/${path}`, {
@@ -72,10 +75,15 @@ export function createCheckout({ fetchImpl, env }) {
 
       if (body?.action === 'onboard') {
         if (!account) {
-          const country = /^[A-Z]{2}$/.test(body.country || '') ? body.country : 'US';
+          const country = /^[A-Z]{2}$/.test(String(body.country || '').toUpperCase()) ? String(body.country).toUpperCase() : PLATFORM_COUNTRY;
+          // Artists in the platform's country get a full account. Elsewhere Stripe pays them with
+          // cross-border payouts, which need a "recipient" account that only receives transfers.
+          // Abremi's checkout (a destination charge without on_behalf_of) works with both.
+          const crossBorder = country !== PLATFORM_COUNTRY;
           const created = await stripe('accounts', {
             type: 'express', country, email: user.email,
-            capabilities: { card_payments: { requested: 'true' }, transfers: { requested: 'true' } },
+            capabilities: crossBorder ? { transfers: { requested: 'true' } } : { card_payments: { requested: 'true' }, transfers: { requested: 'true' } },
+            ...(crossBorder ? { tos_acceptance: { service_agreement: 'recipient' } } : {}),
             metadata: { user_id: user.id },
           });
           account = created.id;

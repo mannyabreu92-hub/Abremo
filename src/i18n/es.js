@@ -222,6 +222,7 @@ export default {
   "Or enter the code from the email": "O introduce el código del correo",
   "Orders": "Pedidos",
   "Original work": "Obra original",
+  "Outside the United States, Stripe pays you by cross-border payout, in your country’s currency where available. Stripe’s payout fee depends on the country.": "Fuera de Estados Unidos, Stripe te paga mediante transferencia internacional, en la moneda de tu país cuando es posible. La comisión de Stripe por el pago depende del país.",
   "Paid · to ship": "Pagado · por enviar",
   "Painting": "Pintura",
   "Pass": "Pasar",

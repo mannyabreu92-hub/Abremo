@@ -114,3 +114,19 @@ test('payout setup: Stripe’s reason is logged and, for an unsupported country,
     assert.deepEqual([out2.status, out2.body.error], [502, 'Payments are unavailable right now. Please try again.']);
   } finally { console.error = orig; }
 });
+
+test('payout setup: artists outside the US get a cross-border "recipient" account (transfers only)', async () => {
+  const dr = stand({ account: null });
+  const out = await createCheckout({ fetchImpl: dr.fetchImpl, env: ENV })({ method: 'POST', token: 't', body: { action: 'onboard', country: 'do' } });
+  assert.equal(out.status, 200);
+  const acct = new URLSearchParams(dr.calls.find((c) => c.url.endsWith('/v1/accounts')).body);
+  assert.equal(acct.get('country'), 'DO');
+  assert.equal(acct.get('tos_acceptance[service_agreement]'), 'recipient');
+  assert.equal(acct.get('capabilities[transfers][requested]'), 'true');
+  assert.equal(acct.get('capabilities[card_payments][requested]'), null, 'recipients don’t take card payments themselves');
+  const us = stand({ account: null });
+  await createCheckout({ fetchImpl: us.fetchImpl, env: ENV })({ method: 'POST', token: 't', body: { action: 'onboard', country: 'US' } });
+  const full = new URLSearchParams(us.calls.find((c) => c.url.endsWith('/v1/accounts')).body);
+  assert.equal(full.get('capabilities[card_payments][requested]'), 'true');
+  assert.equal(full.get('tos_acceptance[service_agreement]'), null, 'US artists keep the full account');
+});
